@@ -1,0 +1,52 @@
++-- Basic pipe operations
+result = 1 |> x -> x + 1 |> x -> x * 2
+print(result)  +-- Should print 4
+
++-- Function for testing pipes
+fn transform(x, y, z)
+    return x * y + z
+end
+
++-- Testing different pipe syntaxes
++-- Inline vars
+data = 5
+result = data |a> 3 |b> 2 |c> transform(a, b, c)
+print(result)
+
++-- List operations
+numbers = [1, 2, 3, 4, 5]
+doubled = numbers |> x -> x * 2
+filtered = doubled |> x -> x > 5
+
++-- List prepend operation
+original = [1, 2, 3]
+extended = 0 ||- original  +-- Should be [0, 1, 2, 3]
+
++-- Pipe with positional arguments
+fn divide(a, b) = return a / b
+result = 10 |> divide(_, 2)  +-- Same as divide(10, 2)
+
++-- Pipe with @ syntax
+fn greet(name, greeting)
+    return greeting + ", " + name + "!"
+end
+
+result = "World" |> greet(@, "Hello")
+print(result)  +-- Should print "Hello, World!"
+
++-- Here's a complex example with chained operations --+
+
++----------------------------+
+  This example demonstrates
+  multiple pipe operations
+  in sequence
++----------------------------+
+
+numbers = [1, 2, 3, 4, 5]
+result = numbers 
+    |> x -> x * 2 
+    |> x -> x + 1 
+    |> x -> x > 5 
+    |> x -> if x then "big" else "small"
+
+print(result) 

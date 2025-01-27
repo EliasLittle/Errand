@@ -1,0 +1,46 @@
++-- Variant type definitions
+struct color
+| Red
+| Green
+| Blue
+end
+
+struct card_value
+| Ace
+| King
+| Queen
+| Jack
+| Number of Int
+end
+
++-- Function using pattern matching with variants
+fn describe_card(card)
+    match card with
+        Ace -> "It's an Ace!"
+        King -> "It's a King!"
+        Queen -> "It's a Queen!"
+        Jack -> "It's a Jack!"
+        Number(n) -> "It's a " + n
+        _ -> "Unknown card"
+    end
+end
+
++-- Testing variants
+my_card = card_value::Number(7)
+card_description = describe_card(my_card)
+print(card_description)
+
++-- Testing Options (built-in variant)
+fn safe_divide(a, b)
+    if b == 0
+        return None
+    end
+    return Some(a / b)
+end
+
++-- Testing option handling
+result = safe_divide(10, 2)
+match result with
+    Some(x) -> print("Result: " + x)
+    None -> print("Division by zero!")
+end 
