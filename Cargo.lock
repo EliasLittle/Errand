@@ -3,7 +3,7 @@
 version = 3
 
 [[package]]
-name = "my_language"
+name = "Errand"
 version = "0.1.0"
 dependencies = [
  "thiserror",

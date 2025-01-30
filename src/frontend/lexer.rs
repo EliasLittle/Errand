@@ -1,4 +1,5 @@
 use std::fmt;
+use std::io::Write;
 
 #[derive(Debug, Clone, PartialEq)]
 pub enum TokenType {
@@ -34,13 +35,13 @@ pub enum TokenType {
     End,
     If,
     Else,
+    //ElseIf,
     For,
     In,
     Comment(String),
     BlockComment(String, String, String),
     StringLiteral(String),
     Newline,
-    // Add other symbols as needed
     Arrow,
     LParen,
     RParen,
@@ -77,7 +78,7 @@ pub struct Lexer {
 }
 
 impl Lexer {
-    pub fn new(source: &str) -> Self {
+    pub fn new(source: &String) -> Self {
         let chars: Vec<char> = source.chars().collect();
         let current_char = if chars.is_empty() { '\0' } else { chars[0] };
         Lexer {
@@ -299,6 +300,7 @@ impl Lexer {
             "end" => TokenType::End,
             "if" => TokenType::If,
             "else" => TokenType::Else,
+            //"elseif" => TokenType::ElseIf,
             "for" => TokenType::For,
             "in" => TokenType::In,
             "return" => TokenType::Return,
@@ -353,12 +355,6 @@ impl Lexer {
             line: start_line,
             column: start_column,
         })
-    }
-
-    pub fn lex(&mut self) -> Result<Vec<Token>, String> {
-        // Implement lexing logic here
-        // This is where you'll tokenize your source code
-        Ok(self.tokens.clone())
     }
 
     pub fn read_token(&mut self) -> Result<Token, String> {
@@ -435,15 +431,10 @@ impl Lexer {
         return tok
     }
 
-    pub fn test_lexer(&mut self, file_path: &str) -> Result<Vec<Token>, String> {
-        // Read the file contents
-        let source = std::fs::read_to_string(file_path)
-            .map_err(|e| format!("Failed to read file: {}", e))?;
-        
-        println!("Starting to lex the file: {}", file_path); // Debug print statement
+    pub fn lex(&mut self, file_path: &str) -> Result<Vec<Token>, String> {
+        println!("Starting to lex the file"); 
 
         // Initialize the lexer with the file contents
-        self.source = source;
         self.chars = self.source.chars().collect();
         self.current = 0;
         self.line = 1;
@@ -455,16 +446,24 @@ impl Lexer {
         while !self.is_end_of_file() {
             match self.read_token() {
                 Ok(token) => {
-                    println!("{}", token); // Debug print statement
+                    //println!("{}", token); // Debug print statement
                     tokens.push(token);
                 },
                 Err(e) => return Err(e),
+            }
+        }
+        if file_path != "" {
+            let output_file_path = format!("{}.lex", file_path);
+            let mut output_file = std::fs::File::create(output_file_path).expect("Unable to create file");
+            for token in &tokens {
+                writeln!(output_file, "{}", token).expect("Unable to write to file");
             }
         }
         Ok(tokens)
     }
 
     pub fn print_tokens(&self, tokens: &[Token]) {
+        println!("Printing tokens...");
         for token in tokens {
             println!("{}", token);
         }
