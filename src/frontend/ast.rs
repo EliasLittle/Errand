@@ -1,9 +1,11 @@
-#[derive(Debug)]
+//use crate::frontend::lexer::TokenType;
+
+#[derive(Debug, Clone)]
 pub enum Expression {
     Number(f64),
     Boolean(bool),
     String(String),
-    Identifier(String),
+    Identifier(Id),
     UnaryOp {
         operator: UnaryOperator,
         operand: Box<Expression>,
@@ -14,30 +16,30 @@ pub enum Expression {
         right: Box<Expression>,
     },
     FunctionCall {
-        name: Identifier,
+        id: Id,
         arguments: Vec<Expression>,
     },
     FunctionDefinition {
-        name: Identifier,
+        id: Id,
         parameters: Vec<Parameter>,
-        body: Vec<Expression>,
+        body: Box<Expression>,
     },
     StructDefinition {
-        name: Identifier,
+        id: Id,
         fields: Vec<FieldDefinition>,
     },
     If {
         condition: Box<Expression>,
         then_branch: Box<Expression>,
         else_branch: Option<Box<Expression>>,
-        //elseif_branches: Vec<(Box<Expression>, Box<Expression>)>,
+        //elseif_branches: Box<If>
     },
     For {
-        iterator: Identifier,
+        iterator: Id, // TODO?: Accept Vec<Id> for unpacking
         range: Box<Expression>,
         body: Box<Expression>,
     },
-    Block(Vec<Expression>),
+    Block(Vec<Box<Expression>>),
     Return(Option<Box<Expression>>),
     Print(Box<Expression>),
     /*Match {
@@ -45,64 +47,80 @@ pub enum Expression {
         cases: Vec<MatchCase>,
     },*/
     VariableAssignment {
-        name: Identifier,
+        id: Id,
         value: Box<Expression>,
     },
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
+pub struct Id {
+    pub name: String,
+}
+
+/*pub struct Block {
+    pub expressions: Vec<Expression>,
+}*/
+
+#[derive(Debug, Clone)]
 pub struct Program {
     pub expressions: Vec<Expression>,
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub enum UnaryOperator {
     Not,
     Negate,
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub enum BinaryOperator {
     Add,
     Subtract,
     Multiply,
     Divide,
     Modulo,
+    Power,
+    Equal,
+    NotEqual,
     LessThan,
     LessThanEqual,
     GreaterThan,
     GreaterThanEqual,
-    Equal,
-    NotEqual,
     And,
+    Ampersand,
     Or,
+    Pipe,
+    Assignment,
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct Parameter {
-    pub name: Identifier,
-    pub type_expr: Option<TypeExpression>,
+    pub id: Id,
+    //pub type_expr: Option<TypeExpression>,
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct FieldDefinition {
-    pub name: Identifier,
-    pub type_expr: TypeExpression,
+    pub id: Id,
+    //pub type_expr: TypeExpression,
 }
 
-#[derive(Debug)]
+/*
+#[derive(Debug, Clone)]
 pub struct MatchCase {
     pub pattern: Box<Expression>,
     pub body: Box<Expression>,
-}
+}*/
 
+/*
 #[derive(Debug)]
 pub enum TypeExpression {
     Int,
     Bool,
     Void,
-    Struct(Identifier, Option<Box<TypeExpression>>),
+    //Struct(Identifier, Option<Box<TypeExpression>>),
 }
+*/
 
 use std::fmt;
 
@@ -112,47 +130,43 @@ impl fmt::Display for Expression {
             Expression::Number(n) => write!(f, "{}", n),
             Expression::Boolean(b) => write!(f, "{}", b),
             Expression::String(s) => write!(f, "\"{}\"", s),
-            Expression::Identifier(id) => write!(f, "{}", id),
+            Expression::Identifier(id) => write!(f, "{}", id.name),
             Expression::UnaryOp { operator, operand } => write!(f, "({:?} {})", operator, operand),
             Expression::BinaryOp { operator, left, right } => write!(f, "({} {:?} {})", left, operator, right),
-            Expression::FunctionCall { name, arguments } => {
+            Expression::FunctionCall { id, arguments } => {
                 let args: Vec<String> = arguments.iter().map(|arg| format!("{}", arg)).collect();
-                write!(f, "{}({})", name, args.join(", "))
+                write!(f, "{}({})", id.name, args.join(", "))
             },
-            Expression::FunctionDefinition { name, parameters, body } => {
-                let params: Vec<String> = parameters.iter().map(|param| format!("{}", param.name)).collect();
-                let body_str: Vec<String> = body.iter().map(|expr| format!("{}", expr)).collect();
-                write!(f, "fn {}({}) {{ {} }}", name, params.join(", "), body_str.join("; "))
+            Expression::FunctionDefinition { id, parameters, body } => {
+                let params: Vec<String> = parameters.iter().map(|param| format!("{}", param.id.name)).collect();
+                let body_str = format!("{}", *body);
+                write!(f, "fn {}({}) {{ {} }}", id.name, params.join(", "), body_str)
             },
-            Expression::StructDefinition { name, fields } => {
-                let fields_str: Vec<String> = fields.iter().map(|field| format!("{}", field.name)).collect();
-                write!(f, "struct {} {{ {} }}", name, fields_str.join(", "))
+            Expression::StructDefinition { id, fields } => {
+                let fields_str: Vec<String> = fields.iter().map(|field| format!("{}", field.id.name)).collect();
+                write!(f, "struct {} {{ {} }}", id.name, fields_str.join(", "))
             },
-            Expression::If { condition, then_branch, else_branch, elseif_branches } => {
+            Expression::If { condition, then_branch, else_branch } => {
                 let else_str = if let Some(else_branch) = else_branch {
                     format!(" else {}", else_branch)
                 } else {
                     String::new()
                 };
-                let elseif_str: Vec<String> = elseif_branches.iter().map(|(cond, branch)| format!(" elseif {} {{ {} }}", cond, branch)).collect();
                 write!(f, "if {} {{ {} }}{}", condition, then_branch, else_str)?;
-                for elseif in elseif_str {
-                    write!(f, "{}", elseif)?;
-                }
                 Ok(())
             },
-            Expression::For { iterator, range, body } => write!(f, "for {} in {} {{ {} }}", iterator, range, body),
+            Expression::For { iterator, range, body } => write!(f, "for {} in {} {{ {} }}", iterator.name, range, body),
             Expression::Block(expressions) => {
                 let block_str: Vec<String> = expressions.iter().map(|expr| format!("{}", expr)).collect();
                 write!(f, "{{ {} }}", block_str.join("; "))
             },
             Expression::Return(expr) => write!(f, "return {}", expr.as_ref().map_or("".to_string(), |e| format!("{}", e))),
             Expression::Print(expr) => write!(f, "print({})", expr),
-            Expression::Match { value, cases } => {
+            /*Expression::Match { value, cases } => {
                 let cases_str: Vec<String> = cases.iter().map(|case| format!("{}", case)).collect();
                 write!(f, "match {} {{ {} }}", value, cases_str.join(", "))
-            },
-            Expression::VariableAssignment { name, value } => write!(f, "{} = {}", name, value),
+            },*/
+            Expression::VariableAssignment { id, value } => write!(f, "{} = {}", id.name, value),
         }
     }
 }
@@ -166,22 +180,25 @@ impl fmt::Display for Program {
 
 impl fmt::Display for Parameter {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
-        write!(f, "{}: {:?}", self.name, self.type_expr)
+        write!(f, "{}", self.id.name)
+        //write!(f, "{}: {:?}", self.id.name, self.type_expr)
     }
 }
 
 impl fmt::Display for FieldDefinition {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
-        write!(f, "{}: {:?}", self.name, self.type_expr)
+        write!(f, "{}", self.id.name)
+        //write!(f, "{}: {:?}", self.id.name, self.type_expr)
     }
 }
 
-impl fmt::Display for MatchCase {
+/*impl fmt::Display for MatchCase {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         write!(f, "{} => {}", self.pattern, self.body)
     }
-}
+}*/
 
+/*
 impl fmt::Display for TypeExpression {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         match self {
@@ -192,3 +209,4 @@ impl fmt::Display for TypeExpression {
         }
     }
 } 
+*/

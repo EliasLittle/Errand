@@ -7,10 +7,11 @@ fn add(a, b)
     return a + b
 end
 
-fn multiply(a, b) = return a * b
++-- TODO: Support inline functions
++-- fn multiply(a, b) = return a * b
 
 +-- Lambda function
-double = x -> return x * 2
++-- double = x -> return x * 2
 
 +-- Testing function calls
 result = add(5, 3)

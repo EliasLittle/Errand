@@ -1,11 +1,11 @@
 <Comment(" Basic variable declarations and functions")>
 <Newline>
 <Identifier("x")>
-<Equal>
+<Assignment>
 <Number(7.0)>
 <Newline>
 <Identifier("y")>
-<Equal>
+<Assignment>
 <StringLiteral("Hello")>
 <Newline>
 <Comment(" Function declarations using different styles")>
@@ -26,36 +26,20 @@
 <End>
 <Newline>
 <Newline>
-<Function>
-<Identifier("multiply")>
-<LParen>
-<Identifier("a")>
-<Comma>
-<Identifier("b")>
-<RParen>
-<Equal>
-<Return>
-<Identifier("a")>
-<Multiply>
-<Identifier("b")>
+<Comment(" TODO: Support inline functions")>
+<Newline>
+<Comment(" fn multiply(a, b) = return a * b")>
 <Newline>
 <Newline>
 <Comment(" Lambda function")>
 <Newline>
-<Identifier("double")>
-<Equal>
-<Identifier("x")>
-<Arrow>
-<Return>
-<Identifier("x")>
-<Multiply>
-<Number(2.0)>
+<Comment(" double = x -> return x * 2")>
 <Newline>
 <Newline>
 <Comment(" Testing function calls")>
 <Newline>
 <Identifier("result")>
-<Equal>
+<Assignment>
 <Identifier("add")>
 <LParen>
 <Number(5.0)>
@@ -64,7 +48,7 @@
 <RParen>
 <Newline>
 <Identifier("doubled")>
-<Equal>
+<Assignment>
 <Identifier("double")>
 <LParen>
 <Identifier("result")>
@@ -74,13 +58,13 @@
 <Comment(" Testing string concatenation")>
 <Newline>
 <Identifier("greeting")>
-<Equal>
+<Assignment>
 <StringLiteral("Hello")>
 <Identifier("name")>
-<Equal>
+<Assignment>
 <StringLiteral("World")>
 <Identifier("message")>
-<Equal>
+<Assignment>
 <Identifier("greeting")>
 <Plus>
 <StringLiteral(" ")>

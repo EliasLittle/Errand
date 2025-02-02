@@ -1,23 +1,23 @@
 use std::fmt;
 use std::io::Write;
-
+use std::mem::Discriminant;
 #[derive(Debug, Clone, PartialEq)]
 pub enum TokenType {
     Number(f64),
     Identifier(String),
     Print,
-    // Add more token types as needed
     EOF,
     None,
     Plus,
     Minus,
-    Multiply,
-    Divide,
-    Modulus,
+    Asterisk,
+    Slash,
+    Modulo,
+    Carrot,
     LessThan,
     GreaterThan,
-    LessThanOrEqual,
-    GreaterThanOrEqual,
+    LessThanEqual,
+    GreaterThanEqual,
     And,
     Ampersand,
     Or,
@@ -36,6 +36,15 @@ pub enum TokenType {
     If,
     Else,
     //ElseIf,
+    Equal,
+    NotEqual,
+    Assignment,
+    //PlusEqual,
+    //MinusEqual,
+    //AsteriskEqual,
+    //SlashEqual,
+    //ModuloEqual,
+    //CarrotEqual,
     For,
     In,
     Comment(String),
@@ -51,7 +60,95 @@ pub enum TokenType {
     Dot,
     Colon,
     Semicolon,
-    Equal,
+}
+
+impl TokenType {
+    pub fn var(&self) -> Discriminant<TokenType> {
+        return std::mem::discriminant(self)
+    }
+
+    pub fn precedence(&self) -> Result<i32, String> {
+        match self {
+            | TokenType::Carrot => Ok(3),
+            | TokenType::Asterisk 
+            | TokenType::Slash 
+            | TokenType::Modulo => Ok(2),
+            | TokenType::Plus 
+            | TokenType::Minus => Ok(1),
+            | TokenType::LessThan 
+            | TokenType::GreaterThan 
+            | TokenType::LessThanEqual 
+            | TokenType::GreaterThanEqual
+            | TokenType::And 
+            | TokenType::Or 
+            | TokenType::Equal 
+            | TokenType::NotEqual
+            | TokenType::Assignment => Ok(0),
+            _ => Err("Invalid token type for precedence calculation".to_string()), // Default for other token types
+        }
+    }
+
+    pub fn is_right_associative(&self) -> bool {
+        match self {
+            TokenType::Carrot
+            | TokenType::Assignment => true,
+            _ => false,
+        }
+    }
+     
+    pub fn is_infix(&self) -> bool {
+        match self {
+            TokenType::Plus
+            | TokenType::Minus
+            | TokenType::Asterisk
+            | TokenType::Slash
+            | TokenType::Modulo
+            | TokenType::Carrot
+            | TokenType::And
+            | TokenType::Or
+            | TokenType::Pipe
+            | TokenType::LessThan
+            | TokenType::GreaterThan
+            | TokenType::LessThanEqual
+            | TokenType::GreaterThanEqual
+            | TokenType::Equal
+            | TokenType::NotEqual
+            | TokenType::Assignment => true,
+            _ => false,
+        }
+    }
+
+    pub fn is_prefix(&self) -> bool {
+        match self {
+            TokenType::Minus
+            | TokenType::Bang => true,
+            _ => false,
+        }
+    }
+    
+    pub fn is_postfix(&self) -> bool {
+        match self {
+            _ => false,
+        }
+    }
+
+    pub fn is_comment(&self) -> bool {
+        match self {
+            TokenType::Comment(_)
+            |TokenType::BlockComment(_, _, _) => true,
+            _ => false,
+        }
+    }
+}
+
+
+pub fn TokenType(token_type: &str) -> Result<TokenType, String> {
+    match token_type {
+        "Identifier" => Ok(TokenType::Identifier("".to_string())),
+        "Number" => Ok(TokenType::Number(0.0)),
+        "String" => Ok(TokenType::StringLiteral("".to_string())),
+        _ => Err("Invalid token type".to_string()),
+    }
 }
 
 #[derive(Debug, Clone)]
@@ -59,6 +156,36 @@ pub struct Token {
     pub token_type: TokenType,
     pub line: usize,
     pub column: usize,
+}
+
+impl Token{
+    pub fn var(&self) -> Discriminant<TokenType> {
+        self.token_type.var()
+    }
+
+    pub fn precedence(&self) -> Result<i32, String> {
+        self.token_type.precedence()
+    }
+
+    pub fn is_right_associative(&self) -> bool {
+        self.token_type.is_right_associative()
+    }
+
+    pub fn is_infix(&self) -> bool {
+        self.token_type.is_infix()
+    }
+
+    pub fn is_prefix(&self) -> bool {
+        self.token_type.is_prefix()
+    }
+
+    pub fn is_postfix(&self) -> bool {
+        self.token_type.is_postfix()
+    }
+
+    pub fn is_comment(&self) -> bool {
+        self.token_type.is_comment()
+    }
 }
 
 impl fmt::Display for Token {
@@ -368,7 +495,12 @@ impl Lexer {
             '.' => Ok(Token { token_type: TokenType::Dot, line: self.line, column: self.column }),
             ':' => Ok(Token { token_type: TokenType::Colon, line: self.line, column: self.column }),
             ';' => Ok(Token { token_type: TokenType::Semicolon, line: self.line, column: self.column }),
-            '=' => Ok(Token { token_type: TokenType::Equal, line: self.line, column: self.column }),
+            '=' => if self.peek() == '=' {
+                self.advance();
+                Ok(Token { token_type: TokenType::Equal, line: self.line, column: self.column })
+            } else {
+                Ok(Token { token_type: TokenType::Assignment, line: self.line, column: self.column })
+            },
             '+' => if self.peek_n(2) == ['-', '-'] {
                 advance_char = false;
                 self.read_comment()
@@ -381,21 +513,27 @@ impl Lexer {
             } else {
                 Ok(Token { token_type: TokenType::Minus, line: self.line, column: self.column })
             },
-            '*' => Ok(Token { token_type: TokenType::Multiply, line: self.line, column: self.column }),
-            '/' => Ok(Token { token_type: TokenType::Divide, line: self.line, column: self.column }),
-            '%' => Ok(Token { token_type: TokenType::Modulus, line: self.line, column: self.column }),
-            '!' => Ok(Token { token_type: TokenType::Bang, line: self.line, column: self.column }),
+            '*' => Ok(Token { token_type: TokenType::Asterisk, line: self.line, column: self.column }),
+            '/' => Ok(Token { token_type: TokenType::Slash, line: self.line, column: self.column }),
+            '%' => Ok(Token { token_type: TokenType::Modulo, line: self.line, column: self.column }),
+            '^' => Ok(Token { token_type: TokenType::Carrot, line: self.line, column: self.column }),
+            '!' => if self.peek() == '=' {
+                self.advance();
+                Ok(Token { token_type: TokenType::NotEqual, line: self.line, column: self.column })
+            } else {
+                Ok(Token { token_type: TokenType::Bang, line: self.line, column: self.column })
+            },
             '"' => self.read_string(),
             '\n' => Ok(Token { token_type: TokenType::Newline, line: self.line, column: self.column }),
             '<' => if self.peek() == '=' {
                 self.advance();
-                Ok(Token { token_type: TokenType::LessThanOrEqual, line: self.line, column: self.column })
+                Ok(Token { token_type: TokenType::LessThanEqual, line: self.line, column: self.column })
             } else {
                 Ok(Token { token_type: TokenType::LessThan, line: self.line, column: self.column })
             },
             '>' => if self.peek() == '=' {
                 self.advance();
-                Ok(Token { token_type: TokenType::GreaterThanOrEqual, line: self.line, column: self.column })
+                Ok(Token { token_type: TokenType::GreaterThanEqual, line: self.line, column: self.column })
             } else {
                 Ok(Token { token_type: TokenType::GreaterThan, line: self.line, column: self.column })
             },
