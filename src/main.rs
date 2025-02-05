@@ -1,9 +1,10 @@
 mod frontend;
-mod backend;
+//mod backend;
 
 use frontend::lexer::Lexer;
 use frontend::parser::Parser;
-use backend::{interpreter::Interpreter, compiler::Compiler};
+use frontend::lower::Program;
+//use backend::{interpreter::Interpreter, compiler::Compiler};
 use std::env;
 
 fn main() {
@@ -36,6 +37,7 @@ fn main() {
     // Parse tokens into AST
     let mut parser = Parser::new(tokens);
     let ast = parser.parse().expect("Parsing failed");
+    let lowered = ast.lower();
 
     println!("AST: {}", ast);
 
