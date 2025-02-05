@@ -119,6 +119,7 @@ impl Parser {
             Some(TokenType::Function) => self.function(),
             Some(TokenType::Struct) => self.structure(),
             Some(TokenType::If) => self.if_statement(), // TODO: Move to parse_expression_1
+            Some(TokenType::While) => self.while_statement(),
             Some(TokenType::For) => self.for_statement(),
             Some(TokenType::Return) => self.return_statement(),
             Some(TokenType::Newline) => {
@@ -203,6 +204,8 @@ impl Parser {
             TokenType::Ampersand => Ok(Expression::BinaryOp { operator: BinaryOperator::Ampersand, left: Box::new(lhs), right: Box::new(rhs) }),
             TokenType::Or => Ok(Expression::BinaryOp { operator: BinaryOperator::Or, left: Box::new(lhs), right: Box::new(rhs) }),
             TokenType::Pipe => Ok(Expression::BinaryOp { operator: BinaryOperator::Pipe, left: Box::new(lhs), right: Box::new(rhs) }),
+            // TODO: Do we need to move assignment out of infix? It could be called in places it shouldn't be
+            // e.g. my_fn(x = 1, y = 2). This is only valid if x and y are parameters.
             TokenType::Assignment => {
                 match lhs {
                     Expression::Identifier(id) => Ok(Expression::VariableAssignment { id, value: Box::new(rhs) }),
@@ -431,6 +434,17 @@ impl Parser {
             then_branch: Box::new(then_branch), 
             else_branch: else_branch
         })
+    }
+
+
+    fn while_statement(&mut self) -> Result<Expression, String> {
+        println!("Parsing while statement| current:{:?}", self.current_type());
+        self.expect(&TokenType::While)?;
+        let primary_expr = self.primary()?;
+        let condition = self.parse_expression_1(primary_expr, 0)?;
+        self.expect(&TokenType::Newline)?;
+        let body = self.block()?;
+        Ok(Expression::While { condition: Box::new(condition), body: Box::new(body) })
     }
 
     fn for_statement(&mut self) -> Result<Expression, String> {

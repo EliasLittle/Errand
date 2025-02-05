@@ -34,6 +34,10 @@ pub enum Expression {
         else_branch: Option<Box<Expression>>,
         //elseif_branches: Box<If>
     },
+    While {
+        condition: Box<Expression>,
+        body: Box<Expression>,
+    },
     For {
         iterator: Id, // TODO?: Accept Vec<Id> for unpacking
         range: Box<Expression>,
@@ -155,6 +159,7 @@ impl fmt::Display for Expression {
                 write!(f, "if {} {{ {} }}{}", condition, then_branch, else_str)?;
                 Ok(())
             },
+            Expression::While { condition, body } => write!(f, "while {} {{ {} }}", condition, body),
             Expression::For { iterator, range, body } => write!(f, "for {} in {} {{ {} }}", iterator.name, range, body),
             Expression::Block(expressions) => {
                 let block_str: Vec<String> = expressions.iter().map(|expr| format!("{}", expr)).collect();
