@@ -12,9 +12,29 @@ It will accomplish this by utilizing
 ## Status
 
 - **Lexer**: A lexer that tokenizes the source code into meaningful tokens. (Completed)
-- **Parser**: A parser that constructs an Abstract Syntax Tree (AST) from the tokens. (WIP)
+- **Parser**: A parser that constructs an Abstract Syntax Tree (AST) from the tokens. (MVP)
 - **Interpreter**: TODO
 - **Compiler**: TODO
+
+
+## Roadmap
+
+#### Language Features
+- [ ] Lambda functions
+- [ ] Inline functions
+- [ ] Types
+- [ ] While loops
+- [ ] Have all operators as functions 
+    - `a op b` == `(op)(a, b)` 
+
+#### Parser
+- [ ] Add error recovery
+
+#### Interpreter
+- TODO
+
+#### Compiler
+- TODO
 
 
 ## Contributing
