@@ -1,9 +1,11 @@
 use crate::frontend::ast::*;
 
+// TODO: Rename to desugar
+
 impl Program {
-    pub fn lower(self) -> Program {
+    pub fn lower(&self) -> Program {
         Program {
-            expressions: self.expressions.into_iter().map(|expr| self.lower_expression(expr)).collect(),
+            expressions: self.expressions.iter().map(|expr| self.lower_expression(expr.clone())).collect(),
         }
     }
 
@@ -14,7 +16,7 @@ impl Program {
                 let index_var = Id { name: "%index".to_string() };
                 let index_assignment = Expression::VariableAssignment {
                     id: index_var.clone(),
-                    value: Box::new(Expression::Number(0)), // Initialize index to 0
+                    value: Box::new(Expression::Number(0.0)), // Initialize index to 0
                 };
 
                 let range_expr = *range;  // Unbox once
@@ -24,7 +26,7 @@ impl Program {
                     id: iterator,
                     value: Box::new(Expression::FunctionCall {
                         id: Id { name: "get".to_string() },
-                        arguments: [range_expr.clone(), Expression::Identifier(index_var.clone())],
+                        arguments: [range_expr.clone(), Expression::Identifier(index_var.clone())].to_vec(),
                     }),
                 };
 
@@ -34,7 +36,7 @@ impl Program {
                     value: Box::new(Expression::BinaryOp {
                         operator: BinaryOperator::Add,
                         left: Box::new(Expression::Identifier(index_var.clone())),
-                        right: Box::new(Expression::Number(1)),
+                        right: Box::new(Expression::Number(1.0)),
                     }),
                 };
 
@@ -42,7 +44,7 @@ impl Program {
                     Box::new(iterator_assignment),
                     body,
                     Box::new(increment_index),
-                ]);
+                ].to_vec());
 
                 Expression::Block([
                     Box::new(index_assignment),
@@ -52,12 +54,12 @@ impl Program {
                             left: Box::new(Expression::Identifier(index_var.clone())),
                             right: Box::new(Expression::FunctionCall {
                                 id: Id { name: "length".to_string() },
-                                arguments: range,
+                                arguments: [range_expr].to_vec(),
                             }),
                         }),
                         body: Box::new(while_body),
                     }),
-                ])
+                ].to_vec())
             },
             _ => expr,
         }
