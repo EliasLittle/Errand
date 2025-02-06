@@ -6,6 +6,7 @@ use crate::frontend::ast::{Expression, Program, Id, Parameter};
 pub struct Resolver {
     scopes: VecDeque<HashMap<String, bool>>,
     errors: Vec<String>,
+    locals: HashMap<String, usize>,
 }
 
 impl Resolver {
@@ -13,10 +14,11 @@ impl Resolver {
         Resolver {
             scopes: VecDeque::new(),
             errors: Vec::new(),
+            locals: HashMap::new(),
         }
     }
 
-    pub fn resolve(&mut self, program: &Program) -> Result<(), Vec<String>> {
+    pub fn resolve(&mut self, program: &Program) -> Result<HashMap<String, usize>, Vec<String>> {
         self.begin_scope(); // Global scope
         
         for expr in &program.expressions {
@@ -26,7 +28,7 @@ impl Resolver {
         self.end_scope();
         
         if self.errors.is_empty() {
-            Ok(())
+            Ok(self.locals.clone())
         } else {
             Err(self.errors.clone())
         }
@@ -127,7 +129,7 @@ impl Resolver {
                 self.resolve_expr(value)?;
                 self.declare(id)?;
                 self.define(id);
-                self.resolve_identifier(id)?; // Not in original code
+                self.resolve_local(id)?;
                 Ok(())
             },
         }
@@ -142,14 +144,8 @@ impl Resolver {
             }
         }
         
-        // Check all scopes from innermost to outermost
-        for scope in &self.scopes {
-            if scope.contains_key(&id.name) {
-                return Ok(());
-            }
-        }
-        
-        Err(format!("Undefined variable '{}'", id.name))
+        self.resolve_local(id)?;
+        return Ok(());
     }
 
     fn begin_scope(&mut self) {
@@ -174,5 +170,16 @@ impl Resolver {
         if let Some(scope) = self.scopes.front_mut() {
             scope.insert(id.name.clone(), true);
         }
+    }
+
+    fn resolve_local(&mut self, id: &Id) -> Result<(), String> {
+        for (i, scope) in self.scopes.iter().enumerate().rev() {
+            if scope.contains_key(&id.name) {
+                let depth = i;
+                self.locals.insert(id.name.clone(), depth);
+                return Ok(());
+            }
+        }
+        Err(format!("Undefined variable '{}'", id.name))
     }
 }
