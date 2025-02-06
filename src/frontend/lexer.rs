@@ -31,6 +31,7 @@ pub enum TokenType {
     TypeInt,
     TypeBool,
     TypeVoid,
+    TypeDef,
     Begin,
     End,
     If,
@@ -495,7 +496,12 @@ impl Lexer {
             '}' => Ok(Token { token_type: TokenType::RBrace, line: self.line, column: self.column }),
             ',' => Ok(Token { token_type: TokenType::Comma, line: self.line, column: self.column }),
             '.' => Ok(Token { token_type: TokenType::Dot, line: self.line, column: self.column }),
-            ':' => Ok(Token { token_type: TokenType::Colon, line: self.line, column: self.column }),
+            ':' => if self.peek() == ':' {
+                self.advance();
+                Ok(Token { token_type: TokenType::TypeDef, line: self.line, column: self.column })
+            } else {
+                Ok(Token { token_type: TokenType::Colon, line: self.line, column: self.column })
+            },
             ';' => Ok(Token { token_type: TokenType::Semicolon, line: self.line, column: self.column }),
             '=' => if self.peek() == '=' {
                 self.advance();

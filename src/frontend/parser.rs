@@ -373,14 +373,17 @@ impl Parser {
        Ok(parameters)
     }
 
+    /// Parse field definitions
+    /// id::type
     fn field_parameters(&mut self) -> Result<Vec<FieldDefinition>, String> {
         println!("Parsing field parameters| current:{:?}", self.current_type());
         let mut fields = Vec::new();
         while self.at(&TokenType("Identifier")?) {
             let id = self.id()?;
-            //self.eat(&TokenType::Colon); // TODO: Support type annotations
+            self.expect(&TokenType::TypeDef)?;
+            let field_type = self.id()?;
             self.expect(&TokenType::Newline)?;
-            let field = FieldDefinition { id }; //, type_expr: None };
+            let field = FieldDefinition { id, field_type };
             fields.push(field);
         }
         Ok(fields)
