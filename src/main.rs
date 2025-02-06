@@ -2,10 +2,21 @@ mod frontend;
 //mod backend;
 
 use frontend::lexer::Lexer;
+use frontend::ast::Program;
 use frontend::parser::Parser;
-use frontend::lower::Program;
 //use backend::{interpreter::Interpreter, compiler::Compiler};
 use std::env;
+
+fn print_ast(path: &str, extension: &str, ast: &Program) {
+    println!("AST: {}", ast);
+
+    // Write the AST to a new file with '.ast' extension
+    if !path.is_empty() {
+        let ast_file_path = format!("{}.{}", path, extension);
+        std::fs::write(&ast_file_path, format!("{}", ast)).expect("Failed to write AST to file");
+        println!("AST written to: {}", ast_file_path); // Debug print statement
+    }
+}
 
 fn main() {
 
@@ -37,16 +48,10 @@ fn main() {
     // Parse tokens into AST
     let mut parser = Parser::new(tokens);
     let ast = parser.parse().expect("Parsing failed");
+    print_ast(file_path, "ast", &ast);
     let lowered = ast.lower();
+    print_ast(file_path, "last", &lowered);
 
-    println!("AST: {}", ast);
-
-    // Write the AST to a new file with '.ast' extension
-    if !file_path.is_empty() {
-        let ast_file_path = format!("{}.ast", file_path);
-        std::fs::write(&ast_file_path, format!("{}", ast)).expect("Failed to write AST to file");
-        println!("AST written to: {}", ast_file_path); // Debug print statement
-    }
 
     /*
     // You can either interpret or compile
