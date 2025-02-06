@@ -16,7 +16,9 @@ pub enum Expression {
         right: Box<Expression>,
     },
     FunctionCall {
-        id: Id,
+        // TODO: Change to expression to allow functions to return functions
+        // e.g. should be able to call `my_fn()()` which currently fails
+        id: Id, 
         arguments: Vec<Expression>,
     },
     FunctionDefinition {
@@ -106,7 +108,7 @@ pub struct Parameter {
 #[derive(Debug, Clone)]
 pub struct FieldDefinition {
     pub id: Id,
-    //pub type_expr: TypeExpression,
+    pub field_type: Id,
 }
 
 /*
