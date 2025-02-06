@@ -1,0 +1,9 @@
+a = "outer"
+
+i = 0
+
+while i < 1 
+    a = a
+end
+
+print(a)
