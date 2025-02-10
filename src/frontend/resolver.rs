@@ -19,14 +19,18 @@ impl Resolver {
     }
 
     pub fn resolve(&mut self, program: &Program) -> Result<HashMap<String, usize>, Vec<String>> {
+        println!("------ Resolver start ------");
         self.begin_scope(); // Global scope
+        println!("Res.resolve| Global scope: {:?}, locals: {:?}", self.scopes, self.locals);
         
         for expr in &program.expressions {
-            self.resolve_expr(expr)?;
+            self.resolve_expr(expr);
         }
         
         self.end_scope();
         
+        println!("------ Resolver end ------");
+
         if self.errors.is_empty() {
             Ok(self.locals.clone())
         } else {
@@ -57,6 +61,7 @@ impl Resolver {
                 
                 // Create new scope for function body
                 self.begin_scope();
+                println!("Res.resolve_expr.fn_def| Function scope: {:?}, locals: {:?}", self.scopes, self.locals);
                 
                 // Declare and define parameters
                 for param in parameters {
@@ -65,7 +70,16 @@ impl Resolver {
                 }
                 
                 // Resolve the function body
-                self.resolve_expr(body)?;
+                match body.as_ref() {
+                    Expression::Block(expressions) => {
+                        for expr in expressions {
+                            println!("Res.resolve_expr.fn_def| Resolving expr: {:?}", expr);
+                            self.resolve_expr(&expr)?;
+                        }
+                    }
+                    _ => return Err(format!("Invalid function body: {:?}", body))
+                }
+                //self.resolve_expr(body)?;
                 
                 self.end_scope();
                 Ok(())
@@ -76,7 +90,8 @@ impl Resolver {
                 
                 // Create scope for struct fields
                 self.begin_scope();
-                
+                println!("Res.resolve_expr.struct_def| Struct scope: {:?}, locals: {:?}", self.scopes, self.locals);
+
                 for field in fields {
                     self.declare(&field.id)?;
                     self.define(&field.id);
@@ -102,6 +117,8 @@ impl Resolver {
                 
                 // Create new scope for iterator variable
                 self.begin_scope();
+                println!("Res.resolve_expr.for| For scope: {:?}, locals: {:?}", self.scopes, self.locals);
+
                 self.declare(iterator)?;
                 self.define(iterator);
                 
@@ -112,6 +129,8 @@ impl Resolver {
             },
             Expression::Block(expressions) => {
                 self.begin_scope();
+                println!("Res.resolve_expr.block| Block scope: {:?}, locals: {:?}", self.scopes, self.locals);
+
                 for expr in expressions {
                     self.resolve_expr(expr)?;
                 }
@@ -126,10 +145,21 @@ impl Resolver {
             },
             Expression::Print(expr) => self.resolve_expr(expr),
             Expression::VariableAssignment { id, value } => {
-                self.resolve_expr(value)?;
-                self.declare(id)?;
-                self.define(id);
-                self.resolve_local(id)?;
+                println!("Res.resolve_expr.var_assign| Variable assignment: {:?}, value: {:?}", id.name, value);
+                // Check if the variable is already declared
+                if self.locals.contains_key(&id.name) {
+                    println!("Res.resolve_expr.var_assign| Variable already declared: {:?}", id.name);
+                    // If declared, resolve the value for assignment
+                    self.resolve_expr(value)?;
+                    self.resolve_local(id)?;
+                } else {
+                    println!("Res.resolve_expr.var_assign| Variable not declared: {:?}", id.name);
+                    // If not declared, declare and initialize
+                    self.declare(id)?;
+                    self.resolve_expr(value)?;
+                    self.define(id);
+                    self.resolve_local(id)?;
+                }
                 Ok(())
             },
         }
@@ -173,9 +203,10 @@ impl Resolver {
     }
 
     fn resolve_local(&mut self, id: &Id) -> Result<(), String> {
-        for (i, scope) in self.scopes.iter().enumerate().rev() {
-            if scope.contains_key(&id.name) {
-                let depth = i;
+        // New implementation
+        for i in (0..self.scopes.len()).rev() {
+            if self.scopes[i].contains_key(&id.name) {
+                let depth = self.scopes.len() - 1 - i;
                 self.locals.insert(id.name.clone(), depth);
                 return Ok(());
             }
