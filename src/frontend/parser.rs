@@ -100,13 +100,16 @@ impl Parser {
     /// Returns the token if it matches the expected type, otherwise returns an error
     /// Used for tokens like identifiers, keywords, etc.
     fn expect(&mut self, token_type: &TokenType) -> Result<Token, String> {
+        println!("Expecting {:?}", token_type);
         if let Some(token) = self.bump() {
+            println!("Expecting| actual token:{:?}", token);
             if token.var() == token_type.var() {
                 Ok(token)
             } else {
                 Err(format!("Expected {:?}, found {:?}", token_type, token.token_type))
             }
         } else {
+            println!("Unexpected end of input");
             Err("Unexpected end of input".to_string())
         }
     }
@@ -134,6 +137,10 @@ impl Parser {
             None => Err("No current token".to_string()),
         };
         println!("Parsing expression| result:{:?}", result);
+        let mut at_newline = self.eat(&TokenType::Newline);
+        while at_newline {
+            at_newline = self.eat(&TokenType::Newline);
+        }
         result
     }
 
@@ -445,8 +452,13 @@ impl Parser {
         self.expect(&TokenType::While)?;
         let primary_expr = self.primary()?;
         let condition = self.parse_expression_1(primary_expr, 0)?;
-        self.expect(&TokenType::Newline)?;
+        println!("Parsing while statement| condition:{:?}", condition);
+        self.eat(&TokenType::Newline); // parse_expression_1() eats the newline
+        println!("Parsing while statement| newline");
         let body = self.block()?;
+        self.eat(&TokenType::Newline);
+        self.expect(&TokenType::End)?;
+        println!("Parsing while statement| body:{:?}", body);
         Ok(Expression::While { condition: Box::new(condition), body: Box::new(body) })
     }
 
