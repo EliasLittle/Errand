@@ -15,7 +15,7 @@ end
 
 +-- Testing function calls
 result = add(5, 3)
-doubled = double(result)
+doubled = result * 2
 
 +-- Testing string concatenation
 greeting = "Hello"

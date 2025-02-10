@@ -1,1 +1,1 @@
-{ x = 7; y = "Hello"; fn add(a, b) { { return (a Add b) } }; result = add(5, 3); doubled = double(result); greeting = "Hello"; name = "World"; message = ((greeting Add " ") Add name); print(message); print(doubled) }
+{ x = 7; y = "Hello"; fn add(a, b) { { return (a Add b) } }; result = add(5, 3); doubled = (result Multiply 2); greeting = "Hello"; name = "World"; message = ((greeting Add " ") Add name); print(message); print(doubled) }

@@ -49,10 +49,9 @@
 <Newline>
 <Identifier("doubled")>
 <Assignment>
-<Identifier("double")>
-<LParen>
 <Identifier("result")>
-<RParen>
+<Asterisk>
+<Number(2.0)>
 <Newline>
 <Newline>
 <Comment(" Testing string concatenation")>
