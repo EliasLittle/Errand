@@ -13,7 +13,7 @@ It will accomplish this by utilizing
 
 - **Lexer**: A lexer that tokenizes the source code into meaningful tokens. (Completed)
 - **Parser**: A parser that constructs an Abstract Syntax Tree (AST) from the tokens. (MVP)
-- **Interpreter**: TODO
+- **Interpreter**: Basic tree-walking interpreter. (MVP)
 - **Compiler**: TODO
 
 
@@ -31,7 +31,11 @@ It will accomplish this by utilizing
 - [ ] Add error recovery
 
 #### Interpreter
-- TODO
+- [x] Resolve variable scopes
+- [x] Environment
+- [x] Basic tree-walking interpreter
+- [ ] Test more thoroughly
+- [ ] Add more features
 
 #### Compiler
 - TODO
