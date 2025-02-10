@@ -1,10 +1,12 @@
 mod frontend;
-//mod backend;
-
 use frontend::lexer::Lexer;
 use frontend::ast::Program;
 use frontend::parser::Parser;
-//use backend::{interpreter::Interpreter, compiler::Compiler};
+use frontend::resolver::Resolver;
+
+mod backend;
+use crate::backend::interpreter::Interpreter;
+
 use std::env;
 
 fn print_ast(path: &str, extension: &str, ast: &Program) {
@@ -52,6 +54,14 @@ fn main() {
     let lowered = ast.lower();
     print_ast(file_path, "last", &lowered);
 
+    let mut resolver = Resolver::new();
+    let locals = resolver.resolve(&lowered).expect("Resolution failed");
+    println!("Locals: {:?}", locals);
+
+    let mut interpreter = Interpreter::new();
+    interpreter.update_local_scope(locals);
+    let result = interpreter.interpret(&lowered).expect("Interpretation failed");
+    println!("\n-------------------------\n\nResult: {:?}", result);
 
     /*
     // You can either interpret or compile
