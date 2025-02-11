@@ -12,18 +12,35 @@ It will accomplish this by utilizing
 ## Status
 
 - **Lexer**: A lexer that tokenizes the source code into meaningful tokens. (Completed)
-- **Parser**: A parser that constructs an Abstract Syntax Tree (AST) from the tokens. (MVP)
-- **Interpreter**: Basic tree-walking interpreter. (MVP)
+- **Parser**: A parser that constructs an Abstract Syntax Tree (AST) from the tokens.
+- **Interpreter**: A working tree-walking interpreter that supports a subset of the language.
 - **Compiler**: TODO
 
+## Live Features
+
+### Supported Features
+- **While loops**
+- **Control flow**
+- **Functions**
+- **Variable Scopes**: Global and local variables resolved correctly.
+- **Basic Tree-Walking**: The interpreter can execute a subset of the language.
+
+### Planned Features
+- **Lambda functions**
+- **Inline functions**
+- **Types**
+- **Operators as functions**: `a op b` == `(op)(a, b)` 
+- **Error recovery in Parser**
+- **Thorough testing of the interpreter**
+- **Additional features for the interpreter**
 
 ## Roadmap
 
 #### Language Features
+- [x] While loops
 - [ ] Lambda functions
 - [ ] Inline functions
 - [ ] Types
-- [ ] While loops
 - [ ] Have all operators as functions 
     - `a op b` == `(op)(a, b)` 
 
@@ -39,7 +56,6 @@ It will accomplish this by utilizing
 
 #### Compiler
 - TODO
-
 
 ## Contributing
 
