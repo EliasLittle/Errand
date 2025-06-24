@@ -2,10 +2,14 @@
 
 #[derive(Debug, Clone)]
 pub enum Expression {
-    Number(f64),
+    Int(i64),
+    Float(f64),
     Boolean(bool),
     String(String),
-    Identifier(Id),
+    Identifier {
+        id: Id,
+        type_expr: Option<TypeExpression>,
+    },
     UnaryOp {
         operator: UnaryOperator,
         operand: Box<Expression>,
@@ -25,6 +29,7 @@ pub enum Expression {
         id: Id,
         parameters: Vec<Parameter>,
         body: Box<Expression>,
+        return_type_expr: Option<TypeExpression>,
     },
     StructDefinition {
         id: Id,
@@ -52,10 +57,12 @@ pub enum Expression {
         value: Box<Expression>,
         cases: Vec<MatchCase>,
     },*/
+    /* This should just be a binary operation
     VariableAssignment {
         id: Id,
         value: Box<Expression>,
     },
+    */
 }
 
 #[derive(Debug, Clone)]
@@ -96,19 +103,22 @@ pub enum BinaryOperator {
     Ampersand,
     Or,
     Pipe,
+    Dot,
     Assignment,
 }
 
+// Parameters can optionally have a type
 #[derive(Debug, Clone)]
 pub struct Parameter {
     pub id: Id,
-    //pub type_expr: Option<TypeExpression>,
+    pub type_expr: Option<TypeExpression>,
 }
 
+// Fields must have a type
 #[derive(Debug, Clone)]
 pub struct FieldDefinition {
     pub id: Id,
-    pub field_type: Id,
+    pub field_type: TypeExpression,
 }
 
 /*
@@ -118,35 +128,57 @@ pub struct MatchCase {
     pub body: Box<Expression>,
 }*/
 
-/*
-#[derive(Debug)]
+
+#[derive(Debug, Clone)]
 pub enum TypeExpression {
     Int,
+    Float,
     Bool,
+    String,
     Void,
-    //Struct(Identifier, Option<Box<TypeExpression>>),
+    Struct(Id, Option<Vec<TypeExpression>>),
 }
-*/
+
+impl TypeExpression {
+    pub fn name(&self) -> String {
+        match self {
+            TypeExpression::Int => "Int".to_string(),
+            TypeExpression::Float => "Float".to_string(),
+            TypeExpression::Bool => "Bool".to_string(),
+            TypeExpression::String => "String".to_string(),
+            TypeExpression::Void => "Void".to_string(),
+            TypeExpression::Struct(id, _) => id.name.clone().to_string(),
+        }
+    }
+}
+
 
 use std::fmt;
 
 impl fmt::Display for Expression {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         match self {
-            Expression::Number(n) => write!(f, "{}", n),
-            Expression::Boolean(b) => write!(f, "{}", b),
-            Expression::String(s) => write!(f, "\"{}\"", s),
-            Expression::Identifier(id) => write!(f, "{}", id.name),
+            Expression::Int(n) => write!(f, "{}::Int", n),
+            Expression::Float(n) => write!(f, "{}::Float", n),
+            Expression::Boolean(b) => write!(f, "{}::Bool", b),
+            Expression::String(s) => write!(f, "\"{}\"::String", s),
+            Expression::Identifier { id, type_expr } => match type_expr {
+                Some(type_expr) => write!(f, "{}::{}", id.name, type_expr.name()),
+                None => write!(f, "{}::Any", id.name),
+            },
             Expression::UnaryOp { operator, operand } => write!(f, "({:?} {})", operator, operand),
             Expression::BinaryOp { operator, left, right } => write!(f, "({} {:?} {})", left, operator, right),
             Expression::FunctionCall { id, arguments } => {
                 let args: Vec<String> = arguments.iter().map(|arg| format!("{}", arg)).collect();
                 write!(f, "{}({})", id.name, args.join(", "))
             },
-            Expression::FunctionDefinition { id, parameters, body } => {
-                let params: Vec<String> = parameters.iter().map(|param| format!("{}", param.id.name)).collect();
+            Expression::FunctionDefinition { id, parameters, body, return_type_expr } => {
+                let params: Vec<String> = parameters.iter().map(|param| format!("{}", param)).collect();
                 let body_str = format!("{}", *body);
-                write!(f, "fn {}({}) {{ {} }}", id.name, params.join(", "), body_str)
+                match return_type_expr {
+                    Some(return_type_expr) => write!(f, "fn {}({}) -> {} {{ {} }}", id.name, params.join(", "), return_type_expr.name(), body_str),
+                    None => write!(f, "fn {}({}) {{ {} }}", id.name, params.join(", "), body_str),
+                }
             },
             Expression::StructDefinition { id, fields } => {
                 let fields_str: Vec<String> = fields.iter().map(|field| format!("{}", field.id.name)).collect();
@@ -173,7 +205,7 @@ impl fmt::Display for Expression {
                 let cases_str: Vec<String> = cases.iter().map(|case| format!("{}", case)).collect();
                 write!(f, "match {} {{ {} }}", value, cases_str.join(", "))
             },*/
-            Expression::VariableAssignment { id, value } => write!(f, "{} = {}", id.name, value),
+            //Expression::VariableAssignment { id, value } => write!(f, "{} = {}", id.name, value),
         }
     }
 }
@@ -187,14 +219,16 @@ impl fmt::Display for Program {
 
 impl fmt::Display for Parameter {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
-        write!(f, "{}", self.id.name)
-        //write!(f, "{}: {:?}", self.id.name, self.type_expr)
+        match &self.type_expr {
+            Some(type_expr) => write!(f, "{}::{}", self.id.name, type_expr.name()),
+            None => write!(f, "{}::Any", self.id.name),
+        }
     }
 }
 
 impl fmt::Display for FieldDefinition {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
-        write!(f, "{}", self.id.name)
+        write!(f, "{}::{}", self.id.name, self.field_type.name())
         //write!(f, "{}: {:?}", self.id.name, self.type_expr)
     }
 }
@@ -205,15 +239,15 @@ impl fmt::Display for FieldDefinition {
     }
 }*/
 
-/*
 impl fmt::Display for TypeExpression {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         match self {
             TypeExpression::Int => write!(f, "Int"),
+            TypeExpression::Float => write!(f, "Float"),
             TypeExpression::Bool => write!(f, "Bool"),
+            TypeExpression::String => write!(f, "String"),
             TypeExpression::Void => write!(f, "Void"),
-            TypeExpression::Struct(name, _) => write!(f, "Struct({})", name),
+            TypeExpression::Struct(id, _) => write!(f, "{}", id.name),
         }
     }
 } 
-*/

@@ -1,5 +1,5 @@
-use super::lexer::{Token, TokenType};
-use super::ast::{Expression, Program, UnaryOperator, BinaryOperator, Parameter, FieldDefinition, Id}; //, TypeExpression, MatchCase};
+use super::lexer::{Token, TokenType, token_type};
+use super::ast::{Expression, Program, UnaryOperator, BinaryOperator, Parameter, FieldDefinition, Id, TypeExpression}; //, TypeExpression, MatchCase};
 use std::iter::Peekable;
 use std::vec::IntoIter;
 
@@ -195,6 +195,7 @@ impl Parser {
 
     fn apply_infix_operator(&mut self, lhs: Expression, op: &Token, rhs: Expression) -> Result<Expression, String> {
         match op.token_type {
+            TokenType::Dot => Ok(Expression::BinaryOp { operator: BinaryOperator::Dot, left: Box::new(lhs), right: Box::new(rhs) }),
             TokenType::Plus => Ok(Expression::BinaryOp { operator: BinaryOperator::Add, left: Box::new(lhs), right: Box::new(rhs) }),
             TokenType::Minus => Ok(Expression::BinaryOp { operator: BinaryOperator::Subtract, left: Box::new(lhs), right: Box::new(rhs) }),
             TokenType::Asterisk => Ok(Expression::BinaryOp { operator: BinaryOperator::Multiply, left: Box::new(lhs), right: Box::new(rhs) }),
@@ -215,7 +216,7 @@ impl Parser {
             // e.g. my_fn(x = 1, y = 2). This is only valid if x and y are parameters.
             TokenType::Assignment => {
                 match lhs {
-                    Expression::Identifier(id) => Ok(Expression::VariableAssignment { id, value: Box::new(rhs) }),
+                    Expression::Identifier { id, type_expr } => Ok(Expression::BinaryOp { operator: BinaryOperator::Assignment, left: Box::new(lhs), right: Box::new(rhs) }),
                     _ => Err(format!("Cannot assign to {:?}", lhs)),
                 }
             },
@@ -243,7 +244,8 @@ impl Parser {
         println!("Parsing inner primary| current:{:?}", self.current_type());
         match self.current_type() {
             Some(TokenType::LParen) => self.parenthesized_expression(),
-            Some(TokenType::Number(n)) => self.literal(&TokenType::Number(*n)),
+            Some(TokenType::Int(n)) => self.literal(&TokenType::Int(*n)),
+            Some(TokenType::Float(n)) => self.literal(&TokenType::Float(*n)),
             Some(TokenType::StringLiteral(s)) => self.literal(&TokenType::StringLiteral(s.to_string())),
             Some(TokenType::True) => self.literal(&TokenType::True),
             Some(TokenType::False) => self.literal(&TokenType::False),
@@ -279,10 +281,16 @@ impl Parser {
         Ok(expression)
     }
 
-    /// identifier ::= IDENTIFIER | IDENTIFIER '(' parameters ')' (call)
+    /// identifier ::= IDENTIFIER(::Type) | IDENTIFIER '(' parameters ')' (call) | IDENTIFIER.IDENTIFIER (field access)
     fn identifier(&mut self) -> Result<Expression, String> {
         println!("Parsing identifier| current:{:?}", self.current_type());
         let id = self.id()?;
+        let type_expr = if self.eat(&TokenType::TypeDef) {
+            Some(self.type_expr()?)
+        } else {
+            None
+        };
+
         if self.eat(&TokenType::LParen) {
             println!("Function call");
             let parameters = self.arguments()?;
@@ -290,12 +298,12 @@ impl Parser {
             Ok(Expression::FunctionCall { id, arguments: parameters })
         } else {
             println!("Identifier");
-            Ok(Expression::Identifier(id))
+            Ok(Expression::Identifier { id, type_expr })
         }
     }
 
     fn id(&mut self) -> Result<Id, String> {
-        match self.expect(&TokenType("Identifier")?)?.token_type {
+        match self.expect(&token_type("Identifier")?)?.token_type {
             TokenType::Identifier(id_str) => Ok(Id { name: id_str }),
             _ => {
                 println!("Expected identifier! found: {:?}", self.current_type());
@@ -304,13 +312,40 @@ impl Parser {
         }
     }
 
-    /// Parse literals (String, number, boolean)
+    fn type_expr(&mut self) -> Result<TypeExpression, String> {
+        println!("Parsing type expression| current:{:?}", self.current_type());
+        
+        let id = self.id()?; // Parse the base identifier
+        if self.eat(&TokenType::LBrace) { // Check for the start of a composite type
+            let mut types = Vec::new();
+            while !self.at(&TokenType::RBrace) {
+                let inner_type = self.type_expr()?; // Parse inner types
+                types.push(inner_type);
+                if !self.eat(&TokenType::Comma) && !self.at(&TokenType::RBrace) {
+                    return Err("Expected comma or right brace".to_string());
+                }
+            }
+            self.expect(&TokenType::RBrace)?; // Expect the closing brace
+            Ok(TypeExpression::Struct(id, Some(types))) // Return struct type expression
+        } else {
+            match id.name.as_str() {
+                "Int" => Ok(TypeExpression::Int),
+                "Float" => Ok(TypeExpression::Float),
+                "Bool" => Ok(TypeExpression::Bool),
+                "Void" => Ok(TypeExpression::Void),
+                _ => Ok(TypeExpression::Struct(id, None)),
+            }
+        }
+    }
+
+    /// Parse literals (String, int, float, boolean)
     fn literal(&mut self, token_type: &TokenType) -> Result<Expression, String> {
         println!("Parsing literal| current:{:?} expected:{:?}", self.current_type(), token_type);
        let literal = self.expect(token_type)?;
        match literal.token_type {
         TokenType::StringLiteral(s) => Ok(Expression::String(s)),
-        TokenType::Number(n) => Ok(Expression::Number(n)),
+        TokenType::Int(n) => Ok(Expression::Int(n)),
+        TokenType::Float(n) => Ok(Expression::Float(n)),
         TokenType::True => Ok(Expression::Boolean(true)),
         TokenType::False => Ok(Expression::Boolean(false)),
         _ => Err(format!("Unexpected token: {:?}", token_type)),
@@ -326,12 +361,17 @@ impl Parser {
         self.expect(&TokenType::LParen)?;
         let arguments = self.parameters()?;
         self.expect(&TokenType::RParen)?;
+        let return_type_expr = if self.eat(&TokenType::TypeDef) {
+            Some(self.type_expr()?)
+        } else {
+            None
+        };
         self.expect(&TokenType::Newline)?; // TODO: Change to or '=' to support inline functions
         let body = self.block()?;
         self.expect(&TokenType::End)?;
         println!("Parsing function| End of function");
         self.expect(&TokenType::Newline); // Should these be eats or expects?
-        Ok(Expression::FunctionDefinition { id, parameters: arguments, body: Box::new(body) })
+        Ok(Expression::FunctionDefinition { id, parameters: arguments, body: Box::new(body), return_type_expr })
     }
 
     // TODO: Support variant structs
@@ -371,7 +411,12 @@ impl Parser {
        let mut parameters = Vec::new();
        while !self.at(&TokenType::RParen) {
         let id = self.id()?;
-        let parameter = Parameter { id }; //, type_expr: None };
+        let parameter = if self.eat(&TokenType::TypeDef) {
+            let type_expr = self.type_expr()?;
+            Parameter { id, type_expr: Some(type_expr) }
+        } else {
+            Parameter { id, type_expr: None }
+        };
         parameters.push(parameter);
         if !(self.eat(&TokenType::Comma) ^ self.at(&TokenType::RParen)) {
             return Err("Expected comma or right parenthesis".to_string());
@@ -385,10 +430,10 @@ impl Parser {
     fn field_parameters(&mut self) -> Result<Vec<FieldDefinition>, String> {
         println!("Parsing field parameters| current:{:?}", self.current_type());
         let mut fields = Vec::new();
-        while self.at(&TokenType("Identifier")?) {
+        while self.at(&token_type("Identifier")?) {
             let id = self.id()?;
             self.expect(&TokenType::TypeDef)?;
-            let field_type = self.id()?;
+            let field_type = self.type_expr()?; // Required here 
             self.expect(&TokenType::Newline)?;
             let field = FieldDefinition { id, field_type };
             fields.push(field);
@@ -492,4 +537,5 @@ impl Parser {
         self.eat(&TokenType::Newline);
         Ok(Expression::Print(Box::new(value)))
     }
+
 }

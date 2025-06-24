@@ -3,7 +3,8 @@ use std::io::Write;
 use std::mem::Discriminant;
 #[derive(Debug, Clone, PartialEq)]
 pub enum TokenType {
-    Number(f64),
+    Int(i64),
+    Float(f64),
     Identifier(String),
     Print,
     EOF,
@@ -32,6 +33,7 @@ pub enum TokenType {
     TypeBool,
     TypeVoid,
     TypeDef,
+    Subtype,
     Begin,
     End,
     If,
@@ -71,6 +73,7 @@ impl TokenType {
 
     pub fn precedence(&self) -> Result<i32, String> {
         match self {
+            | TokenType::Dot => Ok(4),
             | TokenType::Carrot => Ok(3),
             | TokenType::Asterisk 
             | TokenType::Slash 
@@ -109,6 +112,7 @@ impl TokenType {
             | TokenType::And
             | TokenType::Or
             | TokenType::Pipe
+            | TokenType::Dot
             | TokenType::LessThan
             | TokenType::GreaterThan
             | TokenType::LessThanEqual
@@ -144,10 +148,11 @@ impl TokenType {
 }
 
 
-pub fn TokenType(token_type: &str) -> Result<TokenType, String> {
+pub fn token_type(token_type: &str) -> Result<TokenType, String> {
     match token_type {
         "Identifier" => Ok(TokenType::Identifier("".to_string())),
-        "Number" => Ok(TokenType::Number(0.0)),
+        "Int" => Ok(TokenType::Int(0)),
+        "Float" => Ok(TokenType::Float(0.0)),
         "String" => Ok(TokenType::StringLiteral("".to_string())),
         _ => Err("Invalid token type".to_string()),
     }
@@ -394,14 +399,25 @@ impl Lexer {
             number.push(self.current_char);
             self.advance();
         }
-        
-        match number.parse::<f64>() {
-            Ok(n) => Ok(Token {
-                token_type: TokenType::Number(n),
-                line: start_line,
-                column: start_column,
-            }),
-            Err(_) => Err(format!("Invalid number: {}", number)),
+
+        if has_decimal {
+            match number.parse::<f64>() {
+                Ok(n) => Ok(Token {
+                    token_type: TokenType::Float(n),
+                    line: start_line,
+                    column: start_column,
+                }),
+                Err(_) => Err(format!("Invalid float: {}", number)),
+            }
+        } else {
+            match number.parse::<i64>() {
+                Ok(n) => Ok(Token {
+                    token_type: TokenType::Int(n),
+                    line: start_line,
+                    column: start_column,
+                }),
+                Err(_) => Err(format!("Invalid int: {}", number)),
+            }
         }
     }
 
@@ -533,11 +549,16 @@ impl Lexer {
             },
             '"' => self.read_string(),
             '\n' => Ok(Token { token_type: TokenType::Newline, line: self.line, column: self.column }),
-            '<' => if self.peek() == '=' {
-                self.advance();
-                Ok(Token { token_type: TokenType::LessThanEqual, line: self.line, column: self.column })
-            } else {
-                Ok(Token { token_type: TokenType::LessThan, line: self.line, column: self.column })
+            '<' => match self.peek() {
+                ':' => {
+                    self.advance();
+                    Ok(Token { token_type: TokenType::Subtype, line: self.line, column: self.column })
+                }
+                '=' => {
+                    self.advance();
+                    Ok(Token { token_type: TokenType::LessThanEqual, line: self.line, column: self.column })
+                }
+                _ => Ok(Token { token_type: TokenType::LessThan, line: self.line, column: self.column })
             },
             '>' => if self.peek() == '=' {
                 self.advance();

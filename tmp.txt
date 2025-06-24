@@ -1,0 +1,905 @@
+Received file path: tests/elementary.err
+Starting to lex the file
+Lexer processed tokens successfully.
+------ Parsing new top level expression ------
+Parsing expression| current:Some(Identifier("x"))
+Parsing primary| current:Some(Identifier("x"))
+Checking prefix operator| current:Some(Identifier("x"))
+Parsing inner primary| current:Some(Identifier("x"))
+Parsing identifier| current:Some(Identifier("x"))
+Expecting Identifier("")
+Expecting| actual token:Token { token_type: Identifier("x"), line: 1, column: 1 }
+Identifier
+Parsing expression 1| Starting -------------------
+Parsing expression 1| lhs:Identifier { id: Id { name: "x" }, type_expr: None }, current:Some(Assignment)
+Parsing expression 1| op:Token { token_type: Assignment, line: 1, column: 3 }, min_precedence:0
+Parsing primary| current:Some(Int(1))
+Checking prefix operator| current:Some(Int(1))
+Parsing inner primary| current:Some(Int(1))
+Parsing literal| current:Some(Int(1)) expected:Int(1)
+Expecting Int(1)
+Expecting| actual token:Token { token_type: Int(1), line: 1, column: 5 }
+Parsing expression 1| rhs:Int(1)
+Parsing expression 1| next op:Plus
+Parsing expression 1| left associative precedence:1
+Parsing expression 1| Starting -------------------
+Parsing expression 1| lhs:Int(1), current:Some(Plus)
+Parsing expression 1| op:Token { token_type: Plus, line: 1, column: 7 }, min_precedence:1
+Parsing primary| current:Some(Int(2))
+Checking prefix operator| current:Some(Int(2))
+Parsing inner primary| current:Some(Int(2))
+Parsing literal| current:Some(Int(2)) expected:Int(2)
+Expecting Int(2)
+Expecting| actual token:Token { token_type: Int(2), line: 1, column: 9 }
+Parsing expression 1| rhs:Int(2)
+Applying infix operator: Int(1) Plus Int(2)
+No infix operator found
+Parsing expression 1| End of expression 1
+Applying infix operator: Identifier { id: Id { name: "x" }, type_expr: None } Assignment BinaryOp { operator: Add, left: Int(1), right: Int(2) }
+No infix operator found
+Parsing expression 1| End of expression 1
+Parsing expression| result:Ok(VariableAssignment { id: Id { name: "x" }, value: BinaryOp { operator: Add, left: Int(1), right: Int(2) } })
+------ Parsing new top level expression ------
+Parsing expression| current:Some(Identifier("y"))
+Parsing primary| current:Some(Identifier("y"))
+Checking prefix operator| current:Some(Identifier("y"))
+Parsing inner primary| current:Some(Identifier("y"))
+Parsing identifier| current:Some(Identifier("y"))
+Expecting Identifier("")
+Expecting| actual token:Token { token_type: Identifier("y"), line: 1, column: 11 }
+Identifier
+Parsing expression 1| Starting -------------------
+Parsing expression 1| lhs:Identifier { id: Id { name: "y" }, type_expr: None }, current:Some(Assignment)
+Parsing expression 1| op:Token { token_type: Assignment, line: 1, column: 13 }, min_precedence:0
+Parsing primary| current:Some(StringLiteral("Hello"))
+Checking prefix operator| current:Some(StringLiteral("Hello"))
+Parsing inner primary| current:Some(StringLiteral("Hello"))
+Parsing literal| current:Some(StringLiteral("Hello")) expected:StringLiteral("Hello")
+Expecting StringLiteral("Hello")
+Expecting| actual token:Token { token_type: StringLiteral("Hello"), line: 1, column: 15 }
+Parsing expression 1| rhs:String("Hello")
+Applying infix operator: Identifier { id: Id { name: "y" }, type_expr: None } Assignment String("Hello")
+No infix operator found
+Parsing expression 1| End of expression 1
+Parsing expression| result:Ok(VariableAssignment { id: Id { name: "y" }, value: String("Hello") })
+------ Parsing new top level expression ------
+Parsing expression| current:Some(Identifier("z"))
+Parsing primary| current:Some(Identifier("z"))
+Checking prefix operator| current:Some(Identifier("z"))
+Parsing inner primary| current:Some(Identifier("z"))
+Parsing identifier| current:Some(Identifier("z"))
+Expecting Identifier("")
+Expecting| actual token:Token { token_type: Identifier("z"), line: 1, column: 23 }
+Identifier
+Parsing expression 1| Starting -------------------
+Parsing expression 1| lhs:Identifier { id: Id { name: "z" }, type_expr: None }, current:Some(Assignment)
+Parsing expression 1| op:Token { token_type: Assignment, line: 1, column: 25 }, min_precedence:0
+Parsing primary| current:Some(StringLiteral("World"))
+Checking prefix operator| current:Some(StringLiteral("World"))
+Parsing inner primary| current:Some(StringLiteral("World"))
+Parsing literal| current:Some(StringLiteral("World")) expected:StringLiteral("World")
+Expecting StringLiteral("World")
+Expecting| actual token:Token { token_type: StringLiteral("World"), line: 1, column: 27 }
+Parsing expression 1| rhs:String("World")
+Applying infix operator: Identifier { id: Id { name: "z" }, type_expr: None } Assignment String("World")
+No infix operator found
+Parsing expression 1| End of expression 1
+Parsing expression| result:Ok(VariableAssignment { id: Id { name: "z" }, value: String("World") })
+------ Parsing new top level expression ------
+Parsing expression| current:Some(Identifier("y"))
+Parsing primary| current:Some(Identifier("y"))
+Checking prefix operator| current:Some(Identifier("y"))
+Parsing inner primary| current:Some(Identifier("y"))
+Parsing identifier| current:Some(Identifier("y"))
+Expecting Identifier("")
+Expecting| actual token:Token { token_type: Identifier("y"), line: 1, column: 36 }
+Identifier
+Parsing expression 1| Starting -------------------
+Parsing expression 1| lhs:Identifier { id: Id { name: "y" }, type_expr: None }, current:Some(Plus)
+Parsing expression 1| op:Token { token_type: Plus, line: 1, column: 38 }, min_precedence:0
+Parsing primary| current:Some(StringLiteral(" "))
+Checking prefix operator| current:Some(StringLiteral(" "))
+Parsing inner primary| current:Some(StringLiteral(" "))
+Parsing literal| current:Some(StringLiteral(" ")) expected:StringLiteral(" ")
+Expecting StringLiteral(" ")
+Expecting| actual token:Token { token_type: StringLiteral(" "), line: 1, column: 40 }
+Parsing expression 1| rhs:String(" ")
+Parsing expression 1| next op:Plus
+Parsing expression 1| left associative precedence:1
+Parsing expression 1| Starting -------------------
+Parsing expression 1| lhs:String(" "), current:Some(Plus)
+Parsing expression 1| op:Token { token_type: Plus, line: 1, column: 44 }, min_precedence:1
+Parsing primary| current:Some(Identifier("z"))
+Checking prefix operator| current:Some(Identifier("z"))
+Parsing inner primary| current:Some(Identifier("z"))
+Parsing identifier| current:Some(Identifier("z"))
+Expecting Identifier("")
+Expecting| actual token:Token { token_type: Identifier("z"), line: 1, column: 46 }
+Identifier
+Parsing expression 1| rhs:Identifier { id: Id { name: "z" }, type_expr: None }
+Applying infix operator: String(" ") Plus Identifier { id: Id { name: "z" }, type_expr: None }
+No infix operator found
+Parsing expression 1| End of expression 1
+Applying infix operator: Identifier { id: Id { name: "y" }, type_expr: None } Plus BinaryOp { operator: Add, left: String(" "), right: Identifier { id: Id { name: "z" }, type_expr: None } }
+No infix operator found
+Parsing expression 1| End of expression 1
+Parsing expression| result:Ok(BinaryOp { operator: Add, left: Identifier { id: Id { name: "y" }, type_expr: None }, right: BinaryOp { operator: Add, left: String(" "), right: Identifier { id: Id { name: "z" }, type_expr: None } } })
+------ Parsing new top level expression ------
+Parsing expression| current:Some(Function)
+Parsing function| current:Some(Function)
+Expecting Function
+Expecting| actual token:Token { token_type: Function, line: 1, column: 49 }
+Expecting Identifier("")
+Expecting| actual token:Token { token_type: Identifier("hello"), line: 1, column: 52 }
+Expecting LParen
+Expecting| actual token:Token { token_type: LParen, line: 1, column: 57 }
+Parsing parameters| current:Some(RParen)
+Expecting RParen
+Expecting| actual token:Token { token_type: RParen, line: 1, column: 58 }
+Expecting Newline
+Expecting| actual token:Token { token_type: Newline, line: 1, column: 59 }
+Parsing block| Starting block: Some(Return)
+Parsing block| not end: Some(Return)
+Parsing expression| current:Some(Return)
+Parsing return statement| current:Some(Return)
+Expecting Return
+Expecting| actual token:Token { token_type: Return, line: 1, column: 62 }
+Parsing primary| current:Some(StringLiteral("Hello World"))
+Checking prefix operator| current:Some(StringLiteral("Hello World"))
+Parsing inner primary| current:Some(StringLiteral("Hello World"))
+Parsing literal| current:Some(StringLiteral("Hello World")) expected:StringLiteral("Hello World")
+Expecting StringLiteral("Hello World")
+Expecting| actual token:Token { token_type: StringLiteral("Hello World"), line: 1, column: 69 }
+Parsing expression 1| Starting -------------------
+Parsing expression 1| lhs:String("Hello World"), current:Some(End)
+No infix operator found
+Parsing expression 1| End of expression 1
+Parsing return statement| end of return
+Parsing expression| result:Ok(Return(Some(String("Hello World"))))
+Parsing block| End of block
+Expecting End
+Expecting| actual token:Token { token_type: End, line: 1, column: 83 }
+Parsing function| End of function
+Expecting Newline
+Expecting| actual token:Token { token_type: Newline, line: 1, column: 86 }
+Parsing expression| result:Ok(FunctionDefinition { id: Id { name: "hello" }, parameters: [], body: Block([Return(Some(String("Hello World")))]), return_type_expr: None })
+------ Parsing new top level expression ------
+Parsing expression| current:Some(Identifier("hello"))
+Parsing primary| current:Some(Identifier("hello"))
+Checking prefix operator| current:Some(Identifier("hello"))
+Parsing inner primary| current:Some(Identifier("hello"))
+Parsing identifier| current:Some(Identifier("hello"))
+Expecting Identifier("")
+Expecting| actual token:Token { token_type: Identifier("hello"), line: 1, column: 88 }
+Function call
+Parsing arguments| current:Some(RParen)
+Expecting RParen
+Expecting| actual token:Token { token_type: RParen, line: 1, column: 94 }
+Parsing expression 1| Starting -------------------
+Parsing expression 1| lhs:FunctionCall { id: Id { name: "hello" }, arguments: [] }, current:Some(Newline)
+No infix operator found
+Parsing expression 1| End of expression 1
+Parsing expression| result:Ok(FunctionCall { id: Id { name: "hello" }, arguments: [] })
+------ Parsing new top level expression ------
+Parsing expression| current:Some(Function)
+Parsing function| current:Some(Function)
+Expecting Function
+Expecting| actual token:Token { token_type: Function, line: 1, column: 97 }
+Expecting Identifier("")
+Expecting| actual token:Token { token_type: Identifier("loop_a"), line: 1, column: 100 }
+Expecting LParen
+Expecting| actual token:Token { token_type: LParen, line: 1, column: 106 }
+Parsing parameters| current:Some(Identifier("str1"))
+Expecting Identifier("")
+Expecting| actual token:Token { token_type: Identifier("str1"), line: 1, column: 107 }
+Expecting Identifier("")
+Expecting| actual token:Token { token_type: Identifier("str2"), line: 1, column: 113 }
+Expecting Identifier("")
+Expecting| actual token:Token { token_type: Identifier("num"), line: 1, column: 119 }
+Expecting RParen
+Expecting| actual token:Token { token_type: RParen, line: 1, column: 122 }
+Expecting Newline
+Expecting| actual token:Token { token_type: Newline, line: 1, column: 123 }
+Parsing block| Starting block: Some(Identifier("i"))
+Parsing block| not end: Some(Identifier("i"))
+Parsing expression| current:Some(Identifier("i"))
+Parsing primary| current:Some(Identifier("i"))
+Checking prefix operator| current:Some(Identifier("i"))
+Parsing inner primary| current:Some(Identifier("i"))
+Parsing identifier| current:Some(Identifier("i"))
+Expecting Identifier("")
+Expecting| actual token:Token { token_type: Identifier("i"), line: 1, column: 126 }
+Identifier
+Parsing expression 1| Starting -------------------
+Parsing expression 1| lhs:Identifier { id: Id { name: "i" }, type_expr: None }, current:Some(Assignment)
+Parsing expression 1| op:Token { token_type: Assignment, line: 1, column: 128 }, min_precedence:0
+Parsing primary| current:Some(Int(0))
+Checking prefix operator| current:Some(Int(0))
+Parsing inner primary| current:Some(Int(0))
+Parsing literal| current:Some(Int(0)) expected:Int(0)
+Expecting Int(0)
+Expecting| actual token:Token { token_type: Int(0), line: 1, column: 130 }
+Parsing expression 1| rhs:Int(0)
+Applying infix operator: Identifier { id: Id { name: "i" }, type_expr: None } Assignment Int(0)
+No infix operator found
+Parsing expression 1| End of expression 1
+Parsing expression| result:Ok(VariableAssignment { id: Id { name: "i" }, value: Int(0) })
+Parsing block| not end: Some(Identifier("tot_str"))
+Parsing expression| current:Some(Identifier("tot_str"))
+Parsing primary| current:Some(Identifier("tot_str"))
+Checking prefix operator| current:Some(Identifier("tot_str"))
+Parsing inner primary| current:Some(Identifier("tot_str"))
+Parsing identifier| current:Some(Identifier("tot_str"))
+Expecting Identifier("")
+Expecting| actual token:Token { token_type: Identifier("tot_str"), line: 1, column: 134 }
+Identifier
+Parsing expression 1| Starting -------------------
+Parsing expression 1| lhs:Identifier { id: Id { name: "tot_str" }, type_expr: None }, current:Some(Assignment)
+Parsing expression 1| op:Token { token_type: Assignment, line: 1, column: 142 }, min_precedence:0
+Parsing primary| current:Some(StringLiteral(""))
+Checking prefix operator| current:Some(StringLiteral(""))
+Parsing inner primary| current:Some(StringLiteral(""))
+Parsing literal| current:Some(StringLiteral("")) expected:StringLiteral("")
+Expecting StringLiteral("")
+Expecting| actual token:Token { token_type: StringLiteral(""), line: 1, column: 144 }
+Parsing expression 1| rhs:String("")
+Applying infix operator: Identifier { id: Id { name: "tot_str" }, type_expr: None } Assignment String("")
+No infix operator found
+Parsing expression 1| End of expression 1
+Parsing expression| result:Ok(VariableAssignment { id: Id { name: "tot_str" }, value: String("") })
+Parsing block| not end: Some(While)
+Parsing expression| current:Some(While)
+Parsing while statement| current:Some(While)
+Expecting While
+Expecting| actual token:Token { token_type: While, line: 1, column: 149 }
+Parsing primary| current:Some(Identifier("i"))
+Checking prefix operator| current:Some(Identifier("i"))
+Parsing inner primary| current:Some(Identifier("i"))
+Parsing identifier| current:Some(Identifier("i"))
+Expecting Identifier("")
+Expecting| actual token:Token { token_type: Identifier("i"), line: 1, column: 155 }
+Identifier
+Parsing expression 1| Starting -------------------
+Parsing expression 1| lhs:Identifier { id: Id { name: "i" }, type_expr: None }, current:Some(LessThan)
+Parsing expression 1| op:Token { token_type: LessThan, line: 1, column: 157 }, min_precedence:0
+Parsing primary| current:Some(Identifier("num"))
+Checking prefix operator| current:Some(Identifier("num"))
+Parsing inner primary| current:Some(Identifier("num"))
+Parsing identifier| current:Some(Identifier("num"))
+Expecting Identifier("")
+Expecting| actual token:Token { token_type: Identifier("num"), line: 1, column: 159 }
+Identifier
+Parsing expression 1| rhs:Identifier { id: Id { name: "num" }, type_expr: None }
+Applying infix operator: Identifier { id: Id { name: "i" }, type_expr: None } LessThan Identifier { id: Id { name: "num" }, type_expr: None }
+No infix operator found
+Parsing expression 1| End of expression 1
+Parsing while statement| condition:BinaryOp { operator: LessThan, left: Identifier { id: Id { name: "i" }, type_expr: None }, right: Identifier { id: Id { name: "num" }, type_expr: None } }
+Parsing while statement| newline
+Parsing block| Starting block: Some(Identifier("tot_str"))
+Parsing block| not end: Some(Identifier("tot_str"))
+Parsing expression| current:Some(Identifier("tot_str"))
+Parsing primary| current:Some(Identifier("tot_str"))
+Checking prefix operator| current:Some(Identifier("tot_str"))
+Parsing inner primary| current:Some(Identifier("tot_str"))
+Parsing identifier| current:Some(Identifier("tot_str"))
+Expecting Identifier("")
+Expecting| actual token:Token { token_type: Identifier("tot_str"), line: 1, column: 168 }
+Identifier
+Parsing expression 1| Starting -------------------
+Parsing expression 1| lhs:Identifier { id: Id { name: "tot_str" }, type_expr: None }, current:Some(Assignment)
+Parsing expression 1| op:Token { token_type: Assignment, line: 1, column: 176 }, min_precedence:0
+Parsing primary| current:Some(Identifier("tot_str"))
+Checking prefix operator| current:Some(Identifier("tot_str"))
+Parsing inner primary| current:Some(Identifier("tot_str"))
+Parsing identifier| current:Some(Identifier("tot_str"))
+Expecting Identifier("")
+Expecting| actual token:Token { token_type: Identifier("tot_str"), line: 1, column: 178 }
+Identifier
+Parsing expression 1| rhs:Identifier { id: Id { name: "tot_str" }, type_expr: None }
+Parsing expression 1| next op:Plus
+Parsing expression 1| left associative precedence:1
+Parsing expression 1| Starting -------------------
+Parsing expression 1| lhs:Identifier { id: Id { name: "tot_str" }, type_expr: None }, current:Some(Plus)
+Parsing expression 1| op:Token { token_type: Plus, line: 1, column: 186 }, min_precedence:1
+Parsing primary| current:Some(Identifier("str1"))
+Checking prefix operator| current:Some(Identifier("str1"))
+Parsing inner primary| current:Some(Identifier("str1"))
+Parsing identifier| current:Some(Identifier("str1"))
+Expecting Identifier("")
+Expecting| actual token:Token { token_type: Identifier("str1"), line: 1, column: 188 }
+Identifier
+Parsing expression 1| rhs:Identifier { id: Id { name: "str1" }, type_expr: None }
+Applying infix operator: Identifier { id: Id { name: "tot_str" }, type_expr: None } Plus Identifier { id: Id { name: "str1" }, type_expr: None }
+No infix operator found
+Parsing expression 1| End of expression 1
+Applying infix operator: Identifier { id: Id { name: "tot_str" }, type_expr: None } Assignment BinaryOp { operator: Add, left: Identifier { id: Id { name: "tot_str" }, type_expr: None }, right: Identifier { id: Id { name: "str1" }, type_expr: None } }
+No infix operator found
+Parsing expression 1| End of expression 1
+Parsing expression| result:Ok(VariableAssignment { id: Id { name: "tot_str" }, value: BinaryOp { operator: Add, left: Identifier { id: Id { name: "tot_str" }, type_expr: None }, right: Identifier { id: Id { name: "str1" }, type_expr: None } } })
+Parsing block| not end: Some(Print)
+Parsing expression| current:Some(Print)
+Parsing print statement| current:Some(Print)
+Expecting Print
+Expecting| actual token:Token { token_type: Print, line: 1, column: 197 }
+Parsing primary| current:Some(StringLiteral("print: "))
+Checking prefix operator| current:Some(StringLiteral("print: "))
+Parsing inner primary| current:Some(StringLiteral("print: "))
+Parsing literal| current:Some(StringLiteral("print: ")) expected:StringLiteral("print: ")
+Expecting StringLiteral("print: ")
+Expecting| actual token:Token { token_type: StringLiteral("print: "), line: 1, column: 203 }
+Parsing expression 1| Starting -------------------
+Parsing expression 1| lhs:String("print: "), current:Some(Plus)
+Parsing expression 1| op:Token { token_type: Plus, line: 1, column: 213 }, min_precedence:0
+Parsing primary| current:Some(Identifier("tot_str"))
+Checking prefix operator| current:Some(Identifier("tot_str"))
+Parsing inner primary| current:Some(Identifier("tot_str"))
+Parsing identifier| current:Some(Identifier("tot_str"))
+Expecting Identifier("")
+Expecting| actual token:Token { token_type: Identifier("tot_str"), line: 1, column: 215 }
+Identifier
+Parsing expression 1| rhs:Identifier { id: Id { name: "tot_str" }, type_expr: None }
+Applying infix operator: String("print: ") Plus Identifier { id: Id { name: "tot_str" }, type_expr: None }
+No infix operator found
+Parsing expression 1| End of expression 1
+Parsing expression| result:Ok(Print(BinaryOp { operator: Add, left: String("print: "), right: Identifier { id: Id { name: "tot_str" }, type_expr: None } }))
+Parsing block| not end: Some(Identifier("i"))
+Parsing expression| current:Some(Identifier("i"))
+Parsing primary| current:Some(Identifier("i"))
+Checking prefix operator| current:Some(Identifier("i"))
+Parsing inner primary| current:Some(Identifier("i"))
+Parsing identifier| current:Some(Identifier("i"))
+Expecting Identifier("")
+Expecting| actual token:Token { token_type: Identifier("i"), line: 1, column: 227 }
+Identifier
+Parsing expression 1| Starting -------------------
+Parsing expression 1| lhs:Identifier { id: Id { name: "i" }, type_expr: None }, current:Some(Assignment)
+Parsing expression 1| op:Token { token_type: Assignment, line: 1, column: 229 }, min_precedence:0
+Parsing primary| current:Some(Identifier("i"))
+Checking prefix operator| current:Some(Identifier("i"))
+Parsing inner primary| current:Some(Identifier("i"))
+Parsing identifier| current:Some(Identifier("i"))
+Expecting Identifier("")
+Expecting| actual token:Token { token_type: Identifier("i"), line: 1, column: 231 }
+Identifier
+Parsing expression 1| rhs:Identifier { id: Id { name: "i" }, type_expr: None }
+Parsing expression 1| next op:Plus
+Parsing expression 1| left associative precedence:1
+Parsing expression 1| Starting -------------------
+Parsing expression 1| lhs:Identifier { id: Id { name: "i" }, type_expr: None }, current:Some(Plus)
+Parsing expression 1| op:Token { token_type: Plus, line: 1, column: 233 }, min_precedence:1
+Parsing primary| current:Some(Int(1))
+Checking prefix operator| current:Some(Int(1))
+Parsing inner primary| current:Some(Int(1))
+Parsing literal| current:Some(Int(1)) expected:Int(1)
+Expecting Int(1)
+Expecting| actual token:Token { token_type: Int(1), line: 1, column: 235 }
+Parsing expression 1| rhs:Int(1)
+Applying infix operator: Identifier { id: Id { name: "i" }, type_expr: None } Plus Int(1)
+No infix operator found
+Parsing expression 1| End of expression 1
+Applying infix operator: Identifier { id: Id { name: "i" }, type_expr: None } Assignment BinaryOp { operator: Add, left: Identifier { id: Id { name: "i" }, type_expr: None }, right: Int(1) }
+No infix operator found
+Parsing expression 1| End of expression 1
+Parsing expression| result:Ok(VariableAssignment { id: Id { name: "i" }, value: BinaryOp { operator: Add, left: Identifier { id: Id { name: "i" }, type_expr: None }, right: Int(1) } })
+Parsing block| End of block
+Expecting End
+Expecting| actual token:Token { token_type: End, line: 1, column: 239 }
+Parsing while statement| body:Block([VariableAssignment { id: Id { name: "tot_str" }, value: BinaryOp { operator: Add, left: Identifier { id: Id { name: "tot_str" }, type_expr: None }, right: Identifier { id: Id { name: "str1" }, type_expr: None } } }, Print(BinaryOp { operator: Add, left: String("print: "), right: Identifier { id: Id { name: "tot_str" }, type_expr: None } }), VariableAssignment { id: Id { name: "i" }, value: BinaryOp { operator: Add, left: Identifier { id: Id { name: "i" }, type_expr: None }, right: Int(1) } }])
+Parsing expression| result:Ok(While { condition: BinaryOp { operator: LessThan, left: Identifier { id: Id { name: "i" }, type_expr: None }, right: Identifier { id: Id { name: "num" }, type_expr: None } }, body: Block([VariableAssignment { id: Id { name: "tot_str" }, value: BinaryOp { operator: Add, left: Identifier { id: Id { name: "tot_str" }, type_expr: None }, right: Identifier { id: Id { name: "str1" }, type_expr: None } } }, Print(BinaryOp { operator: Add, left: String("print: "), right: Identifier { id: Id { name: "tot_str" }, type_expr: None } }), VariableAssignment { id: Id { name: "i" }, value: BinaryOp { operator: Add, left: Identifier { id: Id { name: "i" }, type_expr: None }, right: Int(1) } }]) })
+Parsing block| not end: Some(Return)
+Parsing expression| current:Some(Return)
+Parsing return statement| current:Some(Return)
+Expecting Return
+Expecting| actual token:Token { token_type: Return, line: 1, column: 246 }
+Parsing primary| current:Some(Identifier("tot_str"))
+Checking prefix operator| current:Some(Identifier("tot_str"))
+Parsing inner primary| current:Some(Identifier("tot_str"))
+Parsing identifier| current:Some(Identifier("tot_str"))
+Expecting Identifier("")
+Expecting| actual token:Token { token_type: Identifier("tot_str"), line: 1, column: 253 }
+Identifier
+Parsing expression 1| Starting -------------------
+Parsing expression 1| lhs:Identifier { id: Id { name: "tot_str" }, type_expr: None }, current:Some(Plus)
+Parsing expression 1| op:Token { token_type: Plus, line: 1, column: 261 }, min_precedence:0
+Parsing primary| current:Some(Identifier("str2"))
+Checking prefix operator| current:Some(Identifier("str2"))
+Parsing inner primary| current:Some(Identifier("str2"))
+Parsing identifier| current:Some(Identifier("str2"))
+Expecting Identifier("")
+Expecting| actual token:Token { token_type: Identifier("str2"), line: 1, column: 263 }
+Identifier
+Parsing expression 1| rhs:Identifier { id: Id { name: "str2" }, type_expr: None }
+Applying infix operator: Identifier { id: Id { name: "tot_str" }, type_expr: None } Plus Identifier { id: Id { name: "str2" }, type_expr: None }
+No infix operator found
+Parsing expression 1| End of expression 1
+Parsing return statement| end of return
+Parsing expression| result:Ok(Return(Some(BinaryOp { operator: Add, left: Identifier { id: Id { name: "tot_str" }, type_expr: None }, right: Identifier { id: Id { name: "str2" }, type_expr: None } })))
+Parsing block| End of block
+Expecting End
+Expecting| actual token:Token { token_type: End, line: 1, column: 268 }
+Parsing function| End of function
+Expecting Newline
+Expecting| actual token:Token { token_type: Newline, line: 1, column: 271 }
+Parsing expression| result:Ok(FunctionDefinition { id: Id { name: "loop_a" }, parameters: [Parameter { id: Id { name: "str1" }, type_expr: None }, Parameter { id: Id { name: "str2" }, type_expr: None }, Parameter { id: Id { name: "num" }, type_expr: None }], body: Block([VariableAssignment { id: Id { name: "i" }, value: Int(0) }, VariableAssignment { id: Id { name: "tot_str" }, value: String("") }, While { condition: BinaryOp { operator: LessThan, left: Identifier { id: Id { name: "i" }, type_expr: None }, right: Identifier { id: Id { name: "num" }, type_expr: None } }, body: Block([VariableAssignment { id: Id { name: "tot_str" }, value: BinaryOp { operator: Add, left: Identifier { id: Id { name: "tot_str" }, type_expr: None }, right: Identifier { id: Id { name: "str1" }, type_expr: None } } }, Print(BinaryOp { operator: Add, left: String("print: "), right: Identifier { id: Id { name: "tot_str" }, type_expr: None } }), VariableAssignment { id: Id { name: "i" }, value: BinaryOp { operator: Add, left: Identifier { id: Id { name: "i" }, type_expr: None }, right: Int(1) } }]) }, Return(Some(BinaryOp { operator: Add, left: Identifier { id: Id { name: "tot_str" }, type_expr: None }, right: Identifier { id: Id { name: "str2" }, type_expr: None } }))]), return_type_expr: None })
+------ Parsing new top level expression ------
+Parsing expression| current:Some(Identifier("loop_a"))
+Parsing primary| current:Some(Identifier("loop_a"))
+Checking prefix operator| current:Some(Identifier("loop_a"))
+Parsing inner primary| current:Some(Identifier("loop_a"))
+Parsing identifier| current:Some(Identifier("loop_a"))
+Expecting Identifier("")
+Expecting| actual token:Token { token_type: Identifier("loop_a"), line: 1, column: 273 }
+Function call
+Parsing arguments| current:Some(Identifier("y"))
+Parsing primary| current:Some(Identifier("y"))
+Checking prefix operator| current:Some(Identifier("y"))
+Parsing inner primary| current:Some(Identifier("y"))
+Parsing identifier| current:Some(Identifier("y"))
+Expecting Identifier("")
+Expecting| actual token:Token { token_type: Identifier("y"), line: 1, column: 280 }
+Identifier
+Parsing expression 1| Starting -------------------
+Parsing expression 1| lhs:Identifier { id: Id { name: "y" }, type_expr: None }, current:Some(Comma)
+No infix operator found
+Parsing expression 1| End of expression 1
+Parsing primary| current:Some(Identifier("z"))
+Checking prefix operator| current:Some(Identifier("z"))
+Parsing inner primary| current:Some(Identifier("z"))
+Parsing identifier| current:Some(Identifier("z"))
+Expecting Identifier("")
+Expecting| actual token:Token { token_type: Identifier("z"), line: 1, column: 283 }
+Identifier
+Parsing expression 1| Starting -------------------
+Parsing expression 1| lhs:Identifier { id: Id { name: "z" }, type_expr: None }, current:Some(Comma)
+No infix operator found
+Parsing expression 1| End of expression 1
+Parsing primary| current:Some(Identifier("x"))
+Checking prefix operator| current:Some(Identifier("x"))
+Parsing inner primary| current:Some(Identifier("x"))
+Parsing identifier| current:Some(Identifier("x"))
+Expecting Identifier("")
+Expecting| actual token:Token { token_type: Identifier("x"), line: 1, column: 286 }
+Identifier
+Parsing expression 1| Starting -------------------
+Parsing expression 1| lhs:Identifier { id: Id { name: "x" }, type_expr: None }, current:Some(RParen)
+No infix operator found
+Parsing expression 1| End of expression 1
+Expecting RParen
+Expecting| actual token:Token { token_type: RParen, line: 1, column: 287 }
+Parsing expression 1| Starting -------------------
+Parsing expression 1| lhs:FunctionCall { id: Id { name: "loop_a" }, arguments: [Identifier { id: Id { name: "y" }, type_expr: None }, Identifier { id: Id { name: "z" }, type_expr: None }, Identifier { id: Id { name: "x" }, type_expr: None }] }, current:Some(Newline)
+No infix operator found
+Parsing expression 1| End of expression 1
+Parsing expression| result:Ok(FunctionCall { id: Id { name: "loop_a" }, arguments: [Identifier { id: Id { name: "y" }, type_expr: None }, Identifier { id: Id { name: "z" }, type_expr: None }, Identifier { id: Id { name: "x" }, type_expr: None }] })
+------ Parsing new top level expression ------
+Parsing expression| current:Some(Struct)
+Parsing structure| current:Some(Struct)
+Expecting Struct
+Expecting| actual token:Token { token_type: Struct, line: 1, column: 291 }
+Expecting Identifier("")
+Expecting| actual token:Token { token_type: Identifier("point"), line: 1, column: 298 }
+Expecting Newline
+Expecting| actual token:Token { token_type: Newline, line: 1, column: 303 }
+Parsing field parameters| current:Some(Identifier("x"))
+Expecting Identifier("")
+Expecting| actual token:Token { token_type: Identifier("x"), line: 1, column: 306 }
+Expecting TypeDef
+Expecting| actual token:Token { token_type: TypeDef, line: 1, column: 308 }
+Parsing type expression| current:Some(Identifier("Int"))
+Expecting Identifier("")
+Expecting| actual token:Token { token_type: Identifier("Int"), line: 1, column: 309 }
+Expecting Newline
+Expecting| actual token:Token { token_type: Newline, line: 1, column: 312 }
+Expecting Identifier("")
+Expecting| actual token:Token { token_type: Identifier("y"), line: 1, column: 315 }
+Expecting TypeDef
+Expecting| actual token:Token { token_type: TypeDef, line: 1, column: 317 }
+Parsing type expression| current:Some(Identifier("Int"))
+Expecting Identifier("")
+Expecting| actual token:Token { token_type: Identifier("Int"), line: 1, column: 318 }
+Expecting Newline
+Expecting| actual token:Token { token_type: Newline, line: 1, column: 321 }
+Expecting End
+Expecting| actual token:Token { token_type: End, line: 1, column: 322 }
+Parsing expression| result:Ok(StructDefinition { id: Id { name: "point" }, fields: [FieldDefinition { id: Id { name: "x" }, field_type: Int }, FieldDefinition { id: Id { name: "y" }, field_type: Int }] })
+------ Parsing new top level expression ------
+Parsing expression| current:Some(Identifier("alpha"))
+Parsing primary| current:Some(Identifier("alpha"))
+Checking prefix operator| current:Some(Identifier("alpha"))
+Parsing inner primary| current:Some(Identifier("alpha"))
+Parsing identifier| current:Some(Identifier("alpha"))
+Expecting Identifier("")
+Expecting| actual token:Token { token_type: Identifier("alpha"), line: 1, column: 327 }
+Identifier
+Parsing expression 1| Starting -------------------
+Parsing expression 1| lhs:Identifier { id: Id { name: "alpha" }, type_expr: None }, current:Some(Assignment)
+Parsing expression 1| op:Token { token_type: Assignment, line: 1, column: 333 }, min_precedence:0
+Parsing primary| current:Some(Identifier("point"))
+Checking prefix operator| current:Some(Identifier("point"))
+Parsing inner primary| current:Some(Identifier("point"))
+Parsing identifier| current:Some(Identifier("point"))
+Expecting Identifier("")
+Expecting| actual token:Token { token_type: Identifier("point"), line: 1, column: 335 }
+Function call
+Parsing arguments| current:Some(Int(1))
+Parsing primary| current:Some(Int(1))
+Checking prefix operator| current:Some(Int(1))
+Parsing inner primary| current:Some(Int(1))
+Parsing literal| current:Some(Int(1)) expected:Int(1)
+Expecting Int(1)
+Expecting| actual token:Token { token_type: Int(1), line: 1, column: 341 }
+Parsing expression 1| Starting -------------------
+Parsing expression 1| lhs:Int(1), current:Some(Comma)
+No infix operator found
+Parsing expression 1| End of expression 1
+Parsing primary| current:Some(Int(2))
+Checking prefix operator| current:Some(Int(2))
+Parsing inner primary| current:Some(Int(2))
+Parsing literal| current:Some(Int(2)) expected:Int(2)
+Expecting Int(2)
+Expecting| actual token:Token { token_type: Int(2), line: 1, column: 344 }
+Parsing expression 1| Starting -------------------
+Parsing expression 1| lhs:Int(2), current:Some(RParen)
+No infix operator found
+Parsing expression 1| End of expression 1
+Expecting RParen
+Expecting| actual token:Token { token_type: RParen, line: 1, column: 345 }
+Parsing expression 1| rhs:FunctionCall { id: Id { name: "point" }, arguments: [Int(1), Int(2)] }
+Applying infix operator: Identifier { id: Id { name: "alpha" }, type_expr: None } Assignment FunctionCall { id: Id { name: "point" }, arguments: [Int(1), Int(2)] }
+No infix operator found
+Parsing expression 1| End of expression 1
+Parsing expression| result:Ok(VariableAssignment { id: Id { name: "alpha" }, value: FunctionCall { id: Id { name: "point" }, arguments: [Int(1), Int(2)] } })
+------ Parsing new top level expression ------
+Parsing expression| current:Some(Identifier("beta"))
+Parsing primary| current:Some(Identifier("beta"))
+Checking prefix operator| current:Some(Identifier("beta"))
+Parsing inner primary| current:Some(Identifier("beta"))
+Parsing identifier| current:Some(Identifier("beta"))
+Expecting Identifier("")
+Expecting| actual token:Token { token_type: Identifier("beta"), line: 1, column: 347 }
+Identifier
+Parsing expression 1| Starting -------------------
+Parsing expression 1| lhs:Identifier { id: Id { name: "beta" }, type_expr: None }, current:Some(Assignment)
+Parsing expression 1| op:Token { token_type: Assignment, line: 1, column: 352 }, min_precedence:0
+Parsing primary| current:Some(Identifier("point"))
+Checking prefix operator| current:Some(Identifier("point"))
+Parsing inner primary| current:Some(Identifier("point"))
+Parsing identifier| current:Some(Identifier("point"))
+Expecting Identifier("")
+Expecting| actual token:Token { token_type: Identifier("point"), line: 1, column: 354 }
+Function call
+Parsing arguments| current:Some(Int(3))
+Parsing primary| current:Some(Int(3))
+Checking prefix operator| current:Some(Int(3))
+Parsing inner primary| current:Some(Int(3))
+Parsing literal| current:Some(Int(3)) expected:Int(3)
+Expecting Int(3)
+Expecting| actual token:Token { token_type: Int(3), line: 1, column: 360 }
+Parsing expression 1| Starting -------------------
+Parsing expression 1| lhs:Int(3), current:Some(Comma)
+No infix operator found
+Parsing expression 1| End of expression 1
+Parsing primary| current:Some(Int(5))
+Checking prefix operator| current:Some(Int(5))
+Parsing inner primary| current:Some(Int(5))
+Parsing literal| current:Some(Int(5)) expected:Int(5)
+Expecting Int(5)
+Expecting| actual token:Token { token_type: Int(5), line: 1, column: 363 }
+Parsing expression 1| Starting -------------------
+Parsing expression 1| lhs:Int(5), current:Some(RParen)
+No infix operator found
+Parsing expression 1| End of expression 1
+Expecting RParen
+Expecting| actual token:Token { token_type: RParen, line: 1, column: 364 }
+Parsing expression 1| rhs:FunctionCall { id: Id { name: "point" }, arguments: [Int(3), Int(5)] }
+Applying infix operator: Identifier { id: Id { name: "beta" }, type_expr: None } Assignment FunctionCall { id: Id { name: "point" }, arguments: [Int(3), Int(5)] }
+No infix operator found
+Parsing expression 1| End of expression 1
+Parsing expression| result:Ok(VariableAssignment { id: Id { name: "beta" }, value: FunctionCall { id: Id { name: "point" }, arguments: [Int(3), Int(5)] } })
+------ Parsing new top level expression ------
+Parsing expression| current:Some(Identifier("alpha"))
+Parsing primary| current:Some(Identifier("alpha"))
+Checking prefix operator| current:Some(Identifier("alpha"))
+Parsing inner primary| current:Some(Identifier("alpha"))
+Parsing identifier| current:Some(Identifier("alpha"))
+Expecting Identifier("")
+Expecting| actual token:Token { token_type: Identifier("alpha"), line: 1, column: 367 }
+Identifier
+Parsing expression 1| Starting -------------------
+Parsing expression 1| lhs:Identifier { id: Id { name: "alpha" }, type_expr: None }, current:Some(Newline)
+No infix operator found
+Parsing expression 1| End of expression 1
+Parsing expression| result:Ok(Identifier { id: Id { name: "alpha" }, type_expr: None })
+------ Parsing new top level expression ------
+Parsing expression| current:Some(Identifier("beta"))
+Parsing primary| current:Some(Identifier("beta"))
+Checking prefix operator| current:Some(Identifier("beta"))
+Parsing inner primary| current:Some(Identifier("beta"))
+Parsing identifier| current:Some(Identifier("beta"))
+Expecting Identifier("")
+Expecting| actual token:Token { token_type: Identifier("beta"), line: 1, column: 374 }
+Identifier
+Parsing expression 1| Starting -------------------
+Parsing expression 1| lhs:Identifier { id: Id { name: "beta" }, type_expr: None }, current:Some(Newline)
+No infix operator found
+Parsing expression 1| End of expression 1
+Parsing expression| result:Ok(Identifier { id: Id { name: "beta" }, type_expr: None })
+------ Parsing new top level expression ------
+Parsing expression| current:Some(Function)
+Parsing function| current:Some(Function)
+Expecting Function
+Expecting| actual token:Token { token_type: Function, line: 1, column: 380 }
+Expecting Identifier("")
+Expecting| actual token:Token { token_type: Identifier("sq_distance"), line: 1, column: 383 }
+Expecting LParen
+Expecting| actual token:Token { token_type: LParen, line: 1, column: 394 }
+Parsing parameters| current:Some(Identifier("a"))
+Expecting Identifier("")
+Expecting| actual token:Token { token_type: Identifier("a"), line: 1, column: 395 }
+Parsing type expression| current:Some(Identifier("point"))
+Expecting Identifier("")
+Expecting| actual token:Token { token_type: Identifier("point"), line: 1, column: 398 }
+Expecting Identifier("")
+Expecting| actual token:Token { token_type: Identifier("b"), line: 1, column: 405 }
+Parsing type expression| current:Some(Identifier("point"))
+Expecting Identifier("")
+Expecting| actual token:Token { token_type: Identifier("point"), line: 1, column: 408 }
+Expecting RParen
+Expecting| actual token:Token { token_type: RParen, line: 1, column: 413 }
+Expecting Newline
+Expecting| actual token:Token { token_type: Newline, line: 1, column: 414 }
+Parsing block| Starting block: Some(Identifier("x_dif"))
+Parsing block| not end: Some(Identifier("x_dif"))
+Parsing expression| current:Some(Identifier("x_dif"))
+Parsing primary| current:Some(Identifier("x_dif"))
+Checking prefix operator| current:Some(Identifier("x_dif"))
+Parsing inner primary| current:Some(Identifier("x_dif"))
+Parsing identifier| current:Some(Identifier("x_dif"))
+Expecting Identifier("")
+Expecting| actual token:Token { token_type: Identifier("x_dif"), line: 1, column: 417 }
+Identifier
+Parsing expression 1| Starting -------------------
+Parsing expression 1| lhs:Identifier { id: Id { name: "x_dif" }, type_expr: None }, current:Some(Assignment)
+Parsing expression 1| op:Token { token_type: Assignment, line: 1, column: 423 }, min_precedence:0
+Parsing primary| current:Some(Identifier("a"))
+Checking prefix operator| current:Some(Identifier("a"))
+Parsing inner primary| current:Some(Identifier("a"))
+Parsing identifier| current:Some(Identifier("a"))
+Expecting Identifier("")
+Expecting| actual token:Token { token_type: Identifier("a"), line: 1, column: 425 }
+Identifier
+Parsing expression 1| rhs:Identifier { id: Id { name: "a" }, type_expr: None }
+Parsing expression 1| next op:Dot
+Parsing expression 1| left associative precedence:1
+Parsing expression 1| Starting -------------------
+Parsing expression 1| lhs:Identifier { id: Id { name: "a" }, type_expr: None }, current:Some(Dot)
+Parsing expression 1| op:Token { token_type: Dot, line: 1, column: 426 }, min_precedence:1
+Parsing primary| current:Some(Identifier("x"))
+Checking prefix operator| current:Some(Identifier("x"))
+Parsing inner primary| current:Some(Identifier("x"))
+Parsing identifier| current:Some(Identifier("x"))
+Expecting Identifier("")
+Expecting| actual token:Token { token_type: Identifier("x"), line: 1, column: 427 }
+Identifier
+Parsing expression 1| rhs:Identifier { id: Id { name: "x" }, type_expr: None }
+Parsing expression 1| next op:Minus
+Applying infix operator: Identifier { id: Id { name: "a" }, type_expr: None } Dot Identifier { id: Id { name: "x" }, type_expr: None }
+Parsing expression 1| op:Token { token_type: Minus, line: 1, column: 429 }, min_precedence:1
+Parsing primary| current:Some(Identifier("b"))
+Checking prefix operator| current:Some(Identifier("b"))
+Parsing inner primary| current:Some(Identifier("b"))
+Parsing identifier| current:Some(Identifier("b"))
+Expecting Identifier("")
+Expecting| actual token:Token { token_type: Identifier("b"), line: 1, column: 431 }
+Identifier
+Parsing expression 1| rhs:Identifier { id: Id { name: "b" }, type_expr: None }
+Parsing expression 1| next op:Dot
+Parsing expression 1| left associative precedence:2
+Parsing expression 1| Starting -------------------
+Parsing expression 1| lhs:Identifier { id: Id { name: "b" }, type_expr: None }, current:Some(Dot)
+Parsing expression 1| op:Token { token_type: Dot, line: 1, column: 432 }, min_precedence:2
+Parsing primary| current:Some(Identifier("x"))
+Checking prefix operator| current:Some(Identifier("x"))
+Parsing inner primary| current:Some(Identifier("x"))
+Parsing identifier| current:Some(Identifier("x"))
+Expecting Identifier("")
+Expecting| actual token:Token { token_type: Identifier("x"), line: 1, column: 433 }
+Identifier
+Parsing expression 1| rhs:Identifier { id: Id { name: "x" }, type_expr: None }
+Applying infix operator: Identifier { id: Id { name: "b" }, type_expr: None } Dot Identifier { id: Id { name: "x" }, type_expr: None }
+No infix operator found
+Parsing expression 1| End of expression 1
+Applying infix operator: BinaryOp { operator: Dot, left: Identifier { id: Id { name: "a" }, type_expr: None }, right: Identifier { id: Id { name: "x" }, type_expr: None } } Minus BinaryOp { operator: Dot, left: Identifier { id: Id { name: "b" }, type_expr: None }, right: Identifier { id: Id { name: "x" }, type_expr: None } }
+No infix operator found
+Parsing expression 1| End of expression 1
+Applying infix operator: Identifier { id: Id { name: "x_dif" }, type_expr: None } Assignment BinaryOp { operator: Subtract, left: BinaryOp { operator: Dot, left: Identifier { id: Id { name: "a" }, type_expr: None }, right: Identifier { id: Id { name: "x" }, type_expr: None } }, right: BinaryOp { operator: Dot, left: Identifier { id: Id { name: "b" }, type_expr: None }, right: Identifier { id: Id { name: "x" }, type_expr: None } } }
+No infix operator found
+Parsing expression 1| End of expression 1
+Parsing expression| result:Ok(VariableAssignment { id: Id { name: "x_dif" }, value: BinaryOp { operator: Subtract, left: BinaryOp { operator: Dot, left: Identifier { id: Id { name: "a" }, type_expr: None }, right: Identifier { id: Id { name: "x" }, type_expr: None } }, right: BinaryOp { operator: Dot, left: Identifier { id: Id { name: "b" }, type_expr: None }, right: Identifier { id: Id { name: "x" }, type_expr: None } } } })
+Parsing block| not end: Some(Identifier("y_dif"))
+Parsing expression| current:Some(Identifier("y_dif"))
+Parsing primary| current:Some(Identifier("y_dif"))
+Checking prefix operator| current:Some(Identifier("y_dif"))
+Parsing inner primary| current:Some(Identifier("y_dif"))
+Parsing identifier| current:Some(Identifier("y_dif"))
+Expecting Identifier("")
+Expecting| actual token:Token { token_type: Identifier("y_dif"), line: 1, column: 437 }
+Identifier
+Parsing expression 1| Starting -------------------
+Parsing expression 1| lhs:Identifier { id: Id { name: "y_dif" }, type_expr: None }, current:Some(Assignment)
+Parsing expression 1| op:Token { token_type: Assignment, line: 1, column: 443 }, min_precedence:0
+Parsing primary| current:Some(Identifier("a"))
+Checking prefix operator| current:Some(Identifier("a"))
+Parsing inner primary| current:Some(Identifier("a"))
+Parsing identifier| current:Some(Identifier("a"))
+Expecting Identifier("")
+Expecting| actual token:Token { token_type: Identifier("a"), line: 1, column: 445 }
+Identifier
+Parsing expression 1| rhs:Identifier { id: Id { name: "a" }, type_expr: None }
+Parsing expression 1| next op:Dot
+Parsing expression 1| left associative precedence:1
+Parsing expression 1| Starting -------------------
+Parsing expression 1| lhs:Identifier { id: Id { name: "a" }, type_expr: None }, current:Some(Dot)
+Parsing expression 1| op:Token { token_type: Dot, line: 1, column: 446 }, min_precedence:1
+Parsing primary| current:Some(Identifier("y"))
+Checking prefix operator| current:Some(Identifier("y"))
+Parsing inner primary| current:Some(Identifier("y"))
+Parsing identifier| current:Some(Identifier("y"))
+Expecting Identifier("")
+Expecting| actual token:Token { token_type: Identifier("y"), line: 1, column: 447 }
+Identifier
+Parsing expression 1| rhs:Identifier { id: Id { name: "y" }, type_expr: None }
+Parsing expression 1| next op:Minus
+Applying infix operator: Identifier { id: Id { name: "a" }, type_expr: None } Dot Identifier { id: Id { name: "y" }, type_expr: None }
+Parsing expression 1| op:Token { token_type: Minus, line: 1, column: 449 }, min_precedence:1
+Parsing primary| current:Some(Identifier("b"))
+Checking prefix operator| current:Some(Identifier("b"))
+Parsing inner primary| current:Some(Identifier("b"))
+Parsing identifier| current:Some(Identifier("b"))
+Expecting Identifier("")
+Expecting| actual token:Token { token_type: Identifier("b"), line: 1, column: 451 }
+Identifier
+Parsing expression 1| rhs:Identifier { id: Id { name: "b" }, type_expr: None }
+Parsing expression 1| next op:Dot
+Parsing expression 1| left associative precedence:2
+Parsing expression 1| Starting -------------------
+Parsing expression 1| lhs:Identifier { id: Id { name: "b" }, type_expr: None }, current:Some(Dot)
+Parsing expression 1| op:Token { token_type: Dot, line: 1, column: 452 }, min_precedence:2
+Parsing primary| current:Some(Identifier("y"))
+Checking prefix operator| current:Some(Identifier("y"))
+Parsing inner primary| current:Some(Identifier("y"))
+Parsing identifier| current:Some(Identifier("y"))
+Expecting Identifier("")
+Expecting| actual token:Token { token_type: Identifier("y"), line: 1, column: 453 }
+Identifier
+Parsing expression 1| rhs:Identifier { id: Id { name: "y" }, type_expr: None }
+Applying infix operator: Identifier { id: Id { name: "b" }, type_expr: None } Dot Identifier { id: Id { name: "y" }, type_expr: None }
+No infix operator found
+Parsing expression 1| End of expression 1
+Applying infix operator: BinaryOp { operator: Dot, left: Identifier { id: Id { name: "a" }, type_expr: None }, right: Identifier { id: Id { name: "y" }, type_expr: None } } Minus BinaryOp { operator: Dot, left: Identifier { id: Id { name: "b" }, type_expr: None }, right: Identifier { id: Id { name: "y" }, type_expr: None } }
+No infix operator found
+Parsing expression 1| End of expression 1
+Applying infix operator: Identifier { id: Id { name: "y_dif" }, type_expr: None } Assignment BinaryOp { operator: Subtract, left: BinaryOp { operator: Dot, left: Identifier { id: Id { name: "a" }, type_expr: None }, right: Identifier { id: Id { name: "y" }, type_expr: None } }, right: BinaryOp { operator: Dot, left: Identifier { id: Id { name: "b" }, type_expr: None }, right: Identifier { id: Id { name: "y" }, type_expr: None } } }
+No infix operator found
+Parsing expression 1| End of expression 1
+Parsing expression| result:Ok(VariableAssignment { id: Id { name: "y_dif" }, value: BinaryOp { operator: Subtract, left: BinaryOp { operator: Dot, left: Identifier { id: Id { name: "a" }, type_expr: None }, right: Identifier { id: Id { name: "y" }, type_expr: None } }, right: BinaryOp { operator: Dot, left: Identifier { id: Id { name: "b" }, type_expr: None }, right: Identifier { id: Id { name: "y" }, type_expr: None } } } })
+Parsing block| not end: Some(Return)
+Parsing expression| current:Some(Return)
+Parsing return statement| current:Some(Return)
+Expecting Return
+Expecting| actual token:Token { token_type: Return, line: 1, column: 457 }
+Parsing primary| current:Some(Identifier("x_dif"))
+Checking prefix operator| current:Some(Identifier("x_dif"))
+Parsing inner primary| current:Some(Identifier("x_dif"))
+Parsing identifier| current:Some(Identifier("x_dif"))
+Expecting Identifier("")
+Expecting| actual token:Token { token_type: Identifier("x_dif"), line: 1, column: 464 }
+Identifier
+Parsing expression 1| Starting -------------------
+Parsing expression 1| lhs:Identifier { id: Id { name: "x_dif" }, type_expr: None }, current:Some(Asterisk)
+Parsing expression 1| op:Token { token_type: Asterisk, line: 1, column: 469 }, min_precedence:0
+Parsing primary| current:Some(Identifier("x_dif"))
+Checking prefix operator| current:Some(Identifier("x_dif"))
+Parsing inner primary| current:Some(Identifier("x_dif"))
+Parsing identifier| current:Some(Identifier("x_dif"))
+Expecting Identifier("")
+Expecting| actual token:Token { token_type: Identifier("x_dif"), line: 1, column: 470 }
+Identifier
+Parsing expression 1| rhs:Identifier { id: Id { name: "x_dif" }, type_expr: None }
+Parsing expression 1| next op:Plus
+Parsing expression 1| left associative precedence:1
+Parsing expression 1| Starting -------------------
+Parsing expression 1| lhs:Identifier { id: Id { name: "x_dif" }, type_expr: None }, current:Some(Plus)
+Parsing expression 1| op:Token { token_type: Plus, line: 1, column: 476 }, min_precedence:1
+Parsing primary| current:Some(Identifier("y_dif"))
+Checking prefix operator| current:Some(Identifier("y_dif"))
+Parsing inner primary| current:Some(Identifier("y_dif"))
+Parsing identifier| current:Some(Identifier("y_dif"))
+Expecting Identifier("")
+Expecting| actual token:Token { token_type: Identifier("y_dif"), line: 1, column: 478 }
+Identifier
+Parsing expression 1| rhs:Identifier { id: Id { name: "y_dif" }, type_expr: None }
+Parsing expression 1| next op:Asterisk
+Parsing expression 1| left associative precedence:2
+Parsing expression 1| Starting -------------------
+Parsing expression 1| lhs:Identifier { id: Id { name: "y_dif" }, type_expr: None }, current:Some(Asterisk)
+Parsing expression 1| op:Token { token_type: Asterisk, line: 1, column: 483 }, min_precedence:2
+Parsing primary| current:Some(Identifier("y_dif"))
+Checking prefix operator| current:Some(Identifier("y_dif"))
+Parsing inner primary| current:Some(Identifier("y_dif"))
+Parsing identifier| current:Some(Identifier("y_dif"))
+Expecting Identifier("")
+Expecting| actual token:Token { token_type: Identifier("y_dif"), line: 1, column: 484 }
+Identifier
+Parsing expression 1| rhs:Identifier { id: Id { name: "y_dif" }, type_expr: None }
+Applying infix operator: Identifier { id: Id { name: "y_dif" }, type_expr: None } Asterisk Identifier { id: Id { name: "y_dif" }, type_expr: None }
+No infix operator found
+Parsing expression 1| End of expression 1
+Applying infix operator: Identifier { id: Id { name: "x_dif" }, type_expr: None } Plus BinaryOp { operator: Multiply, left: Identifier { id: Id { name: "y_dif" }, type_expr: None }, right: Identifier { id: Id { name: "y_dif" }, type_expr: None } }
+No infix operator found
+Parsing expression 1| End of expression 1
+Applying infix operator: Identifier { id: Id { name: "x_dif" }, type_expr: None } Asterisk BinaryOp { operator: Add, left: Identifier { id: Id { name: "x_dif" }, type_expr: None }, right: BinaryOp { operator: Multiply, left: Identifier { id: Id { name: "y_dif" }, type_expr: None }, right: Identifier { id: Id { name: "y_dif" }, type_expr: None } } }
+No infix operator found
+Parsing expression 1| End of expression 1
+Parsing return statement| end of return
+Parsing expression| result:Ok(Return(Some(BinaryOp { operator: Multiply, left: Identifier { id: Id { name: "x_dif" }, type_expr: None }, right: BinaryOp { operator: Add, left: Identifier { id: Id { name: "x_dif" }, type_expr: None }, right: BinaryOp { operator: Multiply, left: Identifier { id: Id { name: "y_dif" }, type_expr: None }, right: Identifier { id: Id { name: "y_dif" }, type_expr: None } } } })))
+Parsing block| End of block
+Expecting End
+Expecting| actual token:Token { token_type: End, line: 1, column: 490 }
+Parsing function| End of function
+Expecting Newline
+Expecting| actual token:Token { token_type: Newline, line: 1, column: 493 }
+Parsing expression| result:Ok(FunctionDefinition { id: Id { name: "sq_distance" }, parameters: [Parameter { id: Id { name: "a" }, type_expr: Some(Struct(Id { name: "point" }, None)) }, Parameter { id: Id { name: "b" }, type_expr: Some(Struct(Id { name: "point" }, None)) }], body: Block([VariableAssignment { id: Id { name: "x_dif" }, value: BinaryOp { operator: Subtract, left: BinaryOp { operator: Dot, left: Identifier { id: Id { name: "a" }, type_expr: None }, right: Identifier { id: Id { name: "x" }, type_expr: None } }, right: BinaryOp { operator: Dot, left: Identifier { id: Id { name: "b" }, type_expr: None }, right: Identifier { id: Id { name: "x" }, type_expr: None } } } }, VariableAssignment { id: Id { name: "y_dif" }, value: BinaryOp { operator: Subtract, left: BinaryOp { operator: Dot, left: Identifier { id: Id { name: "a" }, type_expr: None }, right: Identifier { id: Id { name: "y" }, type_expr: None } }, right: BinaryOp { operator: Dot, left: Identifier { id: Id { name: "b" }, type_expr: None }, right: Identifier { id: Id { name: "y" }, type_expr: None } } } }, Return(Some(BinaryOp { operator: Multiply, left: Identifier { id: Id { name: "x_dif" }, type_expr: None }, right: BinaryOp { operator: Add, left: Identifier { id: Id { name: "x_dif" }, type_expr: None }, right: BinaryOp { operator: Multiply, left: Identifier { id: Id { name: "y_dif" }, type_expr: None }, right: Identifier { id: Id { name: "y_dif" }, type_expr: None } } } }))]), return_type_expr: None })
+------ Parsing new top level expression ------
+Parsing expression| current:Some(Identifier("sq_distance"))
+Parsing primary| current:Some(Identifier("sq_distance"))
+Checking prefix operator| current:Some(Identifier("sq_distance"))
+Parsing inner primary| current:Some(Identifier("sq_distance"))
+Parsing identifier| current:Some(Identifier("sq_distance"))
+Expecting Identifier("")
+Expecting| actual token:Token { token_type: Identifier("sq_distance"), line: 1, column: 495 }
+Function call
+Parsing arguments| current:Some(Identifier("alpha"))
+Parsing primary| current:Some(Identifier("alpha"))
+Checking prefix operator| current:Some(Identifier("alpha"))
+Parsing inner primary| current:Some(Identifier("alpha"))
+Parsing identifier| current:Some(Identifier("alpha"))
+Expecting Identifier("")
+Expecting| actual token:Token { token_type: Identifier("alpha"), line: 1, column: 507 }
+Identifier
+Parsing expression 1| Starting -------------------
+Parsing expression 1| lhs:Identifier { id: Id { name: "alpha" }, type_expr: None }, current:Some(Comma)
+No infix operator found
+Parsing expression 1| End of expression 1
+Parsing primary| current:Some(Identifier("beta"))
+Checking prefix operator| current:Some(Identifier("beta"))
+Parsing inner primary| current:Some(Identifier("beta"))
+Parsing identifier| current:Some(Identifier("beta"))
+Expecting Identifier("")
+Expecting| actual token:Token { token_type: Identifier("beta"), line: 1, column: 514 }
+Identifier
+Parsing expression 1| Starting -------------------
+Parsing expression 1| lhs:Identifier { id: Id { name: "beta" }, type_expr: None }, current:Some(RParen)
+No infix operator found
+Parsing expression 1| End of expression 1
+Expecting RParen
+Expecting| actual token:Token { token_type: RParen, line: 1, column: 518 }
+Parsing expression 1| Starting -------------------
+Parsing expression 1| lhs:FunctionCall { id: Id { name: "sq_distance" }, arguments: [Identifier { id: Id { name: "alpha" }, type_expr: None }, Identifier { id: Id { name: "beta" }, type_expr: None }] }, current:Some(Newline)
+No infix operator found
+Parsing expression 1| End of expression 1
+Parsing expression| result:Ok(FunctionCall { id: Id { name: "sq_distance" }, arguments: [Identifier { id: Id { name: "alpha" }, type_expr: None }, Identifier { id: Id { name: "beta" }, type_expr: None }] })
+------ End of parsing ------
+AST: { x = (1::Int Add 2::Int); y = "Hello"::String; z = "World"::String; (y::Any Add (" "::String Add z::Any)); fn hello() { { return "Hello World"::String } }; hello(); fn loop_a(str1, str2, num) { { i = 0::Int; tot_str = ""::String; while (i::Any LessThan num::Any) { { tot_str = (tot_str::Any Add str1::Any); print(("print: "::String Add tot_str::Any)); i = (i::Any Add 1::Int) } }; return (tot_str::Any Add str2::Any) } }; loop_a(y::Any, z::Any, x::Any); struct point { x, y }; alpha = point(1::Int, 2::Int); beta = point(3::Int, 5::Int); alpha::Any; beta::Any; fn sq_distance(a, b) { { x_dif = ((a::Any Dot x::Any) Subtract (b::Any Dot x::Any)); y_dif = ((a::Any Dot y::Any) Subtract (b::Any Dot y::Any)); return (x_dif::Any Multiply (x_dif::Any Add (y_dif::Any Multiply y_dif::Any))) } }; sq_distance(alpha::Any, beta::Any) }
+AST written to: tests/elementary.err.ast
+------ Lowering program ------
+------ Program lowered ------
+AST: { x = (1::Int Add 2::Int); y = "Hello"::String; z = "World"::String; (y::Any Add (" "::String Add z::Any)); fn hello() { { return "Hello World"::String } }; hello(); fn loop_a(str1, str2, num) { { i = 0::Int; tot_str = ""::String; while (i::Any LessThan num::Any) { { tot_str = (tot_str::Any Add str1::Any); print(("print: "::String Add tot_str::Any)); i = (i::Any Add 1::Int) } }; return (tot_str::Any Add str2::Any) } }; loop_a(y::Any, z::Any, x::Any); struct point { x, y }; alpha = point(1::Int, 2::Int); beta = point(3::Int, 5::Int); alpha::Any; beta::Any; fn sq_distance(a, b) { { x_dif = ((a::Any Dot x::Any) Subtract (b::Any Dot x::Any)); y_dif = ((a::Any Dot y::Any) Subtract (b::Any Dot y::Any)); return (x_dif::Any Multiply (x_dif::Any Add (y_dif::Any Multiply y_dif::Any))) } }; sq_distance(alpha::Any, beta::Any) }
+AST written to: tests/elementary.err.last
+------ Typing program ------
+------ Collected declarations ------
+------ Environment: TypeEnvironment { types: {"hello": Function { parameters: [], return_type: Unknown(0) }, "point": Struct { name: "point", fields: {"x": Unknown(5), "y": Unknown(6)} }, "loop_a": Function { parameters: [Unknown(1), Unknown(2), Unknown(3)], return_type: Unknown(4) }, "x": Any, "sq_distance": Function { parameters: [Unknown(7), Unknown(8)], return_type: Unknown(9) }, "z": String, "alpha": Any, "beta": Any, "y": String}, constraints: [], next_type_var: 10 }
+------ Typed expressions ------
+------ Solved constraints ------
+AST: { x = (1::Int Add 2::Int); y = "Hello"::String; z = "World"::String; (y::Any Add (" "::String Add z::Any)); fn hello() { { return "Hello World"::String } }; hello(); fn loop_a(str1, str2, num) { { i = 0::Int; tot_str = ""::String; while (i::Any LessThan num::Any) { { tot_str = (tot_str::Any Add str1::Any); print(("print: "::String Add tot_str::Any)); i = (i::Any Add 1::Int) } }; return (tot_str::Any Add str2::Any) } }; loop_a(y::Any, z::Any, x::Any); struct point { x, y }; alpha = point(1::Int, 2::Int); beta = point(3::Int, 5::Int); alpha::Any; beta::Any; fn sq_distance(a, b) { { x_dif = ((a::Any Dot x::Any) Subtract (b::Any Dot x::Any)); y_dif = ((a::Any Dot y::Any) Subtract (b::Any Dot y::Any)); return (x_dif::Any Multiply (x_dif::Any Add (y_dif::Any Multiply y_dif::Any))) } }; sq_distance(alpha::Any, beta::Any) }
+AST written to: tests/elementary.err.tast

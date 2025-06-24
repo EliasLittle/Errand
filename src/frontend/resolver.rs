@@ -1,6 +1,6 @@
 use std::collections::HashMap;
 use std::collections::VecDeque;
-use crate::frontend::ast::{Expression, Program, Id, Parameter};
+use crate::frontend::ast::{Expression, Program, Id, TypeExpression};
 
 #[derive(Debug)]
 pub struct Resolver {
@@ -40,8 +40,8 @@ impl Resolver {
 
     fn resolve_expr(&mut self, expr: &Expression) -> Result<(), String> {
         match expr {
-            Expression::Number(_) | Expression::Boolean(_) | Expression::String(_) => Ok(()),
-            Expression::Identifier(id) => self.resolve_identifier(id),
+            Expression::Int(_) | Expression::Float(_) | Expression::Boolean(_) | Expression::String(_) => Ok(()),
+            Expression::Identifier { id, type_expr: _ } => self.resolve_identifier(id),
             Expression::UnaryOp { operand, .. } => self.resolve_expr(operand),
             Expression::BinaryOp { left, right, .. } => {
                 self.resolve_expr(left)?;
@@ -54,7 +54,7 @@ impl Resolver {
                 }
                 Ok(())
             },
-            Expression::FunctionDefinition { id, parameters, body } => {
+            Expression::FunctionDefinition { id, parameters, body, return_type_expr } => {
                 // Declare the function name in the current scope
                 self.declare(id)?;
                 self.define(id);

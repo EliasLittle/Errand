@@ -1,8 +1,9 @@
 mod frontend;
 use frontend::lexer::Lexer;
-use frontend::ast::Program;
+use frontend::ast::{Program, TypeExpression};
 use frontend::parser::Parser;
 use frontend::resolver::Resolver;
+use frontend::type_inference::TypeInferencer;
 
 mod backend;
 use crate::backend::interpreter::Interpreter;
@@ -51,8 +52,17 @@ fn main() {
     let mut parser = Parser::new(tokens);
     let ast = parser.parse().expect("Parsing failed");
     print_ast(file_path, "ast", &ast);
+    
+    // Lower the AST
     let lowered = ast.lower();
     print_ast(file_path, "last", &lowered);
+
+    // Type inference
+    let mut type_inferencer = TypeInferencer::new();
+    let typed_program = type_inferencer.infer_program(&lowered).expect("Type inference failed");
+    print_ast(file_path, "tast", &typed_program); // Print inferred program
+
+    /*
 
     let mut resolver = Resolver::new();
     let locals = resolver.resolve(&lowered).expect("Resolution failed");
@@ -71,5 +81,6 @@ fn main() {
     // Or compile to bytecode
     let compiler = Compiler::new();
     let bytecode = compiler.compile(&ast).expect("Compilation failed");
+    */
     */
 } 
