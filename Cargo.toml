@@ -4,4 +4,6 @@ version = "0.1.0"
 edition = "2021"
 
 [dependencies]
-thiserror = "1.0" 
+thiserror = "1.0"
+cranelift-frontend = "0.121.1"
+cranelift-codegen = "0.121.1"

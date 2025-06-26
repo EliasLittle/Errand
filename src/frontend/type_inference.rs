@@ -1,5 +1,5 @@
 use std::collections::HashMap;
-use super::ast::{Expression, Program, BinaryOperator, TypeExpression};
+use super::ast::{Expression, Program, BinaryOperator, TypeExpression, Id, Parameter};
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Type {
@@ -50,7 +50,23 @@ impl From<TypeExpression> for Type {
     }
 }
 
-
+impl From<Type> for TypeExpression {
+    fn from(ty: Type) -> Self {
+        match ty {
+            Type::Int => TypeExpression::Int,
+            Type::Float => TypeExpression::Float,
+            Type::Bool => TypeExpression::Bool,
+            Type::String => TypeExpression::String,
+            Type::Unit => TypeExpression::Void,
+            Type::Function { .. } => TypeExpression::Void, // TODO: Handle function types
+            Type::Struct { name, .. } => TypeExpression::Struct(Id { name }, None),
+            Type::Union(_) => TypeExpression::Int, // TODO: Handle union types
+            Type::Unknown(_) => TypeExpression::Int, // TODO: Handle type variables
+            Type::Any => TypeExpression::Int, // TODO: Handle any type
+            Type::None => TypeExpression::Void, // TODO: Handle bottom type
+        }
+    }
+}
 
 #[derive(Debug)]
 pub struct TypeEnvironment {
@@ -305,10 +321,14 @@ impl TypeInferencer {
             Expression::FunctionDefinition { id, parameters, body, return_type_expr } => {
                 let mut typed_params = Vec::new();
                 for param in parameters {
-                    match param.type_expr {
-                        Some(ty) => typed_params.push(Type::from(ty.clone())),
-                        None => typed_params.push(self.env.fresh_type_var()),
-                    }
+                    let param_type = match &param.type_expr {
+                        Some(ty) => Type::from(ty.clone()),
+                        None => self.env.fresh_type_var(),
+                    };
+                    typed_params.push(Parameter {
+                        id: param.id.clone(),
+                        type_expr: Some(TypeExpression::from(param_type)),
+                    });
                 }
                 let return_type = match return_type_expr {
                     Some(ty) => Type::from(ty.clone()), 
@@ -321,7 +341,7 @@ impl TypeInferencer {
                     Type::Function { parameters: param_types, return_type: Box::new(return_type) }
                 );  
                 */
-                Ok(Expression::FunctionDefinition { id: id.clone(), parameters: typed_params, body: body.clone(), return_type_expr: Some(return_type) })
+                Ok(Expression::FunctionDefinition { id: id.clone(), parameters: typed_params, body: body.clone(), return_type_expr: Some(TypeExpression::from(return_type)) })
             }
             // TODO: This should set the type of the identifier
             Expression::VariableAssignment { id, value } => {

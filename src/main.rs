@@ -7,6 +7,7 @@ use frontend::type_inference::TypeInferencer;
 
 mod backend;
 use crate::backend::interpreter::Interpreter;
+use crate::backend::ir_lowering::IRLoweringPass;
 
 use std::env;
 
@@ -83,4 +84,43 @@ fn main() {
     let bytecode = compiler.compile(&ast).expect("Compilation failed");
     */
     */
+
+    // After type inference, add compilation
+    let ir_lowering = IRLoweringPass::new();
+    
+    // Step 1: Lower to CLIF
+    match ir_lowering.lower_to_clif(&typed_program) {
+        Ok(clif_function) => {
+            println!("Successfully lowered to CLIF");
+            
+            // Write CLIF to file for debugging
+            if !file_path.is_empty() {
+                let clif_file_path = format!("{}.clif", file_path);
+                std::fs::write(&clif_file_path, format!("{}", clif_function))
+                    .expect("Failed to write CLIF to file");
+                println!("CLIF written to: {}", clif_file_path);
+            }
+            
+            // Step 2: Compile CLIF to machine code
+            match ir_lowering.compile_clif_to_machine_code(clif_function) {
+                Ok(compiled_code) => {
+                    println!("Successfully compiled to machine code ({} bytes)", compiled_code.len());
+                    
+                    // Write the compiled code to a file
+                    if !file_path.is_empty() {
+                        let bin_file_path = format!("{}.bin", file_path);
+                        std::fs::write(&bin_file_path, &compiled_code)
+                            .expect("Failed to write compiled code to file");
+                        println!("Machine code written to: {}", bin_file_path);
+                    }
+                }
+                Err(e) => {
+                    eprintln!("Machine code compilation failed: {}", e);
+                }
+            }
+        }
+        Err(e) => {
+            eprintln!("CLIF lowering failed: {}", e);
+        }
+    }
 } 
