@@ -19,9 +19,23 @@ impl IRLoweringPass {
         compiler.lower_to_clif(program)
     }
 
+    pub fn generate_clif(&self, program: &Program) -> Result<String, String> {
+        let mut compiler = CraneliftCompiler::new();
+        compiler.generate_clif(program)
+    }
+
     pub fn compile_clif_to_machine_code(&self, func: Function) -> Result<Vec<u8>, String> {
-        let compiler = CraneliftCompiler::new();
-        compiler.compile_clif_to_machine_code(func)
+        // This method is now deprecated since we handle compilation in compile_program
+        // For backward compatibility, we'll create a simple wrapper
+        let mut compiler = CraneliftCompiler::new();
+        
+        // Create a simple program with just the main function
+        let program = Program {
+            expressions: vec![], // Empty since we're just compiling the main function
+        };
+        
+        // Use the new compilation approach
+        compiler.compile_program(&program)
     }
 
     // You can add more IR lowering passes here for different targets

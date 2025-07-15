@@ -2,7 +2,7 @@
 <Newline>
 <Identifier("x")>
 <Assignment>
-<Number(7.0)>
+<Int(7)>
 <Newline>
 <Identifier("y")>
 <Assignment>
@@ -42,16 +42,16 @@
 <Assignment>
 <Identifier("add")>
 <LParen>
-<Number(5.0)>
+<Int(5)>
 <Comma>
-<Number(3.0)>
+<Int(3)>
 <RParen>
 <Newline>
 <Identifier("doubled")>
 <Assignment>
 <Identifier("result")>
 <Asterisk>
-<Number(2.0)>
+<Int(2)>
 <Newline>
 <Newline>
 <Comment(" Testing string concatenation")>

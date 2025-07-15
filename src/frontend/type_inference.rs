@@ -233,7 +233,7 @@ impl TypeInferencer {
                 if let Some(id_type_expr) = type_expr {
                     match env_type {
                         Some(ty) => {
-                            if ty != Type::from(id_type_expr.clone()) {
+                            if ty != &Type::from(id_type_expr.clone()) {
                                 return Err(format!("Type mismatch for identifier: {:?}", id.name));
                             } else {
                                 Ok(expr.clone())
@@ -242,17 +242,18 @@ impl TypeInferencer {
                         None => {
                             println!("Typing | Missed type for identifier: {:?} in initial pass", id.name);
                             self.env.set_type(id.name.clone(), Type::from(id_type_expr.clone()));
+                            Ok(expr.clone())
                         }
                     }
                 } else {
                     match env_type {
                         Some(ty) => {
-                            Ok(Expression::Identifier { id: id.clone(), type_expr: Some(ty.clone()) })
+                            Ok(Expression::Identifier { id: id.clone(), type_expr: Some(TypeExpression::from(ty.clone())) })
                         }
                         None => {
                             let ty = self.env.fresh_type_var();
-                            self.env.set_type(id.name.clone(), ty);
-                            Ok(Expression::Identifier { id: id.clone(), type_expr: Some(ty.clone()) })
+                            self.env.set_type(id.name.clone(), ty.clone());
+                            Ok(Expression::Identifier { id: id.clone(), type_expr: Some(TypeExpression::from(ty.clone())) })
                         }
                     }
                 }
@@ -263,11 +264,18 @@ impl TypeInferencer {
                 
                 // Add constraints based on operator
                 match operator {
+                    BinaryOperator::Assignment => {
+                        // Variable assignment - set the type of the identifier
+                        if let Expression::Identifier { id, .. } = &left_expr {
+                            let right_type = self.env.type_from_expr(right_expr.clone());
+                            self.env.set_type(id.name.clone(), right_type);
+                        }
+                    }
                     BinaryOperator::Add | BinaryOperator::Subtract 
                     | BinaryOperator::Multiply | BinaryOperator::Divide => {
                         // Numeric operations - both operands must be numeric
                         let numeric_types: Vec<Type> = 
-                            vec![Type::Int, Type::Float].into_iter().collect();
+                            vec![Type::Int, Type::Float];
                         
                         if let Some(left_type) = self.env.get_type(&format!("{:?}", left)) {
                             self.env.add_constraint(TypeConstraint::Subset(
@@ -344,11 +352,11 @@ impl TypeInferencer {
                 Ok(Expression::FunctionDefinition { id: id.clone(), parameters: typed_params, body: body.clone(), return_type_expr: Some(TypeExpression::from(return_type)) })
             }
             // TODO: This should set the type of the identifier
-            Expression::VariableAssignment { id, value } => {
+            /*Expression::VariableAssignment { id, value } => {
                 let value_type = self.infer_expression(value)?;
                 //self.env.set_type(id.name.clone(), value_type);
                 Ok(Expression::VariableAssignment { id: id.clone(), value: Box::new(value_type) })
-            }
+            }*/
             // Handle other expression types...
             _ => Ok(expr.clone()),
         }

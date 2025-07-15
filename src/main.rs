@@ -27,14 +27,17 @@ fn main() {
     // Get the file path or string from command line arguments
     let args: Vec<String> = env::args().collect();
     if args.len() < 2 {
-        eprintln!("Usage: {} <string> or {} --file <file_path>", args[0], args[0]);
+        eprintln!("Usage: {} <string> or {} --file <file_path> [--clif]", args[0], args[0]);
         return;
     }
+    
+    // Check if --clif flag is present
+    let clif_mode = args.contains(&"--clif".to_string());
     
     let mut file_path = "";
     let source = if args[1] == "--file" {
         if args.len() < 3 {
-            eprintln!("Usage: {} <string> or {} --file <file_path>", args[0], args[0]);
+            eprintln!("Usage: {} <string> or {} --file <file_path> [--clif]", args[0], args[0]);
             return;
         }
         file_path = &args[2];
@@ -88,39 +91,44 @@ fn main() {
     // After type inference, add compilation
     let ir_lowering = IRLoweringPass::new();
     
-    // Step 1: Lower to CLIF
-    match ir_lowering.lower_to_clif(&typed_program) {
-        Ok(clif_function) => {
-            println!("Successfully lowered to CLIF");
-            
-            // Write CLIF to file for debugging
-            if !file_path.is_empty() {
-                let clif_file_path = format!("{}.clif", file_path);
-                std::fs::write(&clif_file_path, format!("{}", clif_function))
-                    .expect("Failed to write CLIF to file");
-                println!("CLIF written to: {}", clif_file_path);
+    // Check if we're in CLIF mode
+    if clif_mode {
+        println!("Generating CLIF IR");
+        // Just generate CLIF IR and write to file
+        match ir_lowering.generate_clif(&typed_program) {
+            Ok(clif_ir) => {
+                println!("Successfully generated CLIF IR");
+                
+                // Write the CLIF IR to a file
+                if !file_path.is_empty() {
+                    let clif_file_path = format!("{}.clif", file_path);
+                    std::fs::write(&clif_file_path, clif_ir)
+                        .expect("Failed to write CLIF IR to file");
+                    println!("CLIF IR written to: {}", clif_file_path);
+                }
             }
-            
-            // Step 2: Compile CLIF to machine code
-            match ir_lowering.compile_clif_to_machine_code(clif_function) {
-                Ok(compiled_code) => {
-                    println!("Successfully compiled to machine code ({} bytes)", compiled_code.len());
-                    
-                    // Write the compiled code to a file
-                    if !file_path.is_empty() {
-                        let bin_file_path = format!("{}.bin", file_path);
-                        std::fs::write(&bin_file_path, &compiled_code)
-                            .expect("Failed to write compiled code to file");
-                        println!("Machine code written to: {}", bin_file_path);
-                    }
-                }
-                Err(e) => {
-                    eprintln!("Machine code compilation failed: {}", e);
-                }
+            Err(e) => {
+                eprintln!("CLIF generation failed: {}", e);
+                eprintln!("CLIF IR: {}", e.to_string());
             }
         }
-        Err(e) => {
-            eprintln!("CLIF lowering failed: {}", e);
+    } else {
+        // Compile the entire program (including function definitions)
+        match ir_lowering.lower_to_cranelift(&typed_program) {
+            Ok(compiled_code) => {
+                println!("Successfully compiled to machine code ({} bytes)", compiled_code.len());
+                
+                // Write the compiled code to a file
+                if !file_path.is_empty() {
+                    let bin_file_path = format!("{}.bin", file_path);
+                    std::fs::write(&bin_file_path, &compiled_code)
+                        .expect("Failed to write compiled code to file");
+                    println!("Machine code written to: {}", bin_file_path);
+                }
+            }
+            Err(e) => {
+                eprintln!("Compilation failed: {}", e);
+            }
         }
     }
 } 

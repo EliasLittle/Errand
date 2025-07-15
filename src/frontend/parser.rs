@@ -215,7 +215,7 @@ impl Parser {
             // TODO: Do we need to move assignment out of infix? It could be called in places it shouldn't be
             // e.g. my_fn(x = 1, y = 2). This is only valid if x and y are parameters.
             TokenType::Assignment => {
-                match lhs {
+                match &lhs {
                     Expression::Identifier { id, type_expr } => Ok(Expression::BinaryOp { operator: BinaryOperator::Assignment, left: Box::new(lhs), right: Box::new(rhs) }),
                     _ => Err(format!("Cannot assign to {:?}", lhs)),
                 }

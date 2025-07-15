@@ -366,7 +366,7 @@ impl Interpreter {
                     let distance = self.local_scope.get(&id.name).unwrap();
                     println!("Int.eval.bin_op| Assigning {:?} = {:?} at {:?} distance to [{}]", id.name, right_val, distance, self.environment.borrow());
                     self.environment.borrow_mut().assign(*distance, id.name.clone(), right_val.clone());
-                    Ok(*right_val)
+                    Ok(right_val.clone())
                 } else {
                     Err(ControlFlow::Err("Left operand is not an identifier".to_string()))
                 }
