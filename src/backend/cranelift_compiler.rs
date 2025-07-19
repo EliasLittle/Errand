@@ -1,6 +1,7 @@
 use cranelift::prelude::*;
 use cranelift_frontend::{FunctionBuilder, FunctionBuilderContext, Variable};
 use cranelift_codegen::ir::{Function, InstBuilder, types, UserFuncName, BlockArg};
+use cranelift_codegen::ir::condcodes::IntCC;
 use cranelift_codegen::settings::{self, Configurable};
 use cranelift_module::{Module, Linkage, ModuleError};
 use cranelift_codegen::ir::{AbiParam, ExternalName};
@@ -108,13 +109,69 @@ impl CraneliftCompiler {
     }
 
     fn compile_all_functions(&mut self, program: &Program) -> Result<(), String> {
+        // Phase 1: Declare all functions in the module (but don't define them yet)
+        for expr in &program.expressions {
+            if let Expression::FunctionDefinition { id, parameters, body: _, return_type_expr } = expr {
+                println!("Declaring function: {:?}", id);
+                self.declare_function_in_module(id, parameters, return_type_expr)?;
+            }
+        }
+        
+        // Phase 2: Compile all function bodies (now they can call each other recursively)
         for expr in &program.expressions {
             if let Expression::FunctionDefinition { id, parameters, body, return_type_expr: _ } = expr {
-                println!("Compiling function: {:?}", id);
+                println!("Compiling function body: {:?}", id);
                 self.compile_function_definition(id, parameters, body)?;
             }
         }
         println!("All functions defined: {:?}", self.functions);
+        Ok(())
+    }
+
+    fn declare_function_in_module(&mut self, id: &Id, parameters: &[Parameter], return_type_expr: &Option<TypeExpression>) -> Result<(), String> {
+        let module = self.module.as_mut()
+            .ok_or("Module not initialized")?;
+        
+        // Get the signature for this function
+        let signature = self.function_signatures.get(&id.name)
+            .ok_or_else(|| format!("No signature found for function: {}", id.name))?
+            .clone();
+        
+        // Declare the function in the module
+        let func_id = module.declare_function(&id.name, cranelift_module::Linkage::Export, &signature)
+            .map_err(|e| format!("Failed to declare function: {}", e))?;
+        
+        // Store the function ID for later use
+        self.functions.insert(id.name.clone(), func_id);
+        
+        println!("Declared function '{}' with func_id: {:?}", id.name, func_id);
+        Ok(())
+    }
+
+    fn define_function_in_module(&mut self, name: &str, func: &mut Function) -> Result<(), String> {
+        let module = self.module.as_mut()
+            .ok_or("Module not initialized")?;
+        
+        // Get the function ID that was already assigned during declaration
+        let func_id = self.functions.get(name)
+            .ok_or_else(|| format!("Function '{}' was not declared", name))?;
+        
+        // Create a context for compilation
+        let mut ctx = cranelift_codegen::Context::for_function(func.clone());
+        
+        // Enable verbose error reporting
+        ctx.set_disasm(true);
+        
+        println!("About to define function name: '{}' with func_id: {:?}", name, func_id);
+        
+        // Define the function in the module
+        module.define_function(*func_id, &mut ctx)
+            .map_err(|e| {
+                println!("!!Error: {:?}", e.source());
+                format!("Failed to define function '{}': {}", name, e)
+            })?;
+
+        println!("Function defined: {}", name);
         Ok(())
     }
 
@@ -279,17 +336,17 @@ impl CraneliftCompiler {
             .ok_or_else(|| format!("No signature found for function: {}", id.name))?
             .clone();
         
-        let function_id = self.next_function_id;
-        self.next_function_id += 1;
+        // Get the function ID that was already assigned during declaration
+        let function_id = self.functions.get(&id.name)
+            .ok_or_else(|| format!("Function '{}' was not declared", id.name))?;
 
         println!("=== COMPILING FUNCTION DEFINITION ===");
         println!("Function name: '{}'", id.name);
-        println!("Assigned function_id: {}", function_id);
-        println!("Current next_function_id: {}", self.next_function_id);
+        println!("Using existing function_id: {:?}", function_id);
 
         // Create a new function
         let mut func = Function::with_name_signature(
-            UserFuncName::user(0, function_id),
+            UserFuncName::user(0, function_id.index() as u32),
             signature.clone()
         );
         
@@ -299,6 +356,14 @@ impl CraneliftCompiler {
         
         let entry_block = builder.create_block();
         builder.switch_to_block(entry_block);
+        
+        // Add block parameters for function parameters first
+        for param in parameters {
+            let param_type = self.type_expression_to_cranelift_type(param.type_expr.as_ref())?;
+            builder.append_block_param(entry_block, param_type);
+        }
+        
+        // Now seal the block after adding all parameters
         builder.seal_block(entry_block);
         
         // Declare parameters as variables
@@ -309,8 +374,6 @@ impl CraneliftCompiler {
             builder.declare_var(var, param_type);
             
             // Get the parameter value from the function parameters
-            // We need to append block parameters for each function parameter
-            builder.append_block_param(entry_block, param_type);
             let param_value = builder.block_params(entry_block)[i];
             builder.def_var(var, param_value);
             
@@ -348,16 +411,13 @@ impl CraneliftCompiler {
         
 
         
-        // Add the function to the module and get the function reference
-        let func_ref = self.add_function_to_module(&id.name, &mut func)?;
+        // Define the function in the module (it's already declared)
+        self.define_function_in_module(&id.name, &mut func)?;
         
         println!("=== FUNCTION MODULE REGISTRATION ===");
         println!("Function name: '{}'", id.name);
-        println!("Module func_ref: {:?}", func_ref);
         println!("Function signature: {:?}", signature);
-        println!("Inserting into functions map: '{}' -> {:?}", id.name, func_ref);
-        // Store the function reference for later calls
-        self.functions.insert(id.name.clone(), func_ref);
+        println!("Function defined in module");
         println!("Current functions map: {:?}", self.functions);
         println!("=== END FUNCTION DEFINITION ===\n");
 
@@ -445,6 +505,24 @@ impl CraneliftCompiler {
                             BinaryOperator::Divide => {
                                 Ok(builder.ins().sdiv(lhs, rhs))
                             }
+                            BinaryOperator::LessThanEqual => {
+                                Ok(builder.ins().icmp(IntCC::UnsignedLessThanOrEqual, lhs, rhs))
+                            }
+                            BinaryOperator::GreaterThanEqual => {
+                                Ok(builder.ins().icmp(IntCC::UnsignedGreaterThanOrEqual, lhs, rhs))
+                            }
+                            BinaryOperator::GreaterThan => {
+                                Ok(builder.ins().icmp(IntCC::UnsignedGreaterThan, lhs, rhs))
+                            }
+                            BinaryOperator::LessThan => {
+                                Ok(builder.ins().icmp(IntCC::UnsignedLessThan, lhs, rhs))
+                            }
+                            BinaryOperator::Equal => {
+                                Ok(builder.ins().icmp(IntCC::Equal, lhs, rhs))
+                            }
+                            BinaryOperator::NotEqual => {
+                                Ok(builder.ins().icmp(IntCC::NotEqual, lhs, rhs))
+                            }
                             _ => Err(format!("Unsupported binary operator: {:?}", operator))
                         }
                     }
@@ -518,9 +596,7 @@ impl CraneliftCompiler {
                 
                 // Create blocks for then, else, and merge
                 let then_block = builder.create_block();
-                builder.append_block_param(then_block, types::I64);
                 let else_block = builder.create_block();
-                builder.append_block_param(else_block, types::I64);
                 let merge_block = builder.create_block();
                 builder.append_block_param(merge_block, types::I64);
 
@@ -529,18 +605,47 @@ impl CraneliftCompiler {
 
                 // Compile then branch
                 builder.switch_to_block(then_block);
+                println!("Compiling then branch");
                 let then_val = self.compile_expression(builder, then_branch)?;
-                builder.ins().jump(merge_block, &[BlockArg::Value(then_val)]);
+                println!("Then branch compiled to: {:?}", then_val);
+                
+                // Check if the last instruction is a return - if so, don't add a jump
+                let should_add_jump = if let Some(last_inst) = builder.func.layout.last_inst(then_block) {
+                    builder.func.dfg.insts[last_inst].opcode() != cranelift_codegen::ir::Opcode::Return
+                } else {
+                    true
+                };
+                
+                if should_add_jump {
+                    builder.ins().jump(merge_block, &[BlockArg::Value(then_val)]);
+                    println!("Jumped to merge block");
+                } else {
+                    println!("Skipping jump due to return instruction");
+                }
                 builder.seal_block(then_block);
 
                 // Compile else branch
                 builder.switch_to_block(else_block);
+                println!("Compiling else branch");
                 let else_val = if let Some(else_expr) = else_branch {
                     self.compile_expression(builder, else_expr)?
                 } else {
                     builder.ins().iconst(types::I64, 0)
                 };
-                builder.ins().jump(merge_block, &[BlockArg::Value(else_val)]);
+                println!("Else branch compiled to: {:?}", else_val);
+                
+                // Check if the last instruction is a return - if so, don't add a jump
+                let should_add_jump = if let Some(last_inst) = builder.func.layout.last_inst(else_block) {
+                    builder.func.dfg.insts[last_inst].opcode() != cranelift_codegen::ir::Opcode::Return
+                } else {
+                    true
+                };
+                
+                if should_add_jump {
+                    builder.ins().jump(merge_block, &[BlockArg::Value(else_val)]);
+                } else {
+                    println!("Skipping jump due to return instruction");
+                }
                 builder.seal_block(else_block);
 
                 // Merge block
