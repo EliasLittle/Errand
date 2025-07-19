@@ -14,7 +14,15 @@ It will accomplish this by utilizing
 - **Lexer**: A lexer that tokenizes the source code into meaningful tokens. (Completed)
 - **Parser**: A parser that constructs an Abstract Syntax Tree (AST) from the tokens.
 - **Interpreter**: A working tree-walking interpreter that supports a subset of the language.
-- **Compiler**: TODO
+- **Compiler**: Absolute most bare-bones Cranelift based compiler works!!!
+
+## How to use
+Compile with: `cargo run --target aarch64-apple-darwin -- --file tests/addOne/addOne.err`
+Link with: `clang -o tests/addOne/addOne tests/addOne/addOne.err.bin`
+
+Congrats you have a binary!
+
+The binary currently will just return the result as the exit code, which can be verified with: `./tests/addOne/addOne; echo "Exit code: $?"`
 
 ## Live Features
 
