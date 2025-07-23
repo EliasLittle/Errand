@@ -16,13 +16,111 @@ impl Program {
         match expr.clone() {
             Expression::For { iterator, range, body } => lower_for_loop(iterator, range, body),
             Expression::BinaryOp { operator, left, right } => {
+                let lowered_left = self.lower_expression(*left);
+                let lowered_right = self.lower_expression(*right);
                 match operator {
-                    BinaryOperator::Dot => lower_field_access(left, right),
-                    _ => expr,
+                    BinaryOperator::Dot => lower_field_access(Box::new(lowered_left), Box::new(lowered_right)),
+                    _ => Expression::BinaryOp {
+                        operator,
+                        left: Box::new(lowered_left),
+                        right: Box::new(lowered_right),
+                    },
                 }
             },
             Expression::FunctionDefinition { id, parameters, body, return_type_expr } => {
-                lower_function_definition(id, parameters, body, return_type_expr)
+                let lowered_body = Box::new(self.lower_expression(*body));
+                lower_function_definition(id, parameters, lowered_body, return_type_expr)
+            },
+            Expression::FunctionCall { id, arguments } if id.name == "printf" => {
+                // Desugar string arguments to printf (as before), but lower arguments first
+                let mut new_block: Vec<Box<Expression>> = Vec::new();
+                let mut new_args: Vec<Expression> = Vec::new();
+                let mut tmp_counter = 0;
+                for arg in arguments.into_iter().map(|a| self.lower_expression(a)) {
+                    if let Expression::String(s) = arg {
+                        let tmp_name = format!("_tmp_str_{}", tmp_counter);
+                        tmp_counter += 1;
+                        let tmp_id = Id { name: tmp_name.clone() };
+                        let malloc_call = Expression::BinaryOp {
+                            operator: BinaryOperator::Assignment,
+                            left: Box::new(Expression::Identifier { id: tmp_id.clone(), type_expr: Some(TypeExpression::String) }),
+                            right: Box::new(Expression::FunctionCall {
+                                id: Id { name: "malloc".to_string() },
+                                arguments: vec![
+                                    Expression::BinaryOp {
+                                        operator: BinaryOperator::Add,
+                                        left: Box::new(Expression::FunctionCall {
+                                            id: Id { name: "strlen".to_string() },
+                                            arguments: vec![Expression::String(s.clone())],
+                                        }),
+                                        right: Box::new(Expression::Int(1)),
+                                    }
+                                ],
+                            }),
+                        };
+                        let strcpy_call = Expression::FunctionCall {
+                            id: Id { name: "strcpy".to_string() },
+                            arguments: vec![
+                                Expression::Identifier { id: tmp_id.clone(), type_expr: Some(TypeExpression::String) },
+                                Expression::String(s.clone()),
+                            ],
+                        };
+                        new_block.push(Box::new(malloc_call));
+                        new_block.push(Box::new(strcpy_call));
+                        new_args.push(Expression::Identifier { id: tmp_id.clone(), type_expr: Some(TypeExpression::String) });
+                    } else {
+                        new_args.push(arg);
+                    }
+                }
+                let printf_call = Expression::FunctionCall {
+                    id: id.clone(),
+                    arguments: new_args,
+                };
+                new_block.push(Box::new(printf_call));
+                for i in 0..tmp_counter {
+                    let tmp_name = format!("_tmp_str_{}", i);
+                    let tmp_id = Id { name: tmp_name };
+                    let free_call = Expression::FunctionCall {
+                        id: Id { name: "free".to_string() },
+                        arguments: vec![Expression::Identifier { id: tmp_id, type_expr: Some(TypeExpression::String) }],
+                    };
+                    new_block.push(Box::new(free_call));
+                }
+                Expression::Block(new_block)
+            },
+            Expression::FunctionCall { id, arguments } => {
+                let lowered_args = arguments.into_iter().map(|a| self.lower_expression(a)).collect();
+                Expression::FunctionCall { id, arguments: lowered_args }
+            },
+            Expression::Block(exprs) => {
+                let lowered_exprs = exprs.into_iter().map(|e| Box::new(self.lower_expression(*e))).collect();
+                Expression::Block(lowered_exprs)
+            },
+            Expression::If { condition, then_branch, else_branch } => {
+                let lowered_condition = Box::new(self.lower_expression(*condition));
+                let lowered_then = Box::new(self.lower_expression(*then_branch));
+                let lowered_else = else_branch.map(|e| Box::new(self.lower_expression(*e)));
+                Expression::If {
+                    condition: lowered_condition,
+                    then_branch: lowered_then,
+                    else_branch: lowered_else,
+                }
+            },
+            Expression::While { condition, body } => {
+                let lowered_condition = Box::new(self.lower_expression(*condition));
+                let lowered_body = Box::new(self.lower_expression(*body));
+                Expression::While {
+                    condition: lowered_condition,
+                    body: lowered_body,
+                }
+            },
+            Expression::Return(expr) => {
+                let lowered_expr = expr.map(|e| Box::new(self.lower_expression(*e)));
+                Expression::Return(lowered_expr)
+            },
+            Expression::Print(expr) => {
+                let lowered_expr = Box::new(self.lower_expression(*expr));
+                Expression::Print(lowered_expr)
             },
             _ => expr,
         }

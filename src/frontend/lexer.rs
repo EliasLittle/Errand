@@ -547,7 +547,10 @@ impl Lexer {
             } else {
                 Ok(Token { token_type: TokenType::Bang, line: self.line, column: self.column })
             },
-            '"' => self.read_string(),
+            '"' => {
+                advance_char = false;
+                self.read_string()
+            },
             '\n' => Ok(Token { token_type: TokenType::Newline, line: self.line, column: self.column }),
             '<' => match self.peek() {
                 ':' => {
@@ -590,6 +593,7 @@ impl Lexer {
                 advance_char = false;
                 self.read_number()
             },
+            '\0' => Ok(Token { token_type: TokenType::EOF, line: self.line, column: self.column }),
             _ => Err(format!("Unexpected character: {}", self.current_char)),
         };
         if advance_char {
