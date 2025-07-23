@@ -658,9 +658,9 @@ impl CraneliftCompiler {
 
                 if id.name == "printf" {
                     // Expect exactly two arguments: format string and value
-                    if compiled_args.len() != 2 {
-                        return Err(format!("printf expects exactly 2 arguments (format string, value), got {}", compiled_args.len()));
-                    }
+                    // if compiled_args.len() != 2 {
+                    //     return Err(format!("printf expects exactly 2 arguments (format string, value), got {}", compiled_args.len()));
+                    // }
                     let mut final_args = Vec::new();
                     let is_aarch64_apple = if let Some(ref isa) = self.isa {
                         let triple = isa.triple();
@@ -670,7 +670,6 @@ impl CraneliftCompiler {
                     };
                     if is_aarch64_apple {
                         // For aarch64-apple-darwin, fixed arg (format string) first, pad to 8, then variadic args
-                        // compiled_args[0] is the format string, compiled_args[1..] are the variadic arguments
                         final_args.push(compiled_args[0]); // format string (i64)
 
                         // Pad with zeros up to 8 arguments (including the format string)
@@ -683,9 +682,18 @@ impl CraneliftCompiler {
                             final_args.push(*arg);
                         }
 
-                        let func_id = self.functions.get("printf")
-                            .ok_or_else(|| format!("Function not found: printf"))?;
+                        // Dynamically adjust the signature to match the number of arguments
+                        let func_id = self.functions.get("printf").unwrap();
                         let func_ref = self.module.as_mut().unwrap().declare_func_in_func(*func_id, &mut builder.func);
+                        let sig_ref = builder.func.dfg.ext_funcs[func_ref].signature;
+                        // Mutate the signature params to match the call site
+                        let params = &mut builder.func.dfg.signatures[sig_ref].params;
+                        params.clear();
+                        for _ in 0..final_args.len() {
+                            params.push(AbiParam::new(types::I64));
+                        }
+                        builder.func.dfg.signatures[sig_ref].returns.clear();
+                        builder.func.dfg.signatures[sig_ref].returns.push(AbiParam::new(types::I32));
                         let call_inst = builder.ins().call(func_ref, &final_args);
                         let results = builder.inst_results(call_inst);
                         if let Some(&return_value) = results.first() {
