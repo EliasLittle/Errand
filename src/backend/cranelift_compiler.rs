@@ -706,6 +706,12 @@ impl CraneliftCompiler {
                         let func_id = self.functions.get(&id.name)
                             .ok_or_else(|| format!("Function not found: {}", id.name))?;
                         let func_ref = self.module.as_mut().unwrap().declare_func_in_func(*func_id, &mut builder.func);
+                        let sig_ref = builder.func.dfg.ext_funcs[func_ref].signature;
+                        let params = &mut builder.func.dfg.signatures[sig_ref].params;
+                        params.clear();
+                        for _ in 0..compiled_args.len() {
+                            params.push(AbiParam::new(types::I64));
+                        }
                         let call_inst = builder.ins().call(func_ref, &compiled_args);
                         let results = builder.inst_results(call_inst);
                         if let Some(&return_value) = results.first() {
