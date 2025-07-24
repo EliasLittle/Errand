@@ -57,8 +57,8 @@ compile_file() {
     if [ $? -eq 0 ]; then
         echo "Linking $input_file.bin..."
         
-        # Run clang command
-        clang -o "$base_name" "$input_file.bin"
+        # Run gcc command to be compatible between arm and x86
+        gcc -o "$base_name" "$input_file.bin"
         
         if [ $? -eq 0 ]; then
             echo "Success! Executable created: $base_name"
