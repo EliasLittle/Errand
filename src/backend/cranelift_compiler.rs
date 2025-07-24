@@ -20,6 +20,9 @@ pub struct CraneliftCompiler {
     module: Option<ObjectModule>,
     function_signatures: HashMap<String, cranelift_codegen::ir::Signature>,
     next_function_id: u32,  // Add this field
+    string_counter: u32, // Counter for unique string names
+    isa: Option<std::sync::Arc<dyn cranelift_codegen::isa::TargetIsa>>, // Store the ISA as Arc
+    printf_variants: HashMap<String, FuncId>, // Cache for printf FFI variants
 }
 
 impl CraneliftCompiler {
@@ -31,6 +34,9 @@ impl CraneliftCompiler {
             module: None,
             function_signatures: HashMap::new(),
             next_function_id: 0,
+            string_counter: 0,
+            isa: None,
+            printf_variants: HashMap::new(), // will not be used anymore
         }
     }
 
@@ -95,15 +101,23 @@ impl CraneliftCompiler {
         // Set up the target
         let mut flag_builder = settings::builder();
         flag_builder.set("use_colocated_libcalls", "false").unwrap();
-        flag_builder.set("is_pic", "false").unwrap();
+        flag_builder.set("is_pic", "true").unwrap();
+        flag_builder.set("enable_verifier", "true").unwrap();
+        flag_builder.set("enable_llvm_abi_extensions", "true").unwrap();
         let isa = cranelift_native::builder().unwrap()
             .finish(settings::Flags::new(flag_builder))
             .unwrap();
+
+        // Store the ISA for later use
+        self.isa = Some(isa.clone());
 
         // Create module
         let object_builder = cranelift_object::ObjectBuilder::new(isa, "main", Box::new(|libcall| format!("{}", libcall)))
             .map_err(|e| format!("Failed to create object builder: {}", e))?;
         self.module = Some(cranelift_object::ObjectModule::new(object_builder));
+        
+        // Add built-in FFI functions to the symbol table
+        self.add_builtin_ffi_functions()?;
         
         Ok(())
     }
@@ -189,21 +203,21 @@ impl CraneliftCompiler {
             let mut sig = module.make_signature();
             sig.params.push(AbiParam::new(types::I64)); // Use I64 to match other functions
             sig.returns.push(AbiParam::new(types::I64)); // Use I64 to match other functions
-            println!("Created main signature: {:?}", sig);
+            // println!("Created main signature: {:?}", sig);
             sig
         } else {
             // Get the signature from our stored signatures
             let sig = self.function_signatures.get(name)
                 .ok_or_else(|| format!("No signature found for function: {}", name))?
                 .clone();
-            println!("Retrieved signature for '{}': {:?}", name, sig);
+            // println!("Retrieved signature for '{}': {:?}", name, sig);
             sig
         };
         
-        println!("About to declare function '{}' in module", name);
+        // println!("About to declare function '{}' in module", name);
         let func_id = module.declare_function(name, cranelift_module::Linkage::Export, &signature)
             .map_err(|e| format!("Failed to declare function: {}", e))?;
-        println!("Module returned func_id: {:?}", func_id);
+        // println!("Module returned func_id: {:?}", func_id);
         
         // Create a context for compilation
         let mut ctx = cranelift_codegen::Context::for_function(func.clone());
@@ -211,8 +225,8 @@ impl CraneliftCompiler {
         // Enable verbose error reporting
         ctx.set_disasm(true);
         
-        println!("About to define function name: '{}' with func_id: {:?}, func: {:?}", name, func_id, func);
-        println!("In context: {:?}", ctx.func);
+        // println!("About to define function name: '{}' with func_id: {:?}, func: {:?}", name, func_id, func);
+        // println!("In context: {:?}", ctx.func);
         // Compile the function
         let define_result = module.define_function(func_id, &mut ctx)
             .map_err(|e| {
@@ -228,6 +242,54 @@ impl CraneliftCompiler {
         
         // Return the FuncId - we'll create FuncRefs when needed in calling contexts
         Ok(func_id)
+    }
+
+    fn add_builtin_ffi_functions(&mut self) -> Result<(), String> {
+        let module = self.module.as_mut()
+            .ok_or("Module not initialized")?;
+        
+        // Determine the target architecture and OS
+        let (arch, os) = if let Some(ref isa) = self.isa {
+            let triple = isa.triple();
+            (triple.architecture, triple.operating_system)
+        } else {
+            (cranelift_codegen::isa::TargetIsa::triple(&*cranelift_native::builder().unwrap().finish(settings::Flags::new(settings::builder())).unwrap()).architecture, cranelift_codegen::isa::TargetIsa::triple(&*cranelift_native::builder().unwrap().finish(settings::Flags::new(settings::builder())).unwrap()).operating_system)
+        };
+
+        let ffi_functions = if format!("{}", arch) == "aarch64" && format!("{}", os) == "darwin" {
+            // On aarch64-apple-darwin, always use the 8x i64 signature for printf
+            vec![
+                ("printf", vec![types::I64; 9], types::I32, cranelift_module::Linkage::Import),
+                ("malloc", vec![types::I64], types::I64, cranelift_module::Linkage::Import),
+                ("free", vec![types::I64], types::I64, cranelift_module::Linkage::Import),
+                ("strlen", vec![types::I64], types::I64, cranelift_module::Linkage::Import),
+                ("strcpy", vec![types::I64, types::I64], types::I64, cranelift_module::Linkage::Import),
+                ("strcmp", vec![types::I64, types::I64], types::I32, cranelift_module::Linkage::Import),
+            ]
+        } else {
+            vec![
+                ("printf", vec![types::I64, types::I32], types::I32, cranelift_module::Linkage::Import),
+                ("malloc", vec![types::I64], types::I64, cranelift_module::Linkage::Import),
+                ("free", vec![types::I64], types::I64, cranelift_module::Linkage::Import),
+                ("strlen", vec![types::I64], types::I64, cranelift_module::Linkage::Import),
+                ("strcpy", vec![types::I64, types::I64], types::I64, cranelift_module::Linkage::Import),
+                ("strcmp", vec![types::I64, types::I64], types::I32, cranelift_module::Linkage::Import),
+            ]
+        };
+        
+        for (name, param_types, return_type, linkage) in ffi_functions {
+            let mut sig = cranelift_codegen::ir::Signature::new(cranelift_codegen::isa::CallConv::SystemV);
+            for param_type in &param_types {
+                sig.params.push(AbiParam::new(*param_type));
+            }
+            sig.returns.push(AbiParam::new(return_type));
+            let func_id = module.declare_function(name, linkage, &sig)
+                .map_err(|e| format!("Failed to declare FFI function '{}': {}", name, e))?;
+            self.functions.insert(name.to_string(), func_id);
+            self.function_signatures.insert(name.to_string(), sig);
+            println!("Added FFI function '{}' to symbol table with ID: {:?}", name, func_id);
+        }
+        Ok(())
     }
 
     fn finalize_module(&mut self) -> Result<Vec<u8>, String> {
@@ -286,7 +348,7 @@ impl CraneliftCompiler {
 
     pub fn lower_to_clif(&mut self, program: &Program) -> Result<Function, String> {
         println!("=== CREATING MAIN FUNCTION ===");
-        println!("Current next_function_id: {}", self.next_function_id);
+        // println!("Current next_function_id: {}", self.next_function_id);
         println!("Available functions: {:?}", self.functions);
         
         // Create a new function
@@ -378,13 +440,13 @@ impl CraneliftCompiler {
             builder.def_var(var, param_value);
             
             param_vars.insert(param.id.name.clone(), var);
-            println!("Function parameter '{}' mapped to variable {:?} with value {:?}", param.id.name, var, param_value);
+            // println!("Function parameter '{}' mapped to variable {:?} with value {:?}", param.id.name, var, param_value);
         }
         
         // Temporarily replace the global variables with function parameters
-        println!("Before replacing variables: {:?}", self.variables.keys().collect::<Vec<_>>());
+        // println!("Before replacing variables: {:?}", self.variables.keys().collect::<Vec<_>>());
         let original_variables = std::mem::replace(&mut self.variables, param_vars);
-        println!("After replacing variables: {:?}", self.variables.keys().collect::<Vec<_>>());
+        // println!("After replacing variables: {:?}", self.variables.keys().collect::<Vec<_>>());
         
         println!("Compiling body: {:?}", body);
         // Compile the function body
@@ -436,29 +498,65 @@ impl CraneliftCompiler {
     fn compile_expression(&mut self, builder: &mut FunctionBuilder, expr: &Expression) -> Result<Value, String> {
         match expr {
             Expression::Int(n) => {
-                println!("Compiling int: {:?}", n);
+                // println!("Compiling int: {:?}", n);
                 let result = builder.ins().iconst(types::I64, *n as i64);
-                println!("result: {:?}", result);
+                // println!("result: {:?}", result);
                 Ok(result)
             }
             Expression::Float(f) => {
                 let result = builder.ins().f64const(*f);
-                println!("result: {:?}", result);
+                // println!("result: {:?}", result);
                 Ok(result)
             }
             Expression::Boolean(b) => {
                 Ok(builder.ins().iconst(types::I8, *b as i64))
             }
             Expression::String(s) => {
-                // For strings, we'll need to handle them differently
-                // This is a simplified version
-                Err("String literals not yet implemented".to_string())
+                println!("Compiling string literal: '{}'", s);
+                
+                // For now, let's use a simple approach - create a static string
+                // This is a temporary workaround until we fix the data object approach
+
+                let static_string = format!("{}{}", s.as_str(), '\0');
+                let static_string = static_string.as_str();
+                println!("static_string: {:?} : {:?}", static_string, std::any::type_name_of_val(static_string));
+
+                let string_literal = static_string;
+                
+                // Create a data object for the string
+                let module = self.module.as_mut()
+                    .ok_or("Module not initialized")?;
+                
+                // Create a unique name for this string using a counter
+                self.string_counter += 1;
+                let string_name = format!("static_str_{}", self.string_counter);
+                
+                // Create the string data
+                let string_data = string_literal.as_bytes().to_vec();
+                
+                // Declare the data object in the module
+                let data_id = module.declare_data(&string_name, cranelift_module::Linkage::Local, false, false)
+                    .map_err(|e| format!("Failed to declare string data: {}", e))?;
+                
+                // Define the data object
+                let mut data_desc = cranelift_module::DataDescription::new();
+                data_desc.define(string_data.into_boxed_slice());
+                module.define_data(data_id, &data_desc)
+                    .map_err(|e| format!("Failed to define string data: {}", e))?;
+                
+                // Create a global symbol reference
+                let symbol = module.declare_data_in_func(data_id, &mut builder.func);
+                
+                // Load the address of the string using global_value
+                let addr = builder.ins().global_value(types::I64, symbol);
+                
+                Ok(addr)
             }
             Expression::Identifier { id, type_expr } => {
-                println!("Looking up identifier: {}", id.name);
-                println!("Available variables: {:?}", self.variables.keys().collect::<Vec<_>>());
+                // println!("Looking up identifier: {}", id.name);
+                // println!("Available variables: {:?}", self.variables.keys().collect::<Vec<_>>());
                 if let Some(var) = self.variables.get(&id.name) {
-                    println!("Found variable: {:?}", var);
+                    // println!("Found variable: {:?}", var);
                     Ok(builder.use_var(*var))
                 } else {
                     Err(format!("Undefined variable: {}", id.name))
@@ -479,8 +577,16 @@ impl CraneliftCompiler {
                                 builder.declare_var(var, types::I64);
                                 var
                             });
-                            builder.def_var(*var, rhs);
-                            Ok(rhs)
+                            
+                            // Convert rhs to I64 if needed
+                            let rhs_i64 = if builder.func.dfg.value_type(rhs) == types::I32 {
+                                builder.ins().uextend(types::I64, rhs)
+                            } else {
+                                rhs
+                            };
+                            
+                            builder.def_var(*var, rhs_i64);
+                            Ok(rhs_i64)
                         } else {
                             Err("Left side of assignment must be an identifier".to_string())
                         }
@@ -492,7 +598,7 @@ impl CraneliftCompiler {
                         
                         match operator {
                             BinaryOperator::Add => {
-                                println!("Compiling add: {:?}, {:?}", lhs, rhs);
+                                // println!("Compiling add: {:?}, {:?}", lhs, rhs);
                                 // Assume I64 for now, we can add type checking later
                                 Ok(builder.ins().iadd(lhs, rhs))
                             }
@@ -542,53 +648,93 @@ impl CraneliftCompiler {
             }
             Expression::FunctionCall { id, arguments } => {
                 println!("=== COMPILING FUNCTION CALL ===");
-                println!("Calling function name: '{}'", id.name);
-                println!("Call arguments: {:?}", arguments);
-                println!("Current function being compiled: {:?}", builder.func.name);
-                println!("Current function details: {:?}", builder.func);
-                
                 // Compile arguments
                 let mut compiled_args = Vec::new();
                 for (i, arg) in arguments.iter().enumerate() {
-                    println!("Compiling argument {}: {:?}", i, arg);
                     let arg_val = self.compile_expression(builder, arg)?;
-                    println!("Argument {} compiled to: {:?}", i, arg_val);
+                    println!("Argument {}:{} compiled to: {:?}", i, arg, arg_val);
                     compiled_args.push(arg_val);
                 }
 
-                let signature = self.function_signatures.get(&id.name)
-                    .ok_or_else(|| format!("No signature found for function: {}", id.name))?
-                    .clone();
-                println!("Target function signature: {:?}", signature);
-                
-                // Get the function ID from our stored functions
-                let func_id = self.functions.get(&id.name)
-                    .ok_or_else(|| format!("Function not found: {}", id.name))?;
-                println!("Found func_id for '{}': {:?}", id.name, func_id);
-                println!("Available functions in map: {:?}", self.functions);
-                
-                // Create a FuncRef for this function call using declare_func_in_func
-                println!("About to call declare_func_in_func with func_id: {:?} (id: {:?})", func_id, id.name);
-                println!("Current function context: {:?}", builder.func.name);
-                let func_ref = self.module.as_mut().unwrap().declare_func_in_func(*func_id, &mut builder.func);
-                println!("Created func_ref: {:?}", func_ref);
-                println!("Func_ref as string: {:?}", func_ref.to_string());
-                
-                println!("Module declarations: {:?}", self.module.as_ref().unwrap().declarations());
-                println!("Target function signature: {:?}", signature);
-                println!("Compiled arguments: {:?}", compiled_args);
-                let call_inst = builder.ins().call(func_ref, &compiled_args);
-                println!("Created call instruction: {:?}", call_inst);
-                println!("=== END FUNCTION CALL ===\n");
-                
-                // Get the return value from the call instruction
-                // The first result is the return value (assuming single return value)
-                let results = builder.inst_results(call_inst);
-                if let Some(&return_value) = results.first() {
-                    Ok(return_value)
+                if id.name == "printf" {
+                    // Expect exactly two arguments: format string and value
+                    // if compiled_args.len() != 2 {
+                    //     return Err(format!("printf expects exactly 2 arguments (format string, value), got {}", compiled_args.len()));
+                    // }
+                    let mut final_args = Vec::new();
+                    let is_aarch64_apple = if let Some(ref isa) = self.isa {
+                        let triple = isa.triple();
+                        format!("{}", triple.architecture) == "aarch64" && format!("{}", triple.operating_system) == "darwin"
+                    } else {
+                        false
+                    };
+                    if is_aarch64_apple {
+                        // For aarch64-apple-darwin, fixed arg (format string) first, pad to 8, then variadic args
+                        final_args.push(compiled_args[0]); // format string (i64)
+
+                        // Pad with zeros up to 8 arguments (including the format string)
+                        while final_args.len() < 8 {
+                            final_args.push(builder.ins().iconst(types::I64, 0));
+                        }
+
+                        // Push all variadic arguments (starting from compiled_args[1])
+                        for arg in &compiled_args[1..] {
+                            final_args.push(*arg);
+                        }
+
+                        // Dynamically adjust the signature to match the number of arguments
+                        let func_id = self.functions.get("printf").unwrap();
+                        let func_ref = self.module.as_mut().unwrap().declare_func_in_func(*func_id, &mut builder.func);
+                        let sig_ref = builder.func.dfg.ext_funcs[func_ref].signature;
+                        // Mutate the signature params to match the call site
+                        let params = &mut builder.func.dfg.signatures[sig_ref].params;
+                        params.clear();
+                        for _ in 0..final_args.len() {
+                            params.push(AbiParam::new(types::I64));
+                        }
+                        builder.func.dfg.signatures[sig_ref].returns.clear();
+                        builder.func.dfg.signatures[sig_ref].returns.push(AbiParam::new(types::I32));
+                        let call_inst = builder.ins().call(func_ref, &final_args);
+                        let results = builder.inst_results(call_inst);
+                        if let Some(&return_value) = results.first() {
+                            Ok(return_value)
+                        } else {
+                            Ok(builder.ins().iconst(types::I32, 0))
+                        }
+                    } else {
+                        // Non-arm64: use the global signature
+                        let func_id = self.functions.get(&id.name)
+                            .ok_or_else(|| format!("Function not found: {}", id.name))?;
+                        let func_ref = self.module.as_mut().unwrap().declare_func_in_func(*func_id, &mut builder.func);
+                        let sig_ref = builder.func.dfg.ext_funcs[func_ref].signature;
+                        let params = &mut builder.func.dfg.signatures[sig_ref].params;
+                        params.clear();
+                        for _ in 0..compiled_args.len() {
+                            params.push(AbiParam::new(types::I64));
+                        }
+                        let call_inst = builder.ins().call(func_ref, &compiled_args);
+                        let results = builder.inst_results(call_inst);
+                        if let Some(&return_value) = results.first() {
+                            Ok(return_value)
+                        } else {
+                            Ok(builder.ins().iconst(types::I32, 0))
+                        }
+                    }
                 } else {
-                    // If no return value, create a dummy value
-                    Ok(builder.ins().iconst(types::I64, 0))
+                    // Regular function call (non-variadic)
+                    let signature = self.function_signatures.get(&id.name)
+                        .ok_or_else(|| format!("No signature found for function: {}", id.name))?
+                        .clone();
+                    let func_id = self.functions.get(&id.name)
+                        .ok_or_else(|| format!("Function not found: {}", id.name))?;
+                    let func_ref = self.module.as_mut().unwrap().declare_func_in_func(*func_id, &mut builder.func);
+                    let call_inst = builder.ins().call(func_ref, &compiled_args);
+                    let results = builder.inst_results(call_inst);
+                    if let Some(&return_value) = results.first() {
+                        Ok(return_value)
+                    } else {
+                        Ok(builder.ins().iconst(types::I64, 0))
+                    }
                 }
             }
             Expression::If { condition, then_branch, else_branch } => {
@@ -605,9 +751,9 @@ impl CraneliftCompiler {
 
                 // Compile then branch
                 builder.switch_to_block(then_block);
-                println!("Compiling then branch");
+                // println!("Compiling then branch");
                 let then_val = self.compile_expression(builder, then_branch)?;
-                println!("Then branch compiled to: {:?}", then_val);
+                // println!("Then branch compiled to: {:?}", then_val);
                 
                 // Check if the last instruction is a return - if so, don't add a jump
                 let should_add_jump = if let Some(last_inst) = builder.func.layout.last_inst(then_block) {
@@ -618,21 +764,21 @@ impl CraneliftCompiler {
                 
                 if should_add_jump {
                     builder.ins().jump(merge_block, &[BlockArg::Value(then_val)]);
-                    println!("Jumped to merge block");
+                    // println!("Jumped to merge block");
                 } else {
-                    println!("Skipping jump due to return instruction");
+                    // println!("Skipping jump due to return instruction");
                 }
                 builder.seal_block(then_block);
 
                 // Compile else branch
                 builder.switch_to_block(else_block);
-                println!("Compiling else branch");
+                // println!("Compiling else branch");
                 let else_val = if let Some(else_expr) = else_branch {
                     self.compile_expression(builder, else_expr)?
                 } else {
                     builder.ins().iconst(types::I64, 0)
                 };
-                println!("Else branch compiled to: {:?}", else_val);
+                // println!("Else branch compiled to: {:?}", else_val);
                 
                 // Check if the last instruction is a return - if so, don't add a jump
                 let should_add_jump = if let Some(last_inst) = builder.func.layout.last_inst(else_block) {
@@ -644,7 +790,7 @@ impl CraneliftCompiler {
                 if should_add_jump {
                     builder.ins().jump(merge_block, &[BlockArg::Value(else_val)]);
                 } else {
-                    println!("Skipping jump due to return instruction");
+                    // println!("Skipping jump due to return instruction");
                 }
                 builder.seal_block(else_block);
 
@@ -709,11 +855,11 @@ impl CraneliftCompiler {
                 // When we encounter them during main expression compilation, we should skip them
                 // or return a unit value. For now, we'll return a unit value (0).
                 // This should not happen in normal flow since we skip function definitions in lower_to_clif
-                println!("Warning: Function definition '{}' encountered during main expression compilation", id.name);
+                // println!("Warning: Function definition '{}' encountered during main expression compilation", id.name);
                 Ok(builder.ins().iconst(types::I64, 0))
             }
             Expression::Return(expr) => {
-                println!("Compiling return expression: {:?}", expr);
+                // println!("Compiling return expression: {:?}", expr);
                 let value = self.compile_expression(builder, expr.as_ref().unwrap())?;
                 builder.ins().return_(&[value]);
                 Ok(value)

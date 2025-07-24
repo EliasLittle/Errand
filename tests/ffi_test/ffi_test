@@ -1,0 +1,6 @@
+fn test_ffi()
+    result = printf("Hello, World!")
+    return result
+end
+
+test_ffi() 

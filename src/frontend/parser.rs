@@ -130,6 +130,11 @@ impl Parser {
                 self.parse_expression()
             },
             Some(TokenType::Print) => self.print_statement(),
+            Some(TokenType::End) => {
+                // Skip End tokens at the top level - they should be handled by their respective constructs
+                self.bump();
+                Err("Unexpected End token at top level".to_string())
+            },
             Some(_) => {
                 let primary_expr = self.primary()?; // Store the result of primary
                 self.parse_expression_1(primary_expr, 0) // Delegate to the new expression parser
@@ -188,8 +193,7 @@ impl Parser {
         }
 
         println!("Parsing expression 1| End of expression 1");
-        self.eat(&TokenType::Newline); // Eat anyline newline after the expression 
-        // Should this be an expect()?
+        // Don't consume newlines here - let the caller handle it
         Ok(level_lhs) // Return the final expression as a clone
     }
 

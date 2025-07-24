@@ -1,0 +1,6 @@
+fn main()
+    result = __ffi("printf", "C")
+    return result
+end
+
+main()

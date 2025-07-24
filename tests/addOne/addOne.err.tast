@@ -1,0 +1,1 @@
+{ fn addOne(x::Int) -> Int { { return (x::Any Add 1::Int) } }; addOne(6::Int) }

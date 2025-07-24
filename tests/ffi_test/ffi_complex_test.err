@@ -1,0 +1,21 @@
+fn test_complex_ffi()
+    # Test multiple FFI calls
+    a = 10
+    b = 20
+    
+    # Call printf with a formatted string (simplified)
+    printf("Testing FFI calls")
+    
+    # Call strlen on a string
+    str_len = strlen("test string")
+    
+    # Call malloc to allocate memory
+    ptr = malloc(100)
+    
+    # Call free to deallocate memory
+    free(ptr)
+    
+    return str_len
+end
+
+test_complex_ffi() 

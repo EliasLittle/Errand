@@ -1,0 +1,7 @@
+{ fn test_printf() -> Int { { { (_tmp_str_0::String Assignment malloc((strlen("String: %s
+"::String) Add 1::Int))); strcpy(_tmp_str_0::String, "String: %s
+"::String); (_tmp_str_1::String Assignment malloc((strlen("elias"::String) Add 1::Int))); strcpy(_tmp_str_1::String, "elias"::String); printf(_tmp_str_0::String, _tmp_str_1::String); free(_tmp_str_0::String); free(_tmp_str_1::String) }; { (_tmp_str_0::String Assignment malloc((strlen("Number: %d
+"::String) Add 1::Int))); strcpy(_tmp_str_0::String, "Number: %d
+"::String); printf(_tmp_str_0::String, 42::Int); free(_tmp_str_0::String) }; { (_tmp_str_0::String Assignment malloc((strlen("String: %s and Number: %d
+"::String) Add 1::Int))); strcpy(_tmp_str_0::String, "String: %s and Number: %d
+"::String); (_tmp_str_1::String Assignment malloc((strlen("elias"::String) Add 1::Int))); strcpy(_tmp_str_1::String, "elias"::String); printf(_tmp_str_0::String, _tmp_str_1::String, 86::Int); free(_tmp_str_0::String); free(_tmp_str_1::String) }; return 0::Int } }; test_printf() }
