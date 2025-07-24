@@ -1,0 +1,46 @@
+x = 1 + 2
+y = "Hello"
+z = "World"
+
+y + " " + z
+
+fn hello()
+  return "Hello World"
+end
+
+hello()
+
+fn loop_a(str1, str2, num)
+  i = 0
+  tot_str = ""
+  while i < num 
+    tot_str = tot_str + str1
+    print "print: " + tot_str
+    i = i + 1
+  end
+
+  return tot_str + str2
+end
+
+loop_a(y, z, x)
+
+
+struct point
+  x::Int
+  y::Int
+end
+
+alpha = point(1, 2)
+beta = point(3, 5)
+
+alpha
+
+beta
+
+fn sq_distance(a::point, b::point)
+  x_dif = a.x - b.x
+  y_dif = a.y - b.y
+  return x_dif*x_dif + y_dif*y_dif
+end
+
+sq_distance(alpha, beta)

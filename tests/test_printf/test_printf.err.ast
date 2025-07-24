@@ -1,0 +1,4 @@
+{ fn test_printf() { { printf("String: %s
+"::String, "elias"::String); printf("Number: %d
+"::String, 42::Int); printf("String: %s and Number: %d
+"::String, "elias"::String, 86::Int); return 0::Int } }; test_printf() }

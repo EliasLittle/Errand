@@ -1,0 +1,16 @@
+fn test_complex_ffi()
+    a = 10
+    b = 20
+    
+    printf("Testing FFI calls")
+    
+    str_len = strlen("test string")
+    
+    ptr = malloc(100)
+    
+    free(ptr)
+    
+    return str_len
+end
+
+test_complex_ffi() 

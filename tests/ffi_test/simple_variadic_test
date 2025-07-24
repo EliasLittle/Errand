@@ -1,0 +1,6 @@
+fn simple_test()
+    result = printf("Simple variadic test\n")
+    return result
+end
+
+simple_test() 

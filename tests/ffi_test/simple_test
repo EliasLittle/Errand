@@ -1,0 +1,6 @@
+fn simple()
+    x = 5
+    return x
+end
+
+simple() 
