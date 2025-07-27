@@ -13,6 +13,8 @@ use std::collections::HashMap;
 use std::error::Error;
 use crate::frontend::ast::{Program, Expression, BinaryOperator, UnaryOperator, Id, TypeExpression, Parameter};
 
+use crate::backend::structs::{Struct as BackendStruct, Field as BackendField, Type as BackendType};
+
 pub struct CraneliftCompiler {
     builder_ctx: FunctionBuilderContext,
     variables: HashMap<String, Variable>,
@@ -487,7 +489,97 @@ impl CraneliftCompiler {
         Ok(())
     }
 
+    pub fn generate_instantiator(&mut self, s: &BackendStruct) -> Result<FuncId, String> {
+        use cranelift_codegen::ir::{AbiParam, types};
+        use cranelift_frontend::Variable;
+        use cranelift_codegen::ir::StackSlotData;
+        use cranelift_codegen::ir::StackSlotKind;
+        use cranelift_codegen::ir::InstBuilder;
 
+        let module = self.module.as_mut().ok_or("Module not initialized")?;
+        let mut sig = module.make_signature();
+        // Each field is a parameter
+        for field in &s.fields {
+            let ty = match &field.ty {
+                BackendType::Int => types::I64,
+                BackendType::Float => types::F64,
+                BackendType::Bool => types::I8,
+                BackendType::String => types::I64, // pointer
+                BackendType::Struct(_) => types::I64, // pointer to nested struct
+            };
+            sig.params.push(AbiParam::new(ty));
+        }
+        // Return pointer to struct
+        sig.returns.push(AbiParam::new(types::I64));
+
+        // Create function
+        let func_name = format!("{}", s.name);
+        let func_id = module.declare_function(&func_name, cranelift_module::Linkage::Export, &sig)
+            .map_err(|e| format!("Failed to declare instantiator: {}", e))?;
+        let mut func = cranelift_codegen::ir::Function::with_name_signature(
+            cranelift_codegen::ir::UserFuncName::user(0, func_id.index() as u32),
+            sig.clone(),
+        );
+        let mut builder_ctx = FunctionBuilderContext::new();
+        let mut builder = FunctionBuilder::new(&mut func, &mut builder_ctx);
+        let entry_block = builder.create_block();
+        builder.switch_to_block(entry_block);
+        // Add block params for each field
+        for field in &s.fields {
+            let ty = match &field.ty {
+                BackendType::Int => types::I64,
+                BackendType::Float => types::F64,
+                BackendType::Bool => types::I8,
+                BackendType::String => types::I64,
+                BackendType::Struct(_) => types::I64,
+            };
+            builder.append_block_param(entry_block, ty);
+        }
+        builder.seal_block(entry_block);
+
+        // Allocate memory for struct
+        let ptr_val = if s.size <= 128 {
+            // Stack allocation
+            let slot = builder.create_sized_stack_slot(StackSlotData::new(StackSlotKind::ExplicitSlot, s.size as u32, 0));
+            builder.ins().stack_addr(types::I64, slot, 0)
+        } else {
+            // Heap allocation via malloc
+            let malloc_id = *self.functions.get("malloc").ok_or("malloc not found in functions table")?;
+            let malloc_ref = module.declare_func_in_func(malloc_id, &mut builder.func);
+            let size_val = builder.ins().iconst(types::I64, s.size as i64);
+            let call = builder.ins().call(malloc_ref, &[size_val]);
+            builder.inst_results(call)[0]
+        };
+
+        // Store each argument into the struct
+        for (i, field) in s.fields.iter().enumerate() {
+            let arg_val = builder.block_params(entry_block)[i];
+            let offset = field.offset as i32;
+            match &field.ty {
+                BackendType::Int => {
+                    builder.ins().store(cranelift_codegen::ir::MemFlags::new(), arg_val, ptr_val, offset);
+                },
+                BackendType::Float => {
+                    builder.ins().store(cranelift_codegen::ir::MemFlags::new(), arg_val, ptr_val, offset);
+                },
+                BackendType::Bool => {
+                    builder.ins().store(cranelift_codegen::ir::MemFlags::new(), arg_val, ptr_val, offset);
+                },
+                BackendType::String | BackendType::Struct(_) => {
+                    builder.ins().store(cranelift_codegen::ir::MemFlags::new(), arg_val, ptr_val, offset);
+                },
+            }
+        }
+        // Return pointer
+        builder.ins().return_(&[ptr_val]);
+        builder.finalize();
+        // Define function in module
+        let mut ctx = cranelift_codegen::Context::for_function(func);
+        ctx.set_disasm(true);
+        module.define_function(func_id, &mut ctx)
+            .map_err(|e| format!("Failed to define instantiator: {}", e))?;
+        Ok(func_id)
+    }
 
     pub fn write_object_to_file(&self, object_bytes: &[u8], filename: &str) -> Result<(), String> {
         std::fs::write(filename, object_bytes)

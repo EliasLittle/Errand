@@ -1,13 +1,10 @@
-mod frontend;
-use frontend::lexer::Lexer;
-use frontend::ast::{Program, TypeExpression};
-use frontend::parser::Parser;
-use frontend::resolver::Resolver;
-use frontend::type_inference::TypeInferencer;
-
-mod backend;
-use crate::backend::interpreter::Interpreter;
-use crate::backend::ir_lowering::IRLoweringPass;
+use Errand::frontend::lexer::Lexer;
+use Errand::frontend::parser::Parser;
+use Errand::frontend::resolver::Resolver;
+use Errand::frontend::type_inference::TypeInferencer;
+use Errand::frontend::ast::Program;
+use Errand::backend::interpreter::Interpreter;
+use Errand::backend::ir_lowering::IRLoweringPass;
 
 use std::env;
 
