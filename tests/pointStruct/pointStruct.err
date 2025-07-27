@@ -1,0 +1,8 @@
+struct Point
+    x::Int
+    y::Int
+end
+
+a = Point(1,2)
+
+printf("X: %d Y: %d", a.x, a.y)
