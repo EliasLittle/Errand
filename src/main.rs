@@ -11,9 +11,13 @@ use std::env;
 fn print_ast(path: &str, extension: &str, ast: &Program) {
     println!("AST: {}", ast);
 
-    // Write the AST to a new file with '.ast' extension
+    // Write the AST to a new file with the correct extension
     if !path.is_empty() {
-        let ast_file_path = format!("{}.{}", path, extension);
+        let ast_file_path = if let Some(stripped) = path.strip_suffix(".err") {
+            format!("{}.{}", stripped, extension)
+        } else {
+            format!("{}.{}", path, extension)
+        };
         std::fs::write(&ast_file_path, format!("{}", ast)).expect("Failed to write AST to file");
         println!("AST written to: {}", ast_file_path); // Debug print statement
     }
@@ -98,7 +102,11 @@ fn main() {
                 
                 // Write the CLIF IR to a file
                 if !file_path.is_empty() {
-                    let clif_file_path = format!("{}.clif", file_path);
+                    let clif_file_path = if let Some(stripped) = file_path.strip_suffix(".err") {
+                        format!("{}.clif", stripped)
+                    } else {
+                        format!("{}.clif", file_path)
+                    };
                     std::fs::write(&clif_file_path, clif_ir)
                         .expect("Failed to write CLIF IR to file");
                     println!("CLIF IR written to: {}", clif_file_path);
@@ -117,7 +125,11 @@ fn main() {
                 
                 // Write the compiled code to a file
                 if !file_path.is_empty() {
-                    let bin_file_path = format!("{}.bin", file_path);
+                    let bin_file_path = if let Some(stripped) = file_path.strip_suffix(".err") {
+                        format!("{}.bin", stripped)
+                    } else {
+                        format!("{}.bin", file_path)
+                    };
                     std::fs::write(&bin_file_path, &compiled_code)
                         .expect("Failed to write compiled code to file");
                     println!("Machine code written to: {}", bin_file_path);

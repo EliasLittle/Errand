@@ -79,7 +79,14 @@ fn compile(file: &str, arch: &Option<Arch>) -> Result<(), String> {
     }
     let base_name = Path::new(file).file_stem().unwrap().to_string_lossy();
     println!("Compiling {}...", file);
-    let mut cargo_args = vec!["run".to_string(), "--".to_string(), "--file".to_string(), file.to_string()];
+    let mut cargo_args = vec![
+        "run".to_string(),
+        "--bin".to_string(),
+        "Errand".to_string(),
+        "--".to_string(),
+        "--file".to_string(),
+        file.to_string(),
+    ];
     match arch {
         Some(Arch::Arm) => {
             cargo_args.insert(1, "--target".to_string());
@@ -91,6 +98,7 @@ fn compile(file: &str, arch: &Option<Arch>) -> Result<(), String> {
         }
         None => {}
     }
+    println!("Running cargo with args: {:?}", cargo_args);
     let status = Command::new("cargo")
         .args(&cargo_args)
         .status()
@@ -98,8 +106,8 @@ fn compile(file: &str, arch: &Option<Arch>) -> Result<(), String> {
     if !status.success() {
         return Err("Compilation failed".to_string());
     }
-    println!("Linking {}.bin...", file);
-    let bin_file = format!("{}.bin", file);
+    let bin_file = format!("{}.bin", file.strip_suffix(".err").unwrap_or(file));
+    println!("Linking {}...", bin_file);
     if !Path::new(&bin_file).exists() {
         return Err(format!("Expected binary file '{}' not found", bin_file));
     }
