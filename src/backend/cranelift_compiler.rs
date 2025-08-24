@@ -258,8 +258,7 @@ impl CraneliftCompiler {
             (cranelift_codegen::isa::TargetIsa::triple(&*cranelift_native::builder().unwrap().finish(settings::Flags::new(settings::builder())).unwrap()).architecture, cranelift_codegen::isa::TargetIsa::triple(&*cranelift_native::builder().unwrap().finish(settings::Flags::new(settings::builder())).unwrap()).operating_system)
         };
 
-        let ffi_functions = if format!("{}", arch) == "aarch64" && format!("{}", os) == "darwin" {
-            // On aarch64-apple-darwin, always use the 8x i64 signature for printf
+        let mut ffi_functions = if format!("{}", arch) == "aarch64" && format!("{}", os) == "darwin" {
             vec![
                 ("printf", vec![types::I64; 9], types::I32, cranelift_module::Linkage::Import),
                 ("malloc", vec![types::I64], types::I64, cranelift_module::Linkage::Import),
@@ -278,7 +277,27 @@ impl CraneliftCompiler {
                 ("strcmp", vec![types::I64, types::I64], types::I32, cranelift_module::Linkage::Import),
             ]
         };
-        
+
+        // Add built-in pseudo intrinsics for memory load/store
+        // _mem_load: (I64, I64) -> I64
+        // _mem_store: (I64, I64, I64) -> ()
+        {
+            let mut sig = cranelift_codegen::ir::Signature::new(cranelift_codegen::isa::CallConv::SystemV);
+            sig.params.push(AbiParam::new(types::I64)); // ptr
+            sig.params.push(AbiParam::new(types::I64)); // offset
+            sig.returns.push(AbiParam::new(types::I64));
+            self.function_signatures.insert("_mem_load".to_string(), sig.clone());
+            self.functions.insert("_mem_load".to_string(), cranelift_module::FuncId::from_u32(0));
+        }
+        {
+            let mut sig = cranelift_codegen::ir::Signature::new(cranelift_codegen::isa::CallConv::SystemV);
+            sig.params.push(AbiParam::new(types::I64)); // ptr
+            sig.params.push(AbiParam::new(types::I64)); // offset
+            sig.params.push(AbiParam::new(types::I64)); // value
+            self.function_signatures.insert("_mem_store".to_string(), sig.clone());
+            self.functions.insert("_mem_store".to_string(), cranelift_module::FuncId::from_u32(0));
+        }
+
         for (name, param_types, return_type, linkage) in ffi_functions {
             let mut sig = cranelift_codegen::ir::Signature::new(cranelift_codegen::isa::CallConv::SystemV);
             for param_type in &param_types {
@@ -812,6 +831,28 @@ impl CraneliftCompiler {
                             Ok(builder.ins().iconst(types::I32, 0))
                         }
                     }
+                } else if id.name == "_mem_load" {
+                    // _mem_load(ptr, offset) -> value
+                    if compiled_args.len() != 2 {
+                        return Err("_mem_load expects 2 arguments (pointer, offset)".to_string());
+                    }
+                    let ptr_val = compiled_args[0];
+                    let offset_val = compiled_args[1];
+                    // Both are i64, so just add
+                    let ptr_with_offset = builder.ins().iadd(ptr_val, offset_val);
+                    let loaded = builder.ins().load(types::I64, cranelift_codegen::ir::MemFlags::new(), ptr_with_offset, 0);
+                    Ok(loaded)
+                } else if id.name == "_mem_store" {
+                    // _mem_store(ptr, offset, value)
+                    if compiled_args.len() != 3 {
+                        return Err("_mem_store expects 3 arguments (pointer, offset, value)".to_string());
+                    }
+                    let ptr_val = compiled_args[0];
+                    let offset_val = compiled_args[1];
+                    let value_val = compiled_args[2];
+                    let ptr_with_offset = builder.ins().iadd(ptr_val, offset_val);
+                    builder.ins().store(cranelift_codegen::ir::MemFlags::new(), value_val, ptr_with_offset, 0);
+                    Ok(builder.ins().iconst(types::I64, 0))
                 } else {
                     // Regular function call (non-variadic)
                     let signature = self.function_signatures.get(&id.name)
