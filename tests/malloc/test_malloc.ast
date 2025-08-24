@@ -1,0 +1,5 @@
+{ fn my_malloc_main() { { (ptr::Any Assignment malloc(4::Int)); _mem_store(ptr::Any, 0::Int, 42::Int); printf("Pointer: %p
+"::String, ptr::Any); (val::Any Assignment _mem_load(ptr::Any, 0::Int)); printf("Value: %d
+"::String, val::Any); free(ptr::Any); printf("Pointer after free: %p
+"::String, ptr::Any); printf("Use after free :O %d
+"::String, _mem_load(ptr::Any, 0::Int)) } }; my_malloc_main() }
