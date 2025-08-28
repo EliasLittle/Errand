@@ -3,6 +3,7 @@ use Errand::frontend::parser::Parser;
 use Errand::frontend::resolver::Resolver;
 use Errand::frontend::type_inference::TypeInferencer;
 use Errand::frontend::ast::Program;
+use Errand::frontend::typeof_eval::TypeofEvaluator;
 use Errand::backend::interpreter::Interpreter;
 use Errand::backend::ir_lowering::IRLoweringPass;
 
@@ -67,6 +68,11 @@ fn main() {
     let typed_program = type_inferencer.infer_program(&lowered).expect("Type inference failed");
     print_ast(file_path, "tast", &typed_program); // Print inferred program
 
+    // Evaluate typeof calls
+    let typeof_evaluator = TypeofEvaluator;
+    let typeof_evaluated_program = typeof_evaluator.eval_program(&typed_program);
+    print_ast(file_path, "typeof", &typeof_evaluated_program);
+
     /*
 
     let mut resolver = Resolver::new();
@@ -96,7 +102,7 @@ fn main() {
     if clif_mode {
         println!("Generating CLIF IR");
         // Just generate CLIF IR and write to file
-        match ir_lowering.generate_clif(&typed_program) {
+        match ir_lowering.generate_clif(&typeof_evaluated_program) {
             Ok(clif_ir) => {
                 println!("Successfully generated CLIF IR");
                 
@@ -119,7 +125,7 @@ fn main() {
         }
     } else {
         // Compile the entire program (including function definitions)
-        match ir_lowering.lower_to_cranelift(&typed_program) {
+        match ir_lowering.lower_to_cranelift(&typeof_evaluated_program) {
             Ok(compiled_code) => {
                 println!("Successfully compiled to machine code ({} bytes)", compiled_code.len());
                 
