@@ -257,7 +257,7 @@ impl Interpreter {
 
     fn eval_expression(&mut self, expr: &Expression) -> Result<Value, ControlFlow<Value, String>> {
         let result = match expr {
-            Expression::Int(_) | Expression::Float(_) | Expression::Boolean(_) | Expression::String(_) => self.eval_literal(expr),
+            Expression::Int(_) | Expression::Float(_) | Expression::Boolean(_) | Expression::String(_) | Expression::Symbol(_) => self.eval_literal(expr),
             Expression::Identifier { id, type_expr } => self.eval_identifier(id, type_expr),
             Expression::UnaryOp { operator, operand } => self.eval_unary_op(operator, operand),
             Expression::BinaryOp { operator, left, right } => self.eval_binary_op(operator, left, right),
@@ -296,6 +296,7 @@ impl Interpreter {
             Expression::Float(n) => Ok(Value::Float(*n)),
             Expression::Boolean(b) => Ok(Value::Boolean(*b)),
             Expression::String(s) => Ok(Value::String(s.clone())),
+            Expression::Symbol(s) => Ok(Value::String(s.clone())),
             _ => Err(ControlFlow::Err(format!("Cannot convert expression to value: {:?}", expr)))
         }
     }

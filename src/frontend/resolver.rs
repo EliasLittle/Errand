@@ -40,7 +40,7 @@ impl Resolver {
 
     fn resolve_expr(&mut self, expr: &Expression) -> Result<(), String> {
         match expr {
-            Expression::Int(_) | Expression::Float(_) | Expression::Boolean(_) | Expression::String(_) => Ok(()),
+            Expression::Int(_) | Expression::Float(_) | Expression::Boolean(_) | Expression::String(_) | Expression::Symbol(_) => Ok(()),
             Expression::Identifier { id, type_expr: _ } => self.resolve_identifier(id),
             Expression::UnaryOp { operand, .. } => self.resolve_expr(operand),
             Expression::BinaryOp { left, right, .. } => {

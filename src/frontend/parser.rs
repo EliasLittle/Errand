@@ -247,6 +247,7 @@ impl Parser {
     fn inner_primary(&mut self) -> Result<Expression, String> {
         println!("Parsing inner primary| current:{:?}", self.current_type());
         match self.current_type() {
+            Some(TokenType::Colon) => self.symbol(),
             Some(TokenType::LParen) => self.parenthesized_expression(),
             Some(TokenType::Int(n)) => self.literal(&TokenType::Int(*n)),
             Some(TokenType::Float(n)) => self.literal(&TokenType::Float(*n)),
@@ -303,6 +304,16 @@ impl Parser {
         } else {
             println!("Identifier");
             Ok(Expression::Identifier { id, type_expr })
+        }
+    }
+
+    fn symbol(&mut self) -> Result<Expression, String> {
+        self.expect(&TokenType::Colon)?;
+        if let Some(TokenType::Identifier(s)) = self.current_type().cloned() {
+            self.bump();
+            Ok(Expression::Symbol(s))
+        } else {
+            Err("Expected identifier after ':' for symbol".to_string())
         }
     }
 

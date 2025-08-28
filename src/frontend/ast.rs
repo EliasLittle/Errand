@@ -6,6 +6,7 @@ pub enum Expression {
     Float(f64),
     Boolean(bool),
     String(String),
+    Symbol(String),
     Identifier {
         id: Id,
         type_expr: Option<TypeExpression>,
@@ -65,7 +66,7 @@ pub enum Expression {
     */
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct Id {
     pub name: String,
 }
@@ -129,7 +130,7 @@ pub struct MatchCase {
 }*/
 
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub enum TypeExpression {
     Int,
     Float,
@@ -162,6 +163,7 @@ impl fmt::Display for Expression {
             Expression::Float(n) => write!(f, "{}::Float", n),
             Expression::Boolean(b) => write!(f, "{}::Bool", b),
             Expression::String(s) => write!(f, "\"{}\"::String", s),
+            Expression::Symbol(s) => write!(f, ":{}", s),
             Expression::Identifier { id, type_expr } => match type_expr {
                 Some(type_expr) => write!(f, "{}::{}", id.name, type_expr.name()),
                 None => write!(f, "{}::Any", id.name),
