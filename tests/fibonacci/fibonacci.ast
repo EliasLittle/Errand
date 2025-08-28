@@ -1,0 +1,2 @@
+{ fn fibonacci(n::Any) { { if (n::Any LessThanEqual 1::Int) { { return n::Any } }; return (fibonacci((n::Any Subtract 1::Int)) Add fibonacci((n::Any Subtract 2::Int))) } }; printf("%d
+"::String, fibonacci(35::Int)) }
