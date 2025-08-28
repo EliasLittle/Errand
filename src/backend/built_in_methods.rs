@@ -133,4 +133,39 @@ pub fn emit_getfield(
         _ => types::I64, // fallback for unsupported types
     };
     builder.ins().load(cranelift_type, MemFlags::new(), struct_ptr, offset)
+}
+
+pub fn emit_ffi(
+    builder: &mut FunctionBuilder,
+    func_name: &str,
+    compiled_args: &[Value],
+    module: &mut cranelift_object::ObjectModule,
+    func: &mut cranelift_codegen::ir::Function,
+) -> Value {
+    use cranelift_module::{Module, FuncOrDataId};
+    let func_id = match module.get_name(func_name) {
+        Some(FuncOrDataId::Func(id)) => id,
+        _ => {
+            // If not found, declare it as an imported function with all I64 params and I64 return
+            let mut sig = module.make_signature();
+            for _ in 0..compiled_args.len() {
+                sig.params.push(AbiParam::new(types::I64));
+            }
+            sig.returns.push(AbiParam::new(types::I64));
+            module.declare_function(func_name, cranelift_module::Linkage::Import, &sig).unwrap()
+        }
+    };
+    let func_ref = module.declare_func_in_func(func_id, func);
+    let sig_ref = func.dfg.ext_funcs[func_ref].signature;
+    let params = &mut func.dfg.signatures[sig_ref].params;
+    params.clear();
+    for _ in 0..compiled_args.len() {
+        params.push(AbiParam::new(types::I64));
+    }
+    let call_inst = builder.ins().call(func_ref, compiled_args);
+    let results = builder.inst_results(call_inst);
+    if let Some(&return_value) = results.first() {
+        return return_value;
+    }
+    builder.ins().iconst(types::I64, 0)
 } 

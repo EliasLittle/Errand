@@ -47,8 +47,7 @@ impl CraneliftCompiler {
     }
 
     pub fn compile_program(&mut self, program: &Program) -> Result<Vec<u8>, String> {
-        // --- Inject automatic constructors for all struct definitions ---
-        let mut new_expressions = Vec::new();
+        // --- Populate struct registry for all struct definitions ---
         for expr in &program.expressions {
             if let Expression::StructDefinition { id, fields } = expr {
                 // --- Populate struct registry ---
@@ -76,49 +75,17 @@ impl CraneliftCompiler {
                 let struct_size = offset;
                 let backend_struct = BackendStruct::new(&id.name, backend_fields, struct_size);
                 self.struct_registry.insert(id.name.clone(), backend_struct);
-                // --- End struct registry population ---
-                // Generate constructor parameters from fields
-                let constructor_params: Vec<Parameter> = fields.iter().map(|f| Parameter {
-                    id: f.id.clone(),
-                    type_expr: Some(f.field_type.clone()),
-                }).collect();
-                // The body of the constructor: call 'new' with the struct name (as a symbol) and all field parameters
-                let mut new_args = vec![
-                    Expression::Symbol(id.name.clone())
-                ];
-                new_args.extend(fields.iter().map(|f| {
-                    Expression::Identifier { id: f.id.clone(), type_expr: Some(f.field_type.clone()) }
-                }));
-                let struct_instance = Expression::FunctionCall {
-                    id: Id { name: "new".to_string() },
-                    arguments: new_args,
-                };
-                let constructor = Expression::FunctionDefinition {
-                    id: id.clone(),
-                    parameters: constructor_params,
-                    body: Box::new(Expression::Return(Some(Box::new(struct_instance)))),
-                    return_type_expr: Some(TypeExpression::Struct(id.clone(), None)),
-                };
-                new_expressions.push(expr.clone());
-                new_expressions.push(constructor);
-            } else {
-                new_expressions.push(expr.clone());
             }
         }
-        let program = Program { expressions: new_expressions };
-        // --- End constructor injection ---
+        // --- End struct registry population ---
         // First pass: collect function definitions and create signatures
-        self.collect_function_definitions(&program)?;
-        
+        self.collect_function_definitions(program)?;
         // Initialize the module
         self.initialize_module()?;
-        
         // Second pass: compile all functions
-        self.compile_all_functions(&program)?;
-        
+        self.compile_all_functions(program)?;
         // Third pass: compile the main function
-        let mut main_function = self.lower_to_clif(&program)?;
-        
+        let mut main_function = self.lower_to_clif(program)?;
         // Add main function to module and compile everything
         let _main_func_ref = self.add_function_to_module("main", &mut main_function, &[])?;
         self.finalize_module()
@@ -841,7 +808,30 @@ impl CraneliftCompiler {
                         field_symbol,
                         struct_type_name,
                     ));
+                } else if id.name == "ffi" {
+                    if arguments.is_empty() {
+                        return Err("'ffi' expects at least a function name argument".to_string());
+                    }
+                    // Extract the function name from the first argument
+                    let func_name = match &arguments[0] {
+                        Expression::String(s) => s.as_str(),
+                        Expression::Symbol(s) => s.as_str(),
+                        _ => return Err("First argument to 'ffi' must be a string or symbol".to_string()),
+                    };
+                    // Compile the rest of the arguments
+                    let ffi_args: Vec<Value> = compiled_args.iter().skip(1).cloned().collect();
+                    let module = self.module.as_mut().unwrap();
+                    let func_ptr: *mut _ = &mut *builder.func;
+                    // SAFETY: func_ptr is valid for the duration of this call
+                    return Ok(crate::backend::built_in_methods::emit_ffi(
+                        builder,
+                        func_name,
+                        &ffi_args,
+                        module,
+                        unsafe { &mut *func_ptr },
+                    ));
                 }
+                println!("Function table: {:?}", self.functions);
                 // Lookup user-defined overloaded functions
                 if let Some(overloads) = self.functions.get(&id.name) {
                     if let Some(func_id) = overloads.get(&arg_types) {
