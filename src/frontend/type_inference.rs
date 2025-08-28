@@ -228,32 +228,42 @@ impl TypeInferencer {
             Expression::Boolean(_) => Ok(expr.clone()),
             Expression::String(_) => Ok(expr.clone()),
             Expression::Identifier { id, type_expr } => {
+                println!("Typing | Identifier: {:?} with type_expr {:?}", id.name, type_expr);
+                println!("Type environment: {:?}", self.env);
                 let env_type = self.env.get_type(&id.name);
-
+                println!("Typing | Identifier: {:?} with env_type {:?}", id.name, env_type);
                 if let Some(id_type_expr) = type_expr {
                     match env_type {
                         Some(ty) => {
                             if ty != &Type::from(id_type_expr.clone()) {
                                 return Err(format!("Type mismatch for identifier: {:?}", id.name));
                             } else {
-                                Ok(expr.clone())
+                                // Always return identifier with type_expr set from environment if available
+                                return Ok(Expression::Identifier {
+                                    id: id.clone(),
+                                    type_expr: Some(TypeExpression::from(ty.clone())),
+                                });
                             }
                         }
                         None => {
                             println!("Typing | Missed type for identifier: {:?} in initial pass", id.name);
                             self.env.set_type(id.name.clone(), Type::from(id_type_expr.clone()));
-                            Ok(expr.clone())
+                            return Ok(Expression::Identifier {
+                                id: id.clone(),
+                                type_expr: Some(id_type_expr.clone()),
+                            });
                         }
                     }
                 } else {
                     match env_type {
                         Some(ty) => {
-                            Ok(Expression::Identifier { id: id.clone(), type_expr: Some(TypeExpression::from(ty.clone())) })
+                            // Always return identifier with type_expr set from environment if available
+                            return Ok(Expression::Identifier { id: id.clone(), type_expr: Some(TypeExpression::from(ty.clone())) });
                         }
                         None => {
                             let ty = self.env.fresh_type_var();
                             self.env.set_type(id.name.clone(), ty.clone());
-                            Ok(Expression::Identifier { id: id.clone(), type_expr: Some(TypeExpression::from(ty.clone())) })
+                            return Ok(Expression::Identifier { id: id.clone(), type_expr: Some(TypeExpression::from(ty.clone())) });
                         }
                     }
                 }
@@ -261,29 +271,42 @@ impl TypeInferencer {
             Expression::BinaryOp { operator, left, right } => {
                 let left_expr = self.infer_expression(left)?;
                 let right_expr = self.infer_expression(right)?;
-                
-                // Add constraints based on operator
-                match operator {
-                    BinaryOperator::Assignment => {
-                        // Variable assignment - set the type of the identifier
-                        if let Expression::Identifier { id, .. } = &left_expr {
-                            let right_type = self.env.type_from_expr(right_expr.clone());
-                            self.env.set_type(id.name.clone(), right_type);
+                // Special handling for Assignment: update the left identifier's type annotation in the AST
+                if let BinaryOperator::Assignment = operator {
+                    if let Expression::Identifier { id, .. } = &left_expr {
+                        let right_type = self.env.type_from_expr(right_expr.clone());
+                        let current_type = self.env.get_type(&id.name);
+                        // Only set type if right_type is not Any, or if variable has no type yet
+                        if right_type != Type::Any || current_type.is_none() {
+                            self.env.set_type(id.name.clone(), right_type.clone());
                         }
+                        println!("Type environment: {:?}", self.env);
+                        // Update the left_expr to have the correct type annotation
+                        println!("Typing | Assignment: {:?} := {:?}", id.name, &right_type);
+                        let left_expr = Expression::Identifier {
+                            id: id.clone(),
+                            type_expr: Some(TypeExpression::from(right_type)),
+                        };
+                        return Ok(Expression::BinaryOp {
+                            operator: operator.clone(),
+                            left: Box::new(left_expr),
+                            right: Box::new(right_expr),
+                        });
                     }
+                }
+                // --- Existing logic for other BinaryOperators ---
+                match operator {
                     BinaryOperator::Add | BinaryOperator::Subtract 
                     | BinaryOperator::Multiply | BinaryOperator::Divide => {
                         // Numeric operations - both operands must be numeric
                         let numeric_types: Vec<Type> = 
                             vec![Type::Int, Type::Float];
-                        
                         if let Some(left_type) = self.env.get_type(&format!("{:?}", left)) {
                             self.env.add_constraint(TypeConstraint::Subset(
                                 left_type.clone(),
                                 Type::Union(numeric_types.clone())
                             ));
                         }
-                        
                         if let Some(right_type) = self.env.get_type(&format!("{:?}", right)) {
                             self.env.add_constraint(TypeConstraint::Subset(
                                 right_type.clone(),
@@ -305,7 +328,6 @@ impl TypeInferencer {
                     }
                     _ => {}
                 }
-                
                 Ok(Expression::BinaryOp {
                     operator: operator.clone(),
                     left: Box::new(left_expr),
@@ -314,13 +336,31 @@ impl TypeInferencer {
             }
             Expression::FunctionCall { id, arguments } => {
                 // Infer types for arguments
+                println!("Typing | FunctionCall: {:?} with args {:?}", id.name, arguments);
                 let typed_args = arguments.iter()
                     .map(|arg| self.infer_expression(arg))
                     .collect::<Result<Vec<_>, _>>()?;
-                
+                // Special handling for getfield: try to infer the field type
+                if id.name == "getfield" && typed_args.len() >= 2 {
+                    // First argument: struct instance
+                    // Second argument: field symbol
+                    if let Expression::Identifier { id: struct_id, .. } = &typed_args[0] {
+                        if let Some(Type::Struct { name: _, fields }) = self.env.get_type(&struct_id.name) {
+                            if let Expression::Symbol(field_name) = &typed_args[1] {
+                                if let Some(field_ty) = fields.get(field_name) {
+                                    // Attach the type as a type_expr to the getfield call
+                                    return Ok(Expression::FunctionCall {
+                                        id: id.clone(),
+                                        arguments: typed_args,
+                                        // Optionally, you could add a type_expr field to FunctionCall if you want to annotate it
+                                    });
+                                }
+                            }
+                        }
+                    }
+                }
                 // For multiple dispatch, we don't constrain based on function type
                 // Instead, we track possible function types that could match
-                
                 Ok(Expression::FunctionCall {
                     id: id.clone(),
                     arguments: typed_args,
@@ -357,6 +397,14 @@ impl TypeInferencer {
                 //self.env.set_type(id.name.clone(), value_type);
                 Ok(Expression::VariableAssignment { id: id.clone(), value: Box::new(value_type) })
             }*/
+            Expression::Block(exprs) => {
+                let mut typed_exprs = Vec::with_capacity(exprs.len());
+                for expr in exprs {
+                    let typed = self.infer_expression(expr)?;
+                    typed_exprs.push(Box::new(typed));
+                }
+                Ok(Expression::Block(typed_exprs))
+            }
             // Handle other expression types...
             _ => Ok(expr.clone()),
         }
