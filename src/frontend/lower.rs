@@ -5,8 +5,39 @@ use crate::frontend::ast::*;
 impl Program {
     pub fn lower(&self) -> Program {
         println!("------ Lowering program ------");
+        // 1. Find all struct definitions and generate constructor functions
+        let mut constructor_functions = Vec::new();
+        for expr in &self.expressions {
+            if let Expression::StructDefinition { id, fields } = expr {
+                // Build parameter list from fields
+                let parameters: Vec<Parameter> = fields.iter().map(|f| Parameter {
+                    id: f.id.clone(),
+                    type_expr: Some(f.field_type.clone()),
+                }).collect();
+                // Build arguments for new(:StructName, ...fields...)
+                let mut new_args = vec![Expression::Symbol(id.name.clone())];
+                new_args.extend(fields.iter().map(|f| Expression::Identifier {
+                    id: f.id.clone(),
+                    type_expr: Some(f.field_type.clone()),
+                }));
+                let body = Box::new(Expression::Return(Some(Box::new(Expression::FunctionCall {
+                    id: Id { name: "new".to_string() },
+                    arguments: new_args,
+                }))));
+                let constructor = Expression::FunctionDefinition {
+                    id: id.clone(),
+                    parameters,
+                    body,
+                    return_type_expr: Some(TypeExpression::Struct(id.clone(), None)),
+                };
+                constructor_functions.push(constructor);
+            }
+        }
+        // 2. Lower the rest of the program
         let lowered = Program {
-            expressions: self.expressions.iter().map(|expr| self.lower_expression(expr.clone())).collect(),
+            expressions: constructor_functions.into_iter()
+                .chain(self.expressions.iter().map(|expr| self.lower_expression(expr.clone())))
+                .collect(),
         };
         println!("------ Program lowered ------");
         lowered
@@ -129,7 +160,19 @@ impl Program {
 
 fn lower_field_access(left: Box<Expression>, right: Box<Expression>) -> Expression {
     println!("------ Lowering field access ------");
-    Expression::FunctionCall { id: Id { name: "getfield".to_string() }, arguments: vec![*left, *right] }
+    let field_symbol = match *right {
+        Expression::Identifier { id, .. } => Expression::Symbol(id.name),
+        other => panic!("Dot field access expects an identifier as the field name, got: {:?}", other),
+    };
+    // Instead of passing the struct type directly, pass typeof(left) as the third argument
+    let typeof_call = Expression::FunctionCall {
+        id: Id { name: "typeof".to_string() },
+        arguments: vec![(*left).clone()],
+    };
+    Expression::FunctionCall {
+        id: Id { name: "getfield".to_string() },
+        arguments: vec![*left, field_symbol, typeof_call],
+    }
 }
 
 fn lower_function_definition(id: Id, parameters: Vec<Parameter>, body: Box<Expression>, return_type_expr: Option<TypeExpression>) -> Expression {
