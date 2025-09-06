@@ -1,3 +1,3 @@
-{ fn fibonacci(n::Any) { { if (n::Any LessThanEqual 1::Int) { { return n::Any } }; return (fibonacci((n::Any Subtract 1::Int)) Add fibonacci((n::Any Subtract 2::Int))) } }; { (_tmp_str_0::String Assignment malloc((strlen("%d
-"::String) Add 1::Int))); strcpy(_tmp_str_0::String, "%d
+{ fn printf(a::Int) -> Int { { return 0::Int } }; fn malloc(a::Int) -> Int { { return 0::Int } }; fn free(a::Int) -> Int { { return 0::Int } }; fn strlen(a::Int) -> Int { { return 0::Int } }; fn strcpy(a::Int, b::Int) -> Int { { return 0::Int } }; fn strcmp(a::Int, b::Int) -> Int32 { { return 0::Int } }; fn strlen(a::String) { { return strlen(as_ptr(a::Any)) } }; fn strcpy(a::String, b::String) { { return strcpy(as_ptr(a::Any), as_ptr(b::Any)) } }; fn free(a::String) { { return free(as_ptr(a::Any)) } }; fn fibonacci(n::Any) { { if (n::Any LessThanEqual 1::Int) { { return n::Any } }; return (fibonacci((n::Any Subtract 1::Int)) Add fibonacci((n::Any Subtract 2::Int))) } }; { (_tmp_str_0::String Assignment as_string(malloc((strlen("%d
+"::String) Add 1::Int)))); strcpy(_tmp_str_0::String, "%d
 "::String); printf(_tmp_str_0::String, fibonacci(35::Int)); free(_tmp_str_0::String) } }
