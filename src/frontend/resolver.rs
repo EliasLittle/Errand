@@ -54,7 +54,7 @@ impl Resolver {
                 }
                 Ok(())
             },
-            Expression::FunctionDefinition { id, parameters, body, return_type_expr } => {
+            Expression::FunctionDefinition { id, parameters, body, return_type_expr, foreign: _ } => {
                 // Declare the function name in the current scope
                 self.declare(id)?;
                 self.define(id);

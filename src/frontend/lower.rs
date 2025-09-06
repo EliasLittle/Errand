@@ -26,9 +26,10 @@ impl Program {
                 }))));
                 let constructor = Expression::FunctionDefinition {
                     id: id.clone(),
-                    parameters,
-                    body,
+                    parameters: parameters.clone(),
+                    body: Box::new(Expression::Block(vec![])),
                     return_type_expr: Some(TypeExpression::Struct(id.clone(), None)),
+                    foreign: false,
                 };
                 constructor_functions.push(constructor);
             }
@@ -58,7 +59,7 @@ impl Program {
                     },
                 }
             },
-            Expression::FunctionDefinition { id, parameters, body, return_type_expr } => {
+            Expression::FunctionDefinition { id, parameters, body, return_type_expr, foreign: _ } => {
                 let lowered_body = Box::new(self.lower_expression(*body));
                 lower_function_definition(id, parameters, lowered_body, return_type_expr)
             },
@@ -76,15 +77,20 @@ impl Program {
                             operator: BinaryOperator::Assignment,
                             left: Box::new(Expression::Identifier { id: tmp_id.clone(), type_expr: Some(TypeExpression::String) }),
                             right: Box::new(Expression::FunctionCall {
-                                id: Id { name: "malloc".to_string() },
+                                id: Id { name: "as_string".to_string() },
                                 arguments: vec![
-                                    Expression::BinaryOp {
-                                        operator: BinaryOperator::Add,
-                                        left: Box::new(Expression::FunctionCall {
-                                            id: Id { name: "strlen".to_string() },
-                                            arguments: vec![Expression::String(s.clone())],
-                                        }),
-                                        right: Box::new(Expression::Int(1)),
+                                    Expression::FunctionCall {
+                                        id: Id { name: "malloc".to_string() },
+                                        arguments: vec![
+                                            Expression::BinaryOp {
+                                                operator: BinaryOperator::Add,
+                                                left: Box::new(Expression::FunctionCall {
+                                                    id: Id { name: "strlen".to_string() },
+                                                    arguments: vec![Expression::String(s.clone())],
+                                                }),
+                                                right: Box::new(Expression::Int(1)),
+                                            }
+                                        ],
                                     }
                                 ],
                             }),
@@ -183,7 +189,7 @@ fn lower_function_definition(id: Id, parameters: Vec<Parameter>, body: Box<Expre
     
     if has_return {
         // If it already has a return, just return the function as-is
-        Expression::FunctionDefinition { id, parameters, body, return_type_expr }
+        Expression::FunctionDefinition { id, parameters, body, return_type_expr, foreign: false }
     } else {
         // If no return statement, add an implicit return at the end
         let implicit_return = match &return_type_expr {
@@ -210,7 +216,8 @@ fn lower_function_definition(id: Id, parameters: Vec<Parameter>, body: Box<Expre
             id, 
             parameters, 
             body: Box::new(new_body), 
-            return_type_expr 
+            return_type_expr,
+            foreign: false,
         }
     }
 }

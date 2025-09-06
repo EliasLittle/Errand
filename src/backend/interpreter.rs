@@ -204,10 +204,11 @@ impl From<Value> for Expression {
             Value::Boolean(b) => Expression::Boolean(b),
             Value::String(s) => Expression::String(s),
             Value::Function(f) => Expression::FunctionDefinition {
-                id: Id { name: f.name },
+                id: Id { name: f.name.clone() },
                 parameters: f.parameters.iter().map(|p| Parameter { id: Id { name: p.clone() }, type_expr: None }).collect(),
-                body: Box::new(f.body),
+                body: Box::new(f.body.clone()),
                 return_type_expr: None,
+                foreign: false,
             },
             Value::Type(t) => Expression::StructDefinition {
                 id: Id { name: t.name },
@@ -262,7 +263,7 @@ impl Interpreter {
             Expression::UnaryOp { operator, operand } => self.eval_unary_op(operator, operand),
             Expression::BinaryOp { operator, left, right } => self.eval_binary_op(operator, left, right),
             Expression::FunctionCall { id, arguments } => self.eval_call(id, arguments),
-            Expression::FunctionDefinition { id, parameters, body, return_type_expr } => self.eval_function_definition(id, parameters, body, return_type_expr),
+            Expression::FunctionDefinition { id, parameters, body, return_type_expr, foreign: _ } => self.eval_function_definition(id, parameters, body, return_type_expr),
             Expression::StructDefinition { id, fields } => self.eval_struct_definition(id, fields),
             Expression::If { condition, then_branch, else_branch } => self.eval_if(condition, then_branch, else_branch),
             Expression::While { condition, body } => self.eval_while(condition, body),

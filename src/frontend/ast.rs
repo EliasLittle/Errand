@@ -31,6 +31,7 @@ pub enum Expression {
         parameters: Vec<Parameter>,
         body: Box<Expression>,
         return_type_expr: Option<TypeExpression>,
+        foreign: bool,
     },
     StructDefinition {
         id: Id,
@@ -133,6 +134,7 @@ pub struct MatchCase {
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub enum TypeExpression {
     Int,
+    Int32,
     Float,
     Bool,
     String,
@@ -144,6 +146,7 @@ impl TypeExpression {
     pub fn name(&self) -> String {
         match self {
             TypeExpression::Int => "Int".to_string(),
+            TypeExpression::Int32 => "Int32".to_string(),
             TypeExpression::Float => "Float".to_string(),
             TypeExpression::Bool => "Bool".to_string(),
             TypeExpression::String => "String".to_string(),
@@ -174,12 +177,13 @@ impl fmt::Display for Expression {
                 let args: Vec<String> = arguments.iter().map(|arg| format!("{}", arg)).collect();
                 write!(f, "{}({})", id.name, args.join(", "))
             },
-            Expression::FunctionDefinition { id, parameters, body, return_type_expr } => {
+            Expression::FunctionDefinition { id, parameters, body, return_type_expr, foreign } => {
                 let params: Vec<String> = parameters.iter().map(|param| format!("{}", param)).collect();
                 let body_str = format!("{}", *body);
+                let fn_kw = if *foreign { "foreign fn" } else { "fn" };
                 match return_type_expr {
-                    Some(return_type_expr) => write!(f, "fn {}({}) -> {} {{ {} }}", id.name, params.join(", "), return_type_expr.name(), body_str),
-                    None => write!(f, "fn {}({}) {{ {} }}", id.name, params.join(", "), body_str),
+                    Some(return_type_expr) => write!(f, "{} {}({}) -> {} {{ {} }}", fn_kw, id.name, params.join(", "), return_type_expr.name(), body_str),
+                    None => write!(f, "{} {}({}) {{ {} }}", fn_kw, id.name, params.join(", "), body_str),
                 }
             },
             Expression::StructDefinition { id, fields } => {
@@ -245,6 +249,7 @@ impl fmt::Display for TypeExpression {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         match self {
             TypeExpression::Int => write!(f, "Int"),
+            TypeExpression::Int32 => write!(f, "Int32"),
             TypeExpression::Float => write!(f, "Float"),
             TypeExpression::Bool => write!(f, "Bool"),
             TypeExpression::String => write!(f, "String"),

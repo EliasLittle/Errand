@@ -48,11 +48,12 @@ impl TypeofEvaluator {
             },
             Expression::Return(expr) => Expression::Return(expr.as_ref().map(|e| Box::new(self.eval_expression(e)))),
             Expression::Print(expr) => Expression::Print(Box::new(self.eval_expression(expr))),
-            Expression::FunctionDefinition { id, parameters, body, return_type_expr } => Expression::FunctionDefinition {
+            Expression::FunctionDefinition { id, parameters, body, return_type_expr, foreign: _ } => Expression::FunctionDefinition {
                 id: id.clone(),
                 parameters: parameters.clone(),
                 body: Box::new(self.eval_expression(body)),
                 return_type_expr: return_type_expr.clone(),
+                foreign: false,
             },
             _ => expr.clone(),
         }
