@@ -4,6 +4,7 @@ use super::ast::{Expression, Program, BinaryOperator, TypeExpression, Id, Parame
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Type {
     Int,
+    Int32,
     Float,
     Bool,
     String,
@@ -32,6 +33,7 @@ impl From<TypeExpression> for Type {
     fn from(ty: TypeExpression) -> Self {
         match ty {
             TypeExpression::Int => Type::Int,
+            TypeExpression::Int32 => Type::Int32,
             TypeExpression::Float => Type::Float,
             TypeExpression::Bool => Type::Bool,
             TypeExpression::String => Type::String,
@@ -54,6 +56,7 @@ impl From<Type> for TypeExpression {
     fn from(ty: Type) -> Self {
         match ty {
             Type::Int => TypeExpression::Int,
+            Type::Int32 => TypeExpression::Int32,
             Type::Float => TypeExpression::Float,
             Type::Bool => TypeExpression::Bool,
             Type::String => TypeExpression::String,
@@ -112,9 +115,16 @@ impl TypeEnvironment {
             Expression::Identifier { id, type_expr } => Type::from(type_expr.unwrap()),
             //Expression::VariableAssignment { id, value } => self.type_from_expr(*value.clone()),
             Expression::FunctionCall { id, arguments } => {
-                match self.get_type(&id.name) {
-                    Some(ty) => ty.clone(),
-                    None => Type::Any,
+                if id.name == "as_ptr" {
+                    Type::Int
+                } else if id.name == "as_string" {
+                    Type::String
+                } else {
+                    match self.get_type(&id.name) {
+                        Some(Type::Function { parameters: _, return_type }) => *return_type.clone(),
+                        Some(ty) => ty.clone(),
+                        None => Type::Any,
+                    }
                 }
             }
             _ => Type::Any,
@@ -162,7 +172,7 @@ impl TypeInferencer {
     fn collect_declarations(&mut self, program: &Program) -> Result<(), String> {
         for expr in &program.expressions {
             match expr {
-                Expression::FunctionDefinition { id, parameters, body, return_type_expr } => {
+                Expression::FunctionDefinition { id, parameters, body, return_type_expr, foreign: _ } => {
                     // Create a fresh type variable for each parameter and the return type
                     let param_types: Vec<Type> = parameters.iter()
                         .map(|_| self.env.fresh_type_var())
@@ -335,7 +345,7 @@ impl TypeInferencer {
                 })
             }
             Expression::FunctionCall { id, arguments } => {
-                // Infer types for arguments
+                // Infer types for arguments and set type_expr if missing
                 println!("Typing | FunctionCall: {:?} with args {:?}", id.name, arguments);
                 let typed_args = arguments.iter()
                     .map(|arg| self.infer_expression(arg))
@@ -366,7 +376,7 @@ impl TypeInferencer {
                     arguments: typed_args,
                 })
             }
-            Expression::FunctionDefinition { id, parameters, body, return_type_expr } => {
+            Expression::FunctionDefinition { id, parameters, body, return_type_expr, foreign: _ } => {
                 let mut typed_params = Vec::new();
                 for param in parameters {
                     let param_type = match &param.type_expr {
@@ -389,7 +399,7 @@ impl TypeInferencer {
                     Type::Function { parameters: param_types, return_type: Box::new(return_type) }
                 );  
                 */
-                Ok(Expression::FunctionDefinition { id: id.clone(), parameters: typed_params, body: body.clone(), return_type_expr: Some(TypeExpression::from(return_type)) })
+                Ok(Expression::FunctionDefinition { id: id.clone(), parameters: typed_params, body: body.clone(), return_type_expr: Some(TypeExpression::from(return_type)), foreign: false })
             }
             // TODO: This should set the type of the identifier
             /*Expression::VariableAssignment { id, value } => {

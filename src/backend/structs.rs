@@ -18,6 +18,7 @@ pub struct Struct {
 #[derive(Debug, Clone)]
 pub enum Type {
     Int,
+    Int32,
     Float,
     Bool,
     String,
