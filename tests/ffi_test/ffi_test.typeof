@@ -1,0 +1,2 @@
+{ fn test_ffi() -> Int { { (result::Any Assignment ffi("printf"::String, "Hello, World!
+"::String)); return result::Any } }; test_ffi() }

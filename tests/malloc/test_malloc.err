@@ -1,0 +1,17 @@
+fn my_malloc_main()
+    ptr = malloc(4)
+
+    _mem_store(ptr, 0, 42)
+
+    printf("Pointer: %p\n", ptr)
+    val = _mem_load(ptr, 0)
+    printf("Value: %d\n", val)
+
+    free(ptr)
+
+    printf("Pointer after free: %p\n", ptr)
+    printf("Use after free :O %d\n", _mem_load(ptr, 0))
+
+end
+
+my_malloc_main()

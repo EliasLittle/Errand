@@ -17,11 +17,4 @@ fn free(a::String)
     return free(as_ptr(a))
 end
 
-fn fibonacci(n)
-    if n <= 1
-        return n
-    end
-    return fibonacci(n - 1) + fibonacci(n - 2)
-end
-
-printf("%d\n", fibonacci(35))
+printf("Hello World!")

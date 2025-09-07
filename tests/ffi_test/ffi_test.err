@@ -1,5 +1,5 @@
 fn test_ffi()
-    result = printf("Hello, World!")
+    result = ffi("printf", "Hello, World!\n")
     return result
 end
 

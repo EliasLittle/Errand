@@ -1,0 +1,9 @@
+{ fn my_malloc_main() { { (ptr::Any Assignment malloc(4::Int)); _mem_store(ptr::Any, 0::Int, 42::Int); { (_tmp_str_0::String Assignment malloc((strlen("Pointer: %p
+"::String) Add 1::Int))); strcpy(_tmp_str_0::String, "Pointer: %p
+"::String); printf(_tmp_str_0::String, ptr::Any); free(_tmp_str_0::String) }; (val::Any Assignment _mem_load(ptr::Any, 0::Int)); { (_tmp_str_0::String Assignment malloc((strlen("Value: %d
+"::String) Add 1::Int))); strcpy(_tmp_str_0::String, "Value: %d
+"::String); printf(_tmp_str_0::String, val::Any); free(_tmp_str_0::String) }; free(ptr::Any); { (_tmp_str_0::String Assignment malloc((strlen("Pointer after free: %p
+"::String) Add 1::Int))); strcpy(_tmp_str_0::String, "Pointer after free: %p
+"::String); printf(_tmp_str_0::String, ptr::Any); free(_tmp_str_0::String) }; { (_tmp_str_0::String Assignment malloc((strlen("Use after free :O %d
+"::String) Add 1::Int))); strcpy(_tmp_str_0::String, "Use after free :O %d
+"::String); printf(_tmp_str_0::String, _mem_load(ptr::Any, 0::Int)); free(_tmp_str_0::String) }; return 0::Int } }; my_malloc_main() }

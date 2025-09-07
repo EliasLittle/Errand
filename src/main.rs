@@ -1,22 +1,24 @@
-mod frontend;
-use frontend::lexer::Lexer;
-use frontend::ast::{Program, TypeExpression};
-use frontend::parser::Parser;
-use frontend::resolver::Resolver;
-use frontend::type_inference::TypeInferencer;
-
-mod backend;
-use crate::backend::interpreter::Interpreter;
-use crate::backend::ir_lowering::IRLoweringPass;
+use Errand::frontend::lexer::Lexer;
+use Errand::frontend::parser::Parser;
+use Errand::frontend::resolver::Resolver;
+use Errand::frontend::type_inference::TypeInferencer;
+use Errand::frontend::ast::Program;
+use Errand::frontend::typeof_eval::TypeofEvaluator;
+use Errand::backend::interpreter::Interpreter;
+use Errand::backend::ir_lowering::IRLoweringPass;
 
 use std::env;
 
 fn print_ast(path: &str, extension: &str, ast: &Program) {
     println!("AST: {}", ast);
 
-    // Write the AST to a new file with '.ast' extension
+    // Write the AST to a new file with the correct extension
     if !path.is_empty() {
-        let ast_file_path = format!("{}.{}", path, extension);
+        let ast_file_path = if let Some(stripped) = path.strip_suffix(".err") {
+            format!("{}.{}", stripped, extension)
+        } else {
+            format!("{}.{}", path, extension)
+        };
         std::fs::write(&ast_file_path, format!("{}", ast)).expect("Failed to write AST to file");
         println!("AST written to: {}", ast_file_path); // Debug print statement
     }
@@ -66,6 +68,11 @@ fn main() {
     let typed_program = type_inferencer.infer_program(&lowered).expect("Type inference failed");
     print_ast(file_path, "tast", &typed_program); // Print inferred program
 
+    // Evaluate typeof calls
+    let typeof_evaluator = TypeofEvaluator;
+    let typeof_evaluated_program = typeof_evaluator.eval_program(&typed_program);
+    print_ast(file_path, "typeof", &typeof_evaluated_program);
+
     /*
 
     let mut resolver = Resolver::new();
@@ -95,13 +102,17 @@ fn main() {
     if clif_mode {
         println!("Generating CLIF IR");
         // Just generate CLIF IR and write to file
-        match ir_lowering.generate_clif(&typed_program) {
+        match ir_lowering.generate_clif(&typeof_evaluated_program) {
             Ok(clif_ir) => {
                 println!("Successfully generated CLIF IR");
                 
                 // Write the CLIF IR to a file
                 if !file_path.is_empty() {
-                    let clif_file_path = format!("{}.clif", file_path);
+                    let clif_file_path = if let Some(stripped) = file_path.strip_suffix(".err") {
+                        format!("{}.clif", stripped)
+                    } else {
+                        format!("{}.clif", file_path)
+                    };
                     std::fs::write(&clif_file_path, clif_ir)
                         .expect("Failed to write CLIF IR to file");
                     println!("CLIF IR written to: {}", clif_file_path);
@@ -114,13 +125,17 @@ fn main() {
         }
     } else {
         // Compile the entire program (including function definitions)
-        match ir_lowering.lower_to_cranelift(&typed_program) {
+        match ir_lowering.lower_to_cranelift(&typeof_evaluated_program) {
             Ok(compiled_code) => {
                 println!("Successfully compiled to machine code ({} bytes)", compiled_code.len());
                 
                 // Write the compiled code to a file
                 if !file_path.is_empty() {
-                    let bin_file_path = format!("{}.bin", file_path);
+                    let bin_file_path = if let Some(stripped) = file_path.strip_suffix(".err") {
+                        format!("{}.bin", stripped)
+                    } else {
+                        format!("{}.bin", file_path)
+                    };
                     std::fs::write(&bin_file_path, &compiled_code)
                         .expect("Failed to write compiled code to file");
                     println!("Machine code written to: {}", bin_file_path);

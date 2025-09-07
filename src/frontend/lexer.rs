@@ -27,6 +27,7 @@ pub enum TokenType {
     True,
     False,
     Function,
+    Foreign,
     Struct,
     Return,
     TypeInt,
@@ -437,6 +438,7 @@ impl Lexer {
             "true" => TokenType::True,
             "false" => TokenType::False,
             "fn" => TokenType::Function,
+            "foreign" => TokenType::Foreign,
             "struct" => TokenType::Struct,
             "int" => TokenType::TypeInt,
             "bool" => TokenType::TypeBool,
@@ -624,7 +626,11 @@ impl Lexer {
             }
         }
         if file_path != "" {
-            let output_file_path = format!("{}.lex", file_path);
+            let output_file_path = if let Some(stripped) = file_path.strip_suffix(".err") {
+                format!("{}.lex", stripped)
+            } else {
+                format!("{}.lex", file_path)
+            };
             let mut output_file = std::fs::File::create(output_file_path).expect("Unable to create file");
             for token in &tokens {
                 writeln!(output_file, "{}", token).expect("Unable to write to file");

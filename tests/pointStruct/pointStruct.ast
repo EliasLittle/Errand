@@ -1,0 +1,19 @@
+{ struct Point { x, y }; (a::Any Assignment Point(1::Int, 2::Int)); (b::Point Assignment new(:Point, 3::Int, 4::Int)); printf("'a' pointer: %p
+"::String, a::Any); printf("a.x manual (pointer): %p
+"::String, (a::Any Add 0::Int)); printf("a.x manual (mem_load pointer): %p
+"::String, _mem_load(a::Any, 0::Int)); printf("a.x manual (mem_load int): %d
+"::String, _mem_load(a::Any, 0::Int)); printf("a.y manual (pointer): %p
+"::String, (a::Any Add 8::Int)); printf("a.y manual (mem_load pointer): %p
+"::String, _mem_load(a::Any, 8::Int)); printf("a.y manual (mem_load int): %d
+"::String, _mem_load(a::Any, 8::Int)); printf("X (int): %d
+"::String, (a::Any Dot x::Any)); printf("Y (int): %d
+"::String, (a::Any Dot y::Any)); printf("'b' pointer: %p
+"::String, b::Any); printf("b.x manual (pointer): %p
+"::String, (b::Any Add 0::Int)); printf("b.x manual (mem_load pointer): %p
+"::String, _mem_load(b::Any, 0::Int)); printf("b.x manual (mem_load int): %d
+"::String, _mem_load(b::Any, 0::Int)); printf("b.y manual (pointer): %p
+"::String, (b::Any Add 8::Int)); printf("b.y manual (mem_load pointer): %p
+"::String, _mem_load(b::Any, 8::Int)); printf("b.y manual (mem_load int): %d
+"::String, _mem_load(b::Any, 8::Int)); printf("X (int): %d
+"::String, (b::Any Dot x::Any)); printf("Y (int): %d
+"::String, (b::Any Dot y::Any)) }
