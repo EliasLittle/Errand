@@ -27,6 +27,7 @@ pub enum TokenType {
     True,
     False,
     Function,
+    Foreign,
     Struct,
     Return,
     TypeInt,
@@ -437,6 +438,7 @@ impl Lexer {
             "true" => TokenType::True,
             "false" => TokenType::False,
             "fn" => TokenType::Function,
+            "foreign" => TokenType::Foreign,
             "struct" => TokenType::Struct,
             "int" => TokenType::TypeInt,
             "bool" => TokenType::TypeBool,
@@ -547,7 +549,10 @@ impl Lexer {
             } else {
                 Ok(Token { token_type: TokenType::Bang, line: self.line, column: self.column })
             },
-            '"' => self.read_string(),
+            '"' => {
+                advance_char = false;
+                self.read_string()
+            },
             '\n' => Ok(Token { token_type: TokenType::Newline, line: self.line, column: self.column }),
             '<' => match self.peek() {
                 ':' => {
@@ -590,6 +595,7 @@ impl Lexer {
                 advance_char = false;
                 self.read_number()
             },
+            '\0' => Ok(Token { token_type: TokenType::EOF, line: self.line, column: self.column }),
             _ => Err(format!("Unexpected character: {}", self.current_char)),
         };
         if advance_char {
@@ -620,7 +626,11 @@ impl Lexer {
             }
         }
         if file_path != "" {
-            let output_file_path = format!("{}.lex", file_path);
+            let output_file_path = if let Some(stripped) = file_path.strip_suffix(".err") {
+                format!("{}.lex", stripped)
+            } else {
+                format!("{}.lex", file_path)
+            };
             let mut output_file = std::fs::File::create(output_file_path).expect("Unable to create file");
             for token in &tokens {
                 writeln!(output_file, "{}", token).expect("Unable to write to file");

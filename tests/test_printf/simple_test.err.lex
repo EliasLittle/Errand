@@ -1,0 +1,20 @@
+<Function>
+<Identifier("simple_test")>
+<LParen>
+<RParen>
+<Newline>
+<Identifier("printf")>
+<LParen>
+<StringLiteral("Hello World\n")>
+<RParen>
+<Newline>
+<Return>
+<Int(0)>
+<Newline>
+<End>
+<Newline>
+<Newline>
+<Identifier("simple_test")>
+<LParen>
+<RParen>
+<EOF>

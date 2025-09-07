@@ -1,0 +1,29 @@
+struct Point
+    x::Int
+    y::Int
+end
+
+a = Point(1,2)
+b::Point = new(:Point, 3, 4)
+
+printf("'a' pointer: %p\n", a)
+printf("a.x manual (pointer): %p\n", a+0)
+printf("a.x manual (mem_load pointer): %p\n", _mem_load(a, 0))
+printf("a.x manual (mem_load int): %d\n", _mem_load(a, 0))
+printf("a.y manual (pointer): %p\n", a+8)
+printf("a.y manual (mem_load pointer): %p\n", _mem_load(a, 8))
+printf("a.y manual (mem_load int): %d\n", _mem_load(a, 8))
+
+printf("X (int): %d\n", a.x)
+printf("Y (int): %d\n", a.y)
+
+printf("'b' pointer: %p\n", b)
+printf("b.x manual (pointer): %p\n", b+0)
+printf("b.x manual (mem_load pointer): %p\n", _mem_load(b, 0))
+printf("b.x manual (mem_load int): %d\n", _mem_load(b, 0))
+printf("b.y manual (pointer): %p\n", b+8)
+printf("b.y manual (mem_load pointer): %p\n", _mem_load(b, 8))
+printf("b.y manual (mem_load int): %d\n", _mem_load(b, 8))
+
+printf("X (int): %d\n", b.x)
+printf("Y (int): %d\n", b.y)

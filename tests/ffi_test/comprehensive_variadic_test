@@ -1,0 +1,27 @@
+fn comprehensive_variadic_test()
+    // Test printf with no additional arguments (just format string)
+    printf("Basic string output\n")
+    
+    // Test printf with one additional argument
+    printf("Number: %d\n", 42)
+    printf("String: %s\n", "hello")
+    
+    // Test printf with two additional arguments
+    printf("Two args: %s %d\n", "string", 123)
+    printf("Two numbers: %d %d\n", 10, 20)
+    
+    // Test printf with three additional arguments
+    printf("Three args: %s %d %s\n", "first", 42, "last")
+    printf("Three numbers: %d %d %d\n", 1, 2, 3)
+    
+    // Test printf with four additional arguments
+    printf("Four args: %s %d %s %d\n", "text", 100, "more", 200)
+    
+    // Test printf with mixed types
+    printf("Mixed: %s %d %s %d %s\n", "start", 1, "middle", 2, "end")
+    
+    // Return a success value
+    return 0
+end
+
+comprehensive_variadic_test() 

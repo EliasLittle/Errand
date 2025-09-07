@@ -1,0 +1,12 @@
+fn test_variadic_printf()
+    // Test printf with different numbers of arguments
+    result1 = printf("Hello, World!\n")
+    result2 = printf("Number: %d\n", 42)
+    result3 = printf("String: %s, Number: %d\n", "test", 123)
+    result4 = printf("Multiple: %s %d %s %d\n", "first", 1, "second", 2)
+    
+    // Return the sum of all printf results
+    return result1 + result2 + result3 + result4
+end
+
+test_variadic_printf() 

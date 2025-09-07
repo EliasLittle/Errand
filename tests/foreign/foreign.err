@@ -1,0 +1,20 @@
+foreign fn printf(a::Int):: Int
+foreign fn malloc(a::Int):: Int
+foreign fn free(a::Int):: Int
+foreign fn strlen(a::Int):: Int
+foreign fn strcpy(a::Int, b::Int):: Int
+foreign fn strcmp(a::Int, b::Int):: Int32
+
+fn strlen(a::String)
+    return strlen(as_ptr(a))
+end
+
+fn strcpy(a::String, b::String)
+    return strcpy(as_ptr(a), as_ptr(b))
+end
+
+fn free(a::String)
+    return free(as_ptr(a))
+end
+
+printf("Hello World!")

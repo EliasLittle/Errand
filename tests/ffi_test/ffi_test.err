@@ -1,0 +1,6 @@
+fn test_ffi()
+    result = ffi("printf", "Hello, World!\n")
+    return result
+end
+
+test_ffi()

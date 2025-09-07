@@ -1,0 +1,39 @@
+<Function>
+<Identifier("test_printf")>
+<LParen>
+<RParen>
+<Newline>
+<Identifier("printf")>
+<LParen>
+<StringLiteral("String: %s\n")>
+<Comma>
+<StringLiteral("elias")>
+<RParen>
+<Newline>
+<Identifier("printf")>
+<LParen>
+<StringLiteral("Number: %d\n")>
+<Comma>
+<Int(42)>
+<RParen>
+<Newline>
+<Identifier("printf")>
+<LParen>
+<StringLiteral("String: %s and Number: %d\n")>
+<Comma>
+<StringLiteral("elias")>
+<Comma>
+<Int(86)>
+<RParen>
+<Newline>
+<Newline>
+<Return>
+<Int(0)>
+<Newline>
+<End>
+<Newline>
+<Newline>
+<Identifier("test_printf")>
+<LParen>
+<RParen>
+<EOF>

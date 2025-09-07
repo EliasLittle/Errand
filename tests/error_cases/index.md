@@ -1,0 +1,1 @@
+fn_of_constant.err --> Parser should raise error, instead of loop.

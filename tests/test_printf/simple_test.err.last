@@ -1,0 +1,2 @@
+{ fn simple_test() { { printf("Hello World
+"::String); return 0::Int } }; simple_test() }

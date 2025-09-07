@@ -119,6 +119,7 @@ impl Parser {
     pub fn parse_expression(&mut self) -> Result<Expression, String> {
         println!("Parsing expression| current:{:?}", self.current_type());
         let result = match self.current_type(){
+            Some(TokenType::Foreign) => self.function(),
             Some(TokenType::Function) => self.function(),
             Some(TokenType::Struct) => self.structure(),
             Some(TokenType::If) => self.if_statement(), // TODO: Move to parse_expression_1
@@ -130,6 +131,11 @@ impl Parser {
                 self.parse_expression()
             },
             Some(TokenType::Print) => self.print_statement(),
+            Some(TokenType::End) => {
+                // Skip End tokens at the top level - they should be handled by their respective constructs
+                self.bump();
+                Err("Unexpected End token at top level".to_string())
+            },
             Some(_) => {
                 let primary_expr = self.primary()?; // Store the result of primary
                 self.parse_expression_1(primary_expr, 0) // Delegate to the new expression parser
@@ -188,8 +194,7 @@ impl Parser {
         }
 
         println!("Parsing expression 1| End of expression 1");
-        self.eat(&TokenType::Newline); // Eat anyline newline after the expression 
-        // Should this be an expect()?
+        // Don't consume newlines here - let the caller handle it
         Ok(level_lhs) // Return the final expression as a clone
     }
 
@@ -243,6 +248,7 @@ impl Parser {
     fn inner_primary(&mut self) -> Result<Expression, String> {
         println!("Parsing inner primary| current:{:?}", self.current_type());
         match self.current_type() {
+            Some(TokenType::Colon) => self.symbol(),
             Some(TokenType::LParen) => self.parenthesized_expression(),
             Some(TokenType::Int(n)) => self.literal(&TokenType::Int(*n)),
             Some(TokenType::Float(n)) => self.literal(&TokenType::Float(*n)),
@@ -302,6 +308,16 @@ impl Parser {
         }
     }
 
+    fn symbol(&mut self) -> Result<Expression, String> {
+        self.expect(&TokenType::Colon)?;
+        if let Some(TokenType::Identifier(s)) = self.current_type().cloned() {
+            self.bump();
+            Ok(Expression::Symbol(s))
+        } else {
+            Err("Expected identifier after ':' for symbol".to_string())
+        }
+    }
+
     fn id(&mut self) -> Result<Id, String> {
         match self.expect(&token_type("Identifier")?)?.token_type {
             TokenType::Identifier(id_str) => Ok(Id { name: id_str }),
@@ -356,6 +372,10 @@ impl Parser {
     /// Currently only supports standard block function definitions
     fn function(&mut self) -> Result<Expression, String> {
         println!("Parsing function| current:{:?}", self.current_type());
+        let mut foreign = false;
+        if self.eat(&TokenType::Foreign) {
+            foreign = true;
+        }
         self.expect(&TokenType::Function)?;
         let id = self.id()?;
         self.expect(&TokenType::LParen)?;
@@ -366,12 +386,29 @@ impl Parser {
         } else {
             None
         };
-        self.expect(&TokenType::Newline)?; // TODO: Change to or '=' to support inline functions
-        let body = self.block()?;
-        self.expect(&TokenType::End)?;
-        println!("Parsing function| End of function");
-        self.expect(&TokenType::Newline); // Should these be eats or expects?
-        Ok(Expression::FunctionDefinition { id, parameters: arguments, body: Box::new(body), return_type_expr })
+        if foreign {
+            // Foreign function: no body, no 'end', just a dummy body (e.g. Block([]))
+            Ok(Expression::FunctionDefinition {
+                id,
+                parameters: arguments,
+                body: Box::new(Expression::Block(vec![])),
+                return_type_expr,
+                foreign: true,
+            })
+        } else {
+            self.expect(&TokenType::Newline)?; // TODO: Change to or '=' to support inline functions
+            let body = self.block()?;
+            self.expect(&TokenType::End)?;
+            println!("Parsing function| End of function");
+            self.expect(&TokenType::Newline); // Should these be eats or expects?
+            Ok(Expression::FunctionDefinition {
+                id,
+                parameters: arguments,
+                body: Box::new(body),
+                return_type_expr,
+                foreign: false,
+            })
+        }
     }
 
     // TODO: Support variant structs

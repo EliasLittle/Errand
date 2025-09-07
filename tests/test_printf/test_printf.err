@@ -1,0 +1,9 @@
+fn test_printf()
+    printf("String: %s\n", "elias")
+    printf("Number: %d\n", 42)
+    printf("String: %s and Number: %d\n", "elias", 86)
+    
+    return 0
+end
+
+test_printf() 

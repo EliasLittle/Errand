@@ -1,0 +1,37 @@
+{ fn Point(x::Int, y::Int) -> Point { return new(:Point, x::Int, y::Int) }; struct Point { x, y }; (a::Point Assignment Point(1::Int, 2::Int)); (b::Int Assignment new(:Point, 3::Int, 4::Int)); { (_tmp_str_0::Int Assignment malloc((strlen("'a' pointer: %p
+"::String) Add 1::Int))); strcpy(_tmp_str_0::String, "'a' pointer: %p
+"::String); printf(_tmp_str_0::String, a::Point); free(_tmp_str_0::String) }; { (_tmp_str_0::Int Assignment malloc((strlen("a.x manual (pointer): %p
+"::String) Add 1::Int))); strcpy(_tmp_str_0::String, "a.x manual (pointer): %p
+"::String); printf(_tmp_str_0::String, (a::Point Add 0::Int)); free(_tmp_str_0::String) }; { (_tmp_str_0::Int Assignment malloc((strlen("a.x manual (mem_load pointer): %p
+"::String) Add 1::Int))); strcpy(_tmp_str_0::String, "a.x manual (mem_load pointer): %p
+"::String); printf(_tmp_str_0::String, _mem_load(a::Point, 0::Int)); free(_tmp_str_0::String) }; { (_tmp_str_0::Int Assignment malloc((strlen("a.x manual (mem_load int): %d
+"::String) Add 1::Int))); strcpy(_tmp_str_0::String, "a.x manual (mem_load int): %d
+"::String); printf(_tmp_str_0::String, _mem_load(a::Point, 0::Int)); free(_tmp_str_0::String) }; { (_tmp_str_0::Int Assignment malloc((strlen("a.y manual (pointer): %p
+"::String) Add 1::Int))); strcpy(_tmp_str_0::String, "a.y manual (pointer): %p
+"::String); printf(_tmp_str_0::String, (a::Point Add 8::Int)); free(_tmp_str_0::String) }; { (_tmp_str_0::Int Assignment malloc((strlen("a.y manual (mem_load pointer): %p
+"::String) Add 1::Int))); strcpy(_tmp_str_0::String, "a.y manual (mem_load pointer): %p
+"::String); printf(_tmp_str_0::String, _mem_load(a::Point, 8::Int)); free(_tmp_str_0::String) }; { (_tmp_str_0::Int Assignment malloc((strlen("a.y manual (mem_load int): %d
+"::String) Add 1::Int))); strcpy(_tmp_str_0::String, "a.y manual (mem_load int): %d
+"::String); printf(_tmp_str_0::String, _mem_load(a::Point, 8::Int)); free(_tmp_str_0::String) }; { (_tmp_str_0::Int Assignment malloc((strlen("X (int): %d
+"::String) Add 1::Int))); strcpy(_tmp_str_0::String, "X (int): %d
+"::String); printf(_tmp_str_0::String, getfield(a::Point, :x, :Point)); free(_tmp_str_0::String) }; { (_tmp_str_0::Int Assignment malloc((strlen("Y (int): %d
+"::String) Add 1::Int))); strcpy(_tmp_str_0::String, "Y (int): %d
+"::String); printf(_tmp_str_0::String, getfield(a::Point, :y, :Point)); free(_tmp_str_0::String) }; { (_tmp_str_0::Int Assignment malloc((strlen("'b' pointer: %p
+"::String) Add 1::Int))); strcpy(_tmp_str_0::String, "'b' pointer: %p
+"::String); printf(_tmp_str_0::String, b::Point); free(_tmp_str_0::String) }; { (_tmp_str_0::Int Assignment malloc((strlen("b.x manual (pointer): %p
+"::String) Add 1::Int))); strcpy(_tmp_str_0::String, "b.x manual (pointer): %p
+"::String); printf(_tmp_str_0::String, (b::Point Add 0::Int)); free(_tmp_str_0::String) }; { (_tmp_str_0::Int Assignment malloc((strlen("b.x manual (mem_load pointer): %p
+"::String) Add 1::Int))); strcpy(_tmp_str_0::String, "b.x manual (mem_load pointer): %p
+"::String); printf(_tmp_str_0::String, _mem_load(b::Point, 0::Int)); free(_tmp_str_0::String) }; { (_tmp_str_0::Int Assignment malloc((strlen("b.x manual (mem_load int): %d
+"::String) Add 1::Int))); strcpy(_tmp_str_0::String, "b.x manual (mem_load int): %d
+"::String); printf(_tmp_str_0::String, _mem_load(b::Point, 0::Int)); free(_tmp_str_0::String) }; { (_tmp_str_0::Int Assignment malloc((strlen("b.y manual (pointer): %p
+"::String) Add 1::Int))); strcpy(_tmp_str_0::String, "b.y manual (pointer): %p
+"::String); printf(_tmp_str_0::String, (b::Point Add 8::Int)); free(_tmp_str_0::String) }; { (_tmp_str_0::Int Assignment malloc((strlen("b.y manual (mem_load pointer): %p
+"::String) Add 1::Int))); strcpy(_tmp_str_0::String, "b.y manual (mem_load pointer): %p
+"::String); printf(_tmp_str_0::String, _mem_load(b::Point, 8::Int)); free(_tmp_str_0::String) }; { (_tmp_str_0::Int Assignment malloc((strlen("b.y manual (mem_load int): %d
+"::String) Add 1::Int))); strcpy(_tmp_str_0::String, "b.y manual (mem_load int): %d
+"::String); printf(_tmp_str_0::String, _mem_load(b::Point, 8::Int)); free(_tmp_str_0::String) }; { (_tmp_str_0::Int Assignment malloc((strlen("X (int): %d
+"::String) Add 1::Int))); strcpy(_tmp_str_0::String, "X (int): %d
+"::String); printf(_tmp_str_0::String, getfield(b::Point, :x, :Point)); free(_tmp_str_0::String) }; { (_tmp_str_0::Int Assignment malloc((strlen("Y (int): %d
+"::String) Add 1::Int))); strcpy(_tmp_str_0::String, "Y (int): %d
+"::String); printf(_tmp_str_0::String, getfield(b::Point, :y, :Point)); free(_tmp_str_0::String) } }

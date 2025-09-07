@@ -5,8 +5,40 @@ use crate::frontend::ast::*;
 impl Program {
     pub fn lower(&self) -> Program {
         println!("------ Lowering program ------");
+        // 1. Find all struct definitions and generate constructor functions
+        let mut constructor_functions = Vec::new();
+        for expr in &self.expressions {
+            if let Expression::StructDefinition { id, fields } = expr {
+                // Build parameter list from fields
+                let parameters: Vec<Parameter> = fields.iter().map(|f| Parameter {
+                    id: f.id.clone(),
+                    type_expr: Some(f.field_type.clone()),
+                }).collect();
+                // Build arguments for new(:StructName, ...fields...)
+                let mut new_args = vec![Expression::Symbol(id.name.clone())];
+                new_args.extend(fields.iter().map(|f| Expression::Identifier {
+                    id: f.id.clone(),
+                    type_expr: Some(f.field_type.clone()),
+                }));
+                let body = Box::new(Expression::Return(Some(Box::new(Expression::FunctionCall {
+                    id: Id { name: "new".to_string() },
+                    arguments: new_args,
+                }))));
+                let constructor = Expression::FunctionDefinition {
+                    id: id.clone(),
+                    parameters: parameters.clone(),
+                    body: Box::new(Expression::Block(vec![])),
+                    return_type_expr: Some(TypeExpression::Struct(id.clone(), None)),
+                    foreign: false,
+                };
+                constructor_functions.push(constructor);
+            }
+        }
+        // 2. Lower the rest of the program
         let lowered = Program {
-            expressions: self.expressions.iter().map(|expr| self.lower_expression(expr.clone())).collect(),
+            expressions: constructor_functions.into_iter()
+                .chain(self.expressions.iter().map(|expr| self.lower_expression(expr.clone())))
+                .collect(),
         };
         println!("------ Program lowered ------");
         lowered
@@ -16,13 +48,122 @@ impl Program {
         match expr.clone() {
             Expression::For { iterator, range, body } => lower_for_loop(iterator, range, body),
             Expression::BinaryOp { operator, left, right } => {
+                let lowered_left = self.lower_expression(*left);
+                let lowered_right = self.lower_expression(*right);
                 match operator {
-                    BinaryOperator::Dot => lower_field_access(left, right),
-                    _ => expr,
+                    BinaryOperator::Dot => lower_field_access(Box::new(lowered_left), Box::new(lowered_right)),
+                    _ => Expression::BinaryOp {
+                        operator,
+                        left: Box::new(lowered_left),
+                        right: Box::new(lowered_right),
+                    },
                 }
             },
-            Expression::FunctionDefinition { id, parameters, body, return_type_expr } => {
-                lower_function_definition(id, parameters, body, return_type_expr)
+            Expression::FunctionDefinition { id, parameters, body, return_type_expr, foreign } => {
+                println!("[LOWER] Lowering function definition: {} | foreign: {}", id.name, foreign);
+                let lowered_body = Box::new(self.lower_expression(*body));
+                if foreign {
+                    // For foreign functions, preserve the flag and do not call lower_function_definition
+                    Expression::FunctionDefinition { id, parameters, body: lowered_body, return_type_expr, foreign: true }
+                } else {
+                    lower_function_definition(id, parameters, lowered_body, return_type_expr)
+                }
+            },
+            Expression::FunctionCall { id, arguments } if id.name == "printf" => {
+                // Desugar string arguments to printf (as before), but lower arguments first
+                let mut new_block: Vec<Box<Expression>> = Vec::new();
+                let mut new_args: Vec<Expression> = Vec::new();
+                let mut tmp_counter = 0;
+                for arg in arguments.into_iter().map(|a| self.lower_expression(a)) {
+                    if let Expression::String(s) = arg {
+                        let tmp_name = format!("_tmp_str_{}", tmp_counter);
+                        tmp_counter += 1;
+                        let tmp_id = Id { name: tmp_name.clone() };
+                        let malloc_call = Expression::BinaryOp {
+                            operator: BinaryOperator::Assignment,
+                            left: Box::new(Expression::Identifier { id: tmp_id.clone(), type_expr: Some(TypeExpression::String) }),
+                            right: Box::new(Expression::FunctionCall {
+                                id: Id { name: "as_string".to_string() },
+                                arguments: vec![
+                                    Expression::FunctionCall {
+                                        id: Id { name: "malloc".to_string() },
+                                        arguments: vec![
+                                            Expression::BinaryOp {
+                                                operator: BinaryOperator::Add,
+                                                left: Box::new(Expression::FunctionCall {
+                                                    id: Id { name: "strlen".to_string() },
+                                                    arguments: vec![Expression::String(s.clone())],
+                                                }),
+                                                right: Box::new(Expression::Int(1)),
+                                            }
+                                        ],
+                                    }
+                                ],
+                            }),
+                        };
+                        let strcpy_call = Expression::FunctionCall {
+                            id: Id { name: "strcpy".to_string() },
+                            arguments: vec![
+                                Expression::Identifier { id: tmp_id.clone(), type_expr: Some(TypeExpression::String) },
+                                Expression::String(s.clone()),
+                            ],
+                        };
+                        new_block.push(Box::new(malloc_call));
+                        new_block.push(Box::new(strcpy_call));
+                        new_args.push(Expression::Identifier { id: tmp_id.clone(), type_expr: Some(TypeExpression::String) });
+                    } else {
+                        new_args.push(arg);
+                    }
+                }
+                let printf_call = Expression::FunctionCall {
+                    id: id.clone(),
+                    arguments: new_args,
+                };
+                new_block.push(Box::new(printf_call));
+                for i in 0..tmp_counter {
+                    let tmp_name = format!("_tmp_str_{}", i);
+                    let tmp_id = Id { name: tmp_name };
+                    let free_call = Expression::FunctionCall {
+                        id: Id { name: "free".to_string() },
+                        arguments: vec![Expression::Identifier { id: tmp_id, type_expr: Some(TypeExpression::String) }],
+                    };
+                    new_block.push(Box::new(free_call));
+                }
+                Expression::Block(new_block)
+            },
+            Expression::FunctionCall { id, arguments } => {
+                let lowered_args = arguments.into_iter().map(|a| self.lower_expression(a)).collect();
+                Expression::FunctionCall { id, arguments: lowered_args }
+            },
+            Expression::Block(exprs) => {
+                let lowered_exprs = exprs.into_iter().map(|e| Box::new(self.lower_expression(*e))).collect();
+                Expression::Block(lowered_exprs)
+            },
+            Expression::If { condition, then_branch, else_branch } => {
+                let lowered_condition = Box::new(self.lower_expression(*condition));
+                let lowered_then = Box::new(self.lower_expression(*then_branch));
+                let lowered_else = else_branch.map(|e| Box::new(self.lower_expression(*e)));
+                Expression::If {
+                    condition: lowered_condition,
+                    then_branch: lowered_then,
+                    else_branch: lowered_else,
+                }
+            },
+            Expression::While { condition, body } => {
+                let lowered_condition = Box::new(self.lower_expression(*condition));
+                let lowered_body = Box::new(self.lower_expression(*body));
+                Expression::While {
+                    condition: lowered_condition,
+                    body: lowered_body,
+                }
+            },
+            Expression::Return(expr) => {
+                let lowered_expr = expr.map(|e| Box::new(self.lower_expression(*e)));
+                Expression::Return(lowered_expr)
+            },
+            Expression::Print(expr) => {
+                let lowered_expr = Box::new(self.lower_expression(*expr));
+                Expression::Print(lowered_expr)
             },
             _ => expr,
         }
@@ -31,7 +172,19 @@ impl Program {
 
 fn lower_field_access(left: Box<Expression>, right: Box<Expression>) -> Expression {
     println!("------ Lowering field access ------");
-    Expression::FunctionCall { id: Id { name: "getfield".to_string() }, arguments: vec![*left, *right] }
+    let field_symbol = match *right {
+        Expression::Identifier { id, .. } => Expression::Symbol(id.name),
+        other => panic!("Dot field access expects an identifier as the field name, got: {:?}", other),
+    };
+    // Instead of passing the struct type directly, pass typeof(left) as the third argument
+    let typeof_call = Expression::FunctionCall {
+        id: Id { name: "typeof".to_string() },
+        arguments: vec![(*left).clone()],
+    };
+    Expression::FunctionCall {
+        id: Id { name: "getfield".to_string() },
+        arguments: vec![*left, field_symbol, typeof_call],
+    }
 }
 
 fn lower_function_definition(id: Id, parameters: Vec<Parameter>, body: Box<Expression>, return_type_expr: Option<TypeExpression>) -> Expression {
@@ -42,7 +195,7 @@ fn lower_function_definition(id: Id, parameters: Vec<Parameter>, body: Box<Expre
     
     if has_return {
         // If it already has a return, just return the function as-is
-        Expression::FunctionDefinition { id, parameters, body, return_type_expr }
+        Expression::FunctionDefinition { id, parameters, body, return_type_expr, foreign: false }
     } else {
         // If no return statement, add an implicit return at the end
         let implicit_return = match &return_type_expr {
@@ -69,7 +222,8 @@ fn lower_function_definition(id: Id, parameters: Vec<Parameter>, body: Box<Expre
             id, 
             parameters, 
             body: Box::new(new_body), 
-            return_type_expr 
+            return_type_expr,
+            foreign: false,
         }
     }
 }
