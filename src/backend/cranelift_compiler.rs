@@ -161,6 +161,7 @@ impl CraneliftCompiler {
         // Phase 1: Declare all functions in the module (but don't define them yet)
         for expr in &program.expressions {
             if let Expression::FunctionDefinition { id, parameters, body: _, return_type_expr, foreign } = expr {
+                println!("[CRANELIFT] Declaring function: {} | foreign: {}", id.name, foreign);
                 if *foreign {
                     self.declare_foreign_function_in_module(id, parameters, return_type_expr)?;
                 } else {
@@ -172,6 +173,7 @@ impl CraneliftCompiler {
         // Phase 2: Compile all function bodies (now they can call each other recursively)
         for expr in &program.expressions {
             if let Expression::FunctionDefinition { id, parameters, body, return_type_expr: _, foreign } = expr {
+                println!("[CRANELIFT] Compiling function: {} | foreign: {}", id.name, foreign);
                 if *foreign { continue; }
                 println!("Compiling function body: {:?}", id);
                 self.compile_function_definition(id, parameters, body)?;
@@ -226,16 +228,14 @@ impl CraneliftCompiler {
         let signature = self.function_signatures.get(&id.name)
             .ok_or_else(|| format!("No signature found for function: {}", id.name))?
             .clone();
-        
+
         // Declare the function in the module
-        let func_id = module.declare_function(&mangled_name, cranelift_module::Linkage::Import, &signature)
-            .map_err(|e| format!("Failed to declare foreign function: {}", e))?;
-        
-        // Store the function ID for later use
+        let func_id = module.declare_function(&id.name, cranelift_module::Linkage::Import, &signature)
+            .map_err(|e| format!("Failed to declare foreign function: {}: {}", id.name, e))?;
+        // Store using the mangled name in our function table
         let entry = self.functions.entry(id.name.clone()).or_insert_with(HashMap::new);
         entry.insert(param_types, func_id);
-        
-        println!("Declared foreign function '{}' with func_id: {:?}", mangled_name, func_id);
+        println!("Declared foreign function '{}' (import symbol '{}') with func_id: {:?}", mangled_name, id.name, func_id);
         Ok(())
     }
 

@@ -111,7 +111,17 @@ fn compile(file: &str, arch: &Option<Arch>) -> Result<(), String> {
     if !Path::new(&bin_file).exists() {
         return Err(format!("Expected binary file '{}' not found", bin_file));
     }
-    let status = Command::new("gcc")
+    let mut gcc_cmd = Command::new("gcc");
+    match arch {
+        Some(Arch::Arm) => {
+            gcc_cmd.arg("-arch").arg("arm64");
+        }
+        Some(Arch::X86) => {
+            gcc_cmd.arg("-arch").arg("x86_64");
+        }
+        None => {}
+    }
+    let status = gcc_cmd
         .arg("-o")
         .arg(&*base_name)
         .arg(&bin_file)

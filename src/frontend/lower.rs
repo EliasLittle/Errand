@@ -59,9 +59,15 @@ impl Program {
                     },
                 }
             },
-            Expression::FunctionDefinition { id, parameters, body, return_type_expr, foreign: _ } => {
+            Expression::FunctionDefinition { id, parameters, body, return_type_expr, foreign } => {
+                println!("[LOWER] Lowering function definition: {} | foreign: {}", id.name, foreign);
                 let lowered_body = Box::new(self.lower_expression(*body));
-                lower_function_definition(id, parameters, lowered_body, return_type_expr)
+                if foreign {
+                    // For foreign functions, preserve the flag and do not call lower_function_definition
+                    Expression::FunctionDefinition { id, parameters, body: lowered_body, return_type_expr, foreign: true }
+                } else {
+                    lower_function_definition(id, parameters, lowered_body, return_type_expr)
+                }
             },
             Expression::FunctionCall { id, arguments } if id.name == "printf" => {
                 // Desugar string arguments to printf (as before), but lower arguments first

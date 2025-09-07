@@ -376,7 +376,7 @@ impl TypeInferencer {
                     arguments: typed_args,
                 })
             }
-            Expression::FunctionDefinition { id, parameters, body, return_type_expr, foreign: _ } => {
+            Expression::FunctionDefinition { id, parameters, body, return_type_expr, foreign } => {
                 let mut typed_params = Vec::new();
                 for param in parameters {
                     let param_type = match &param.type_expr {
@@ -392,14 +392,7 @@ impl TypeInferencer {
                     Some(ty) => Type::from(ty.clone()), 
                     None => self.env.fresh_type_var(), // TODO: Try to infer from body
                 };
-
-                /* TODO: This is not neede here, right?
-                self.env.set_type(
-                    id.name.clone(),
-                    Type::Function { parameters: param_types, return_type: Box::new(return_type) }
-                );  
-                */
-                Ok(Expression::FunctionDefinition { id: id.clone(), parameters: typed_params, body: body.clone(), return_type_expr: Some(TypeExpression::from(return_type)), foreign: false })
+                Ok(Expression::FunctionDefinition { id: id.clone(), parameters: typed_params, body: body.clone(), return_type_expr: Some(TypeExpression::from(return_type)), foreign: *foreign })
             }
             // TODO: This should set the type of the identifier
             /*Expression::VariableAssignment { id, value } => {
