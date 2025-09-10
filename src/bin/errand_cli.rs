@@ -12,6 +12,15 @@ struct Cli {
 
 #[derive(Subcommand)]
 enum Commands {
+    /// Build the Errand compiler
+    Build {
+        /// Target architecture (optional)
+        #[arg(long, value_enum)]
+        arch: Option<Arch>,
+        /// Build in release mode
+        #[arg(long)]
+        release: bool,
+    },
     /// Compile the .err file to an executable
     Compile {
         /// The .err file to compile
@@ -19,6 +28,9 @@ enum Commands {
         /// Target architecture (optional)
         #[arg(long, value_enum)]
         arch: Option<Arch>,
+        /// Build in release mode
+        #[arg(long)]
+        release: bool,
     },
     /// Compile and run the .err file
     Run {
@@ -27,6 +39,9 @@ enum Commands {
         /// Target architecture (optional)
         #[arg(long, value_enum)]
         arch: Option<Arch>,
+        /// Build in release mode
+        #[arg(long)]
+        release: bool,
     },
     /// Parse the .err file to an AST
     Parse {
@@ -44,14 +59,28 @@ enum Arch {
 fn main() {
     let cli = Cli::parse();
     match &cli.command {
-        Commands::Compile { file, arch } => {
-            if let Err(e) = compile(file, arch) {
+        Commands::Build { arch, release } => {
+            if let Err(e) = build_compiler(arch, *release) {
                 eprintln!("Error: {}", e);
                 std::process::exit(1);
             }
         }
-        Commands::Run { file, arch } => {
-            if let Err(e) = compile(file, arch) {
+        Commands::Compile { file, arch, release } => {
+            if let Err(e) = build_compiler(arch, *release) {
+                eprintln!("Error: {}", e);
+                std::process::exit(1);
+            }
+            if let Err(e) = compile_file(file, arch, *release) {
+                eprintln!("Error: {}", e);
+                std::process::exit(1);
+            }
+        }
+        Commands::Run { file, arch, release } => {
+            if let Err(e) = build_compiler(arch, *release) {
+                eprintln!("Error: {}", e);
+                std::process::exit(1);
+            }
+            if let Err(e) = compile_file(file, arch, *release) {
                 eprintln!("Error: {}", e);
                 std::process::exit(1);
             }
@@ -73,39 +102,65 @@ fn main() {
     }
 }
 
-fn compile(file: &str, arch: &Option<Arch>) -> Result<(), String> {
+fn build_compiler(arch: &Option<Arch>, release: bool) -> Result<(), String> {
+    println!("Building Errand compiler...");
+    let mut build_args = vec!["build".to_string()];
+    
+    if release {
+        build_args.push("--release".to_string());
+    }
+    
+    match arch {
+        Some(Arch::Arm) => {
+            build_args.push("--target".to_string());
+            build_args.push("aarch64-apple-darwin".to_string());
+        }
+        Some(Arch::X86) => {
+            build_args.push("--target".to_string());
+            build_args.push("x86_64-apple-darwin".to_string());
+        }
+        None => {}
+    }
+    
+    println!("Running cargo build with args: {:?}", build_args);
+    let status = Command::new("cargo")
+        .args(&build_args)
+        .status()
+        .map_err(|e| format!("Failed to run cargo build: {}", e))?;
+    if !status.success() {
+        return Err("Failed to build Errand compiler".to_string());
+    }
+    
+    println!("Errand compiler built successfully!");
+    Ok(())
+}
+
+fn compile_file(file: &str, arch: &Option<Arch>, release: bool) -> Result<(), String> {
     if !Path::new(file).exists() {
         return Err(format!("File '{}' not found", file));
     }
     let base_name = Path::new(file).file_stem().unwrap().to_string_lossy();
+    
+    // Use the compiled Errand binary to compile the source file
     println!("Compiling {}...", file);
-    let mut cargo_args = vec![
-        "run".to_string(),
-        "--bin".to_string(),
-        "Errand".to_string(),
-        "--".to_string(),
-        "--file".to_string(),
-        file.to_string(),
-    ];
-    match arch {
-        Some(Arch::Arm) => {
-            cargo_args.insert(1, "--target".to_string());
-            cargo_args.insert(2, "aarch64-apple-darwin".to_string());
-        }
-        Some(Arch::X86) => {
-            cargo_args.insert(1, "--target".to_string());
-            cargo_args.insert(2, "x86_64-apple-darwin".to_string());
-        }
-        None => {}
-    }
-    println!("Running cargo with args: {:?}", cargo_args);
-    let status = Command::new("cargo")
-        .args(&cargo_args)
+    let errand_binary = match (arch, release) {
+        (Some(Arch::Arm), true) => "target/aarch64-apple-darwin/release/Errand",
+        (Some(Arch::Arm), false) => "target/aarch64-apple-darwin/debug/Errand",
+        (Some(Arch::X86), true) => "target/x86_64-apple-darwin/release/Errand",
+        (Some(Arch::X86), false) => "target/x86_64-apple-darwin/debug/Errand",
+        (None, true) => "target/release/Errand",
+        (None, false) => "target/debug/Errand",
+    };
+    
+    let status = Command::new(errand_binary)
+        .arg("--file")
+        .arg(file)
         .status()
-        .map_err(|e| format!("Failed to run cargo: {}", e))?;
+        .map_err(|e| format!("Failed to run Errand compiler: {}", e))?;
     if !status.success() {
         return Err("Compilation failed".to_string());
     }
+    
     let bin_file = format!("{}.bin", file.strip_suffix(".err").unwrap_or(file));
     println!("Linking {}...", bin_file);
     if !Path::new(&bin_file).exists() {
@@ -121,10 +176,19 @@ fn compile(file: &str, arch: &Option<Arch>) -> Result<(), String> {
         }
         None => {}
     }
-    let status = gcc_cmd
+    gcc_cmd
         .arg("-o")
         .arg(&*base_name)
-        .arg(&bin_file)
+        .arg(&bin_file);
+    
+    // Print the full gcc command for debugging
+    println!("Running gcc command: gcc{}", 
+        gcc_cmd.get_args()
+            .map(|arg| format!(" {}", arg.to_string_lossy()))
+            .collect::<String>()
+    );
+    
+    let status = gcc_cmd
         .status()
         .map_err(|e| format!("Failed to run gcc: {}", e))?;
     if status.success() {
