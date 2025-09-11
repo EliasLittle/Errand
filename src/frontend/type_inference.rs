@@ -1,3 +1,4 @@
+use crate::{type_inference_log};
 use std::collections::HashMap;
 use super::ast::{Expression, Program, BinaryOperator, TypeExpression, Id, Parameter};
 
@@ -144,27 +145,27 @@ impl TypeInferencer {
     }
 
     pub fn infer_program(&mut self, program: &Program) -> Result<Program, String> {
-        println!("------ Typing program ------");
+        type_inference_log!("------ Typing program ------");
         // First pass: collect all function and struct declarations
         // TODO: Repeat while there are changes in the environment to account for recursive types
         self.collect_declarations(program)?;
 
-        println!("------ Collected declarations ------");
-        println!("------ Environment: {:?}", self.env);
+        type_inference_log!("------ Collected declarations ------");
+        type_inference_log!("------ Environment: {:?}", self.env);
         
         // Second pass: infer types for all expressions
         let typed_expressions = program.expressions.iter()
             .map(|expr| self.infer_expression(expr))
             .collect::<Result<Vec<_>, _>>()?;
 
-        println!("------ Typed expressions ------");
-        println!("------ Environment: {:?}", self.env);
+        type_inference_log!("------ Typed expressions ------");
+        type_inference_log!("------ Environment: {:?}", self.env);
 
         // Third pass: solve constraints
         self.solve_constraints()?;
 
-        println!("------ Solved constraints ------");
-        println!("------ Environment: {:?}", self.env);
+        type_inference_log!("------ Solved constraints ------");
+        type_inference_log!("------ Environment: {:?}", self.env);
 
         Ok(Program { expressions: typed_expressions })
     }
@@ -238,10 +239,10 @@ impl TypeInferencer {
             Expression::Boolean(_) => Ok(expr.clone()),
             Expression::String(_) => Ok(expr.clone()),
             Expression::Identifier { id, type_expr } => {
-                println!("Typing | Identifier: {:?} with type_expr {:?}", id.name, type_expr);
-                println!("Type environment: {:?}", self.env);
+                type_inference_log!("Typing | Identifier: {:?} with type_expr {:?}", id.name, type_expr);
+                type_inference_log!("Type environment: {:?}", self.env);
                 let env_type = self.env.get_type(&id.name);
-                println!("Typing | Identifier: {:?} with env_type {:?}", id.name, env_type);
+                type_inference_log!("Typing | Identifier: {:?} with env_type {:?}", id.name, env_type);
                 if let Some(id_type_expr) = type_expr {
                     match env_type {
                         Some(ty) => {
@@ -256,7 +257,7 @@ impl TypeInferencer {
                             }
                         }
                         None => {
-                            println!("Typing | Missed type for identifier: {:?} in initial pass", id.name);
+                            type_inference_log!("Typing | Missed type for identifier: {:?} in initial pass", id.name);
                             self.env.set_type(id.name.clone(), Type::from(id_type_expr.clone()));
                             return Ok(Expression::Identifier {
                                 id: id.clone(),
@@ -290,9 +291,9 @@ impl TypeInferencer {
                         if right_type != Type::Any || current_type.is_none() {
                             self.env.set_type(id.name.clone(), right_type.clone());
                         }
-                        println!("Type environment: {:?}", self.env);
+                        type_inference_log!("Type environment: {:?}", self.env);
                         // Update the left_expr to have the correct type annotation
-                        println!("Typing | Assignment: {:?} := {:?}", id.name, &right_type);
+                        type_inference_log!("Typing | Assignment: {:?} := {:?}", id.name, &right_type);
                         let left_expr = Expression::Identifier {
                             id: id.clone(),
                             type_expr: Some(TypeExpression::from(right_type)),
@@ -346,7 +347,7 @@ impl TypeInferencer {
             }
             Expression::FunctionCall { id, arguments } => {
                 // Infer types for arguments and set type_expr if missing
-                println!("Typing | FunctionCall: {:?} with args {:?}", id.name, arguments);
+                type_inference_log!("Typing | FunctionCall: {:?} with args {:?}", id.name, arguments);
                 let typed_args = arguments.iter()
                     .map(|arg| self.infer_expression(arg))
                     .collect::<Result<Vec<_>, _>>()?;

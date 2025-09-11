@@ -1,3 +1,4 @@
+use crate::{compiler_debug};
 use crate::frontend::ast::{Expression, Program, BinaryOperator, UnaryOperator, Id, Parameter, FieldDefinition, TypeExpression};
 use crate::backend::environment::Environment;
 use std::collections::HashMap;
@@ -43,20 +44,20 @@ impl Callable for Function {
     }
 
     fn call(&self, interpreter: &mut Interpreter, arguments: Vec<Value>) -> Result<Value, String> {
-        println!("Int.call| Function: {} | {:?}", self.name, self.parameters);
+        compiler_debug!("Int.call| Function: {} | {:?}", self.name, self.parameters);
         if arguments.len() != self.arity() {
             return Err(format!("Incorrect number of arguments: expected {}, got {}", self.arity(), arguments.len()));
         }
 
         interpreter.in_function = true;
         let env = Environment::new(Rc::clone(&self.environment));
-        println!("Func.call| New level: {}", env.borrow());
+        compiler_debug!("Func.call| New level: {}", env.borrow());
 
         // Set the arguments in the function environment
         for (param, arg) in self.parameters.iter().zip(arguments) {
             env.borrow_mut().define(param.clone(), arg);
         }
-        println!("Int.call| Environment after defining arguments: [{}]", env.borrow());
+        compiler_debug!("Int.call| Environment after defining arguments: [{}]", env.borrow());
 
         let result = match self.body.clone() {
             Expression::Block(expressions) => {
@@ -67,7 +68,7 @@ impl Callable for Function {
         };
 
         //let result = interpreter.eval_block(&[Box::new(self.body.clone())], env);
-        println!("Int.call| Result: {:?}", result);
+        compiler_debug!("Int.call| Result: {:?}", result);
 
         match result {
             Ok(value) => Ok(value),
@@ -269,7 +270,7 @@ impl Interpreter {
             Expression::While { condition, body } => self.eval_while(condition, body),
             Expression::Block(expressions) => {
                 let env = Environment::new(Rc::clone(&self.environment));
-                println!("Int.eval.expr.block| New level: {}", env.borrow());
+                compiler_debug!("Int.eval.expr.block| New level: {}", env.borrow());
                 self.eval_block(expressions, env)
             },
             Expression::Return(expr) => self.eval_return(expr),
@@ -277,14 +278,14 @@ impl Interpreter {
             //Expression::VariableAssignment { id, value } => self.eval_variable_assignment(id, value),
             Expression::For { iterator, range, body } => Err(ControlFlow::Err("For loops not implemented in interpreter, please desugar".to_string())),
         };
-        println!("Int.eval.expr| Result: {:?}", result);
+        compiler_debug!("Int.eval.expr| Result: {:?}", result);
         result
     }
 
     fn eval_identifier(&self, id: &Id, type_expr: &Option<TypeExpression>) -> Result<Value, ControlFlow<Value, String>> {
         // Print the current environment for debugging
-        println!("Int.eval.identifier| Identifier: {}", id.name);
-        //println!("Int.eval| Current environment: {}", self.environment);
+        compiler_debug!("Int.eval.identifier| Identifier: {}", id.name);
+        //compiler_debug!("Int.eval| Current environment: {}", self.environment);
         
         self.environment.borrow()
             .get(&id.name)
@@ -366,7 +367,7 @@ impl Interpreter {
             (BinaryOperator::Assignment, left_val, right_val) => {
                 if let Expression::Identifier { id, type_expr } = left {
                     let distance = self.local_scope.get(&id.name).unwrap();
-                    println!("Int.eval.bin_op| Assigning {:?} = {:?} at {:?} distance to [{}]", id.name, right_val, distance, self.environment.borrow());
+                    compiler_debug!("Int.eval.bin_op| Assigning {:?} = {:?} at {:?} distance to [{}]", id.name, right_val, distance, self.environment.borrow());
                     self.environment.borrow_mut().assign(*distance, id.name.clone(), right_val.clone());
                     Ok(right_val.clone())
                 } else {
@@ -419,7 +420,7 @@ impl Interpreter {
     }
 
     fn eval_call(&mut self, id: &Id, arguments: &[Expression]) -> Result<Value, ControlFlow<Value, String>> {
-        println!("Int.eval.call| Call: {}", id.name);
+        compiler_debug!("Int.eval.call| Call: {}", id.name);
         let ident = self.environment.borrow()
             .get(&id.name)
             .ok_or_else(|| ControlFlow::Err(format!("Undefined function: {}", id.name)))?;
@@ -428,7 +429,7 @@ impl Interpreter {
             .map(|arg| self.eval_expression(arg))
             .collect::<Result<Vec<_>, _>>()?;
 
-        println!("Int.eval.call| args: {:?}", args);
+        compiler_debug!("Int.eval.call| args: {:?}", args);
         match ident {
             Value::Function(f) => f.call(self, args).map_err(ControlFlow::Err),
             Value::Type(t) => t.call(self, args).map_err(ControlFlow::Err),
@@ -437,7 +438,7 @@ impl Interpreter {
     }
 
     fn eval_function_definition(&mut self, id: &Id, parameters: &[Parameter], body: &Expression, return_type_expr: &Option<TypeExpression>) -> Result<Value, ControlFlow<Value, String>> {
-        println!("Int.eval.fn_def| Function definition: {}", id.name);
+        compiler_debug!("Int.eval.fn_def| Function definition: {}", id.name);
         let function = Function {
             name: id.name.clone(),
             parameters: parameters.iter().map(|p| p.id.name.clone()).collect(),
@@ -448,7 +449,7 @@ impl Interpreter {
 
         let callable_function = Value::Function(function);
         self.environment.borrow_mut().define(id.name.clone(), callable_function);
-        println!("Int.eval.fn_def| Environment after function definition: {}", self.environment.borrow());
+        compiler_debug!("Int.eval.fn_def| Environment after function definition: {}", self.environment.borrow());
         Ok(Value::Unit)
     }
 
@@ -497,13 +498,13 @@ impl Interpreter {
     }
 
     fn eval_while(&mut self, condition: &Expression, body: &Expression) -> Result<Value, ControlFlow<Value, String>> {
-        println!("Int.eval.while| Entering while loop");
+        compiler_debug!("Int.eval.while| Entering while loop");
         //let while_env = Environment::new(Some(Box::new(self.environment.clone())));
         //let old_env = std::mem::replace(&mut self.environment, while_env);
 
         let mut result = Ok(Value::Unit);
         while self.eval_expression(condition)?.is_truthy()? {
-            println!("Int.eval.while| Entering body of while loop");
+            compiler_debug!("Int.eval.while| Entering body of while loop");
             result = self.eval_expression(&body);
         }
 
@@ -514,11 +515,11 @@ impl Interpreter {
     fn eval_block(&mut self, expressions: &[Box<Expression>], env: Rc<RefCell<Environment>>) -> Result<Value, ControlFlow<Value, String>> {
         let old_env = std::mem::replace(&mut self.environment, env);
 
-        println!("Int.eval.block| Env: {}", self.environment.borrow());
-        println!("Int.eval.block| expressions: {:?}", expressions);
+        compiler_debug!("Int.eval.block| Env: {}", self.environment.borrow());
+        compiler_debug!("Int.eval.block| expressions: {:?}", expressions);
 
         let result = self.eval_inner_block(expressions);
-        println!("Int.eval.block| Result: {:?}", result);
+        compiler_debug!("Int.eval.block| Result: {:?}", result);
 
         self.environment = old_env;
         result
@@ -552,7 +553,7 @@ impl Interpreter {
     // print <expr>
     fn eval_print(&mut self, expr: &Expression) -> Result<Value, ControlFlow<Value, String>> {
         let value = self.eval_expression(expr)?;
-        println!("{:?}", value);
+        compiler_debug!("{:?}", value);
         Ok(Value::Unit)
     }
 
@@ -560,9 +561,9 @@ impl Interpreter {
     fn eval_variable_assignment(&mut self, id: &Id, value: &Expression) -> Result<Value, ControlFlow<Value, String>> {
         let evaluated_value = self.eval_expression(value)?;
         let distance = self.local_scope.get(&id.name).unwrap();
-        println!("Int.eval.var_assign| Assigning {:?} = {:?} at {:?} distance to [{}]", id.name, evaluated_value, distance, self.environment.borrow());
+        compiler_debug!("Int.eval.var_assign| Assigning {:?} = {:?} at {:?} distance to [{}]", id.name, evaluated_value, distance, self.environment.borrow());
         self.environment.borrow_mut().assign(*distance, id.name.clone(), evaluated_value.clone());
-        println!("Int.eval.var_assign| Environment after assignment: [{}]", self.environment.borrow());
+        compiler_debug!("Int.eval.var_assign| Environment after assignment: [{}]", self.environment.borrow());
         Ok(evaluated_value)
     }
     */

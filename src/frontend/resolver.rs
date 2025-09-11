@@ -1,3 +1,4 @@
+use crate::{compiler_debug};
 use std::collections::HashMap;
 use std::collections::VecDeque;
 use crate::frontend::ast::{Expression, Program, Id, TypeExpression};
@@ -19,9 +20,9 @@ impl Resolver {
     }
 
     pub fn resolve(&mut self, program: &Program) -> Result<HashMap<String, usize>, Vec<String>> {
-        println!("------ Resolver start ------");
+        compiler_debug!("------ Resolver start ------");
         self.begin_scope(); // Global scope
-        println!("Res.resolve| Global scope: {:?}, locals: {:?}", self.scopes, self.locals);
+        compiler_debug!("Res.resolve| Global scope: {:?}, locals: {:?}", self.scopes, self.locals);
         
         for expr in &program.expressions {
             self.resolve_expr(expr);
@@ -29,7 +30,7 @@ impl Resolver {
         
         self.end_scope();
         
-        println!("------ Resolver end ------");
+        compiler_debug!("------ Resolver end ------");
 
         if self.errors.is_empty() {
             Ok(self.locals.clone())
@@ -61,7 +62,7 @@ impl Resolver {
                 
                 // Create new scope for function body
                 self.begin_scope();
-                println!("Res.resolve_expr.fn_def| Function scope: {:?}, locals: {:?}", self.scopes, self.locals);
+                compiler_debug!("Res.resolve_expr.fn_def| Function scope: {:?}, locals: {:?}", self.scopes, self.locals);
                 
                 // Declare and define parameters
                 for param in parameters {
@@ -73,7 +74,7 @@ impl Resolver {
                 match body.as_ref() {
                     Expression::Block(expressions) => {
                         for expr in expressions {
-                            println!("Res.resolve_expr.fn_def| Resolving expr: {:?}", expr);
+                            compiler_debug!("Res.resolve_expr.fn_def| Resolving expr: {:?}", expr);
                             self.resolve_expr(&expr)?;
                         }
                     }
@@ -90,7 +91,7 @@ impl Resolver {
                 
                 // Create scope for struct fields
                 self.begin_scope();
-                println!("Res.resolve_expr.struct_def| Struct scope: {:?}, locals: {:?}", self.scopes, self.locals);
+                compiler_debug!("Res.resolve_expr.struct_def| Struct scope: {:?}, locals: {:?}", self.scopes, self.locals);
 
                 for field in fields {
                     self.declare(&field.id)?;
@@ -117,7 +118,7 @@ impl Resolver {
                 
                 // Create new scope for iterator variable
                 self.begin_scope();
-                println!("Res.resolve_expr.for| For scope: {:?}, locals: {:?}", self.scopes, self.locals);
+                compiler_debug!("Res.resolve_expr.for| For scope: {:?}, locals: {:?}", self.scopes, self.locals);
 
                 self.declare(iterator)?;
                 self.define(iterator);
@@ -129,7 +130,7 @@ impl Resolver {
             },
             Expression::Block(expressions) => {
                 self.begin_scope();
-                println!("Res.resolve_expr.block| Block scope: {:?}, locals: {:?}", self.scopes, self.locals);
+                compiler_debug!("Res.resolve_expr.block| Block scope: {:?}, locals: {:?}", self.scopes, self.locals);
 
                 for expr in expressions {
                     self.resolve_expr(expr)?;
@@ -145,15 +146,15 @@ impl Resolver {
             },
             Expression::Print(expr) => self.resolve_expr(expr),
             // Expression::VariableAssignment { id, value } => {
-            //     println!("Res.resolve_expr.var_assign| Variable assignment: {:?}, value: {:?}", id.name, value);
+            //     compiler_debug!("Res.resolve_expr.var_assign| Variable assignment: {:?}, value: {:?}", id.name, value);
             //     // Check if the variable is already declared
             //     if self.locals.contains_key(&id.name) {
-            //         println!("Res.resolve_expr.var_assign| Variable already declared: {:?}", id.name);
+            //         compiler_debug!("Res.resolve_expr.var_assign| Variable already declared: {:?}", id.name);
             //         // If declared, resolve the value for assignment
             //         self.resolve_expr(value)?;
             //         self.resolve_local(id)?;
             //     } else {
-            //         println!("Res.resolve_expr.var_assign| Variable not declared: {:?}", id.name);
+            //         compiler_debug!("Res.resolve_expr.var_assign| Variable not declared: {:?}", id.name);
             //         // If not declared, declare and initialize
             //         self.declare(id)?;
             //         self.resolve_expr(value)?;

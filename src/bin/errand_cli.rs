@@ -1,3 +1,4 @@
+use Errand::{compiler_info};
 use clap::{Parser, Subcommand, Arg, ValueEnum};
 use std::process::Command;
 use std::path::Path;
@@ -85,12 +86,12 @@ fn main() {
                 std::process::exit(1);
             }
             let base_name = Path::new(file).file_stem().unwrap().to_string_lossy();
-            println!("Running {}...", base_name);
-            println!("----------------------------------------");
+            compiler_info!("Running {}...", base_name);
+            compiler_info!("----------------------------------------");
             let status = Command::new(format!("./{}", base_name))
                 .status()
                 .expect("Failed to run executable");
-            println!("----------------------------------------");
+            compiler_info!("----------------------------------------");
             std::process::exit(status.code().unwrap_or(1));
         }
         Commands::Parse { file } => {
@@ -103,7 +104,7 @@ fn main() {
 }
 
 fn build_compiler(arch: &Option<Arch>, release: bool) -> Result<(), String> {
-    println!("Building Errand compiler...");
+    compiler_info!("Building Errand compiler...");
     let mut build_args = vec!["build".to_string()];
     
     if release {
@@ -122,7 +123,7 @@ fn build_compiler(arch: &Option<Arch>, release: bool) -> Result<(), String> {
         None => {}
     }
     
-    println!("Running cargo build with args: {:?}", build_args);
+    compiler_info!("Running cargo build with args: {:?}", build_args);
     let status = Command::new("cargo")
         .args(&build_args)
         .status()
@@ -131,7 +132,7 @@ fn build_compiler(arch: &Option<Arch>, release: bool) -> Result<(), String> {
         return Err("Failed to build Errand compiler".to_string());
     }
     
-    println!("Errand compiler built successfully!");
+    compiler_info!("Errand compiler built successfully!");
     Ok(())
 }
 
@@ -142,7 +143,7 @@ fn compile_file(file: &str, arch: &Option<Arch>, release: bool) -> Result<(), St
     let base_name = Path::new(file).file_stem().unwrap().to_string_lossy();
     
     // Use the compiled Errand binary to compile the source file
-    println!("Compiling {}...", file);
+    compiler_info!("Compiling {}...", file);
     let errand_binary = match (arch, release) {
         (Some(Arch::Arm), true) => "target/aarch64-apple-darwin/release/Errand",
         (Some(Arch::Arm), false) => "target/aarch64-apple-darwin/debug/Errand",
@@ -179,7 +180,7 @@ fn compile_file(file: &str, arch: &Option<Arch>, release: bool) -> Result<(), St
         return Err("Compilation failed".to_string());
     }
     
-    println!("Success! Executable created: {}", base_name);
+    compiler_info!("Success! Executable created: {}", base_name);
     Ok(())
 }
 
@@ -197,6 +198,6 @@ fn parse_to_ast(file: &str) -> Result<(), String> {
     let ast = parser.parse().map_err(|errs| format!("Parsing failed: {:?}", errs))?;
     let ast_file = format!("{}.ast", file);
     fs::write(&ast_file, format!("{}", ast)).map_err(|e| format!("Failed to write AST: {}", e))?;
-    println!("AST written to: {}", ast_file);
+    compiler_info!("AST written to: {}", ast_file);
     Ok(())
 } 

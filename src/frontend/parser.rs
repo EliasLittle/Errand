@@ -1,3 +1,4 @@
+use crate::{parser_log};
 use super::lexer::{Token, TokenType, token_type};
 use super::ast::{Expression, Program, UnaryOperator, BinaryOperator, Parameter, FieldDefinition, Id, TypeExpression}; //, TypeExpression, MatchCase};
 use std::iter::Peekable;
@@ -28,22 +29,22 @@ impl Parser {
         let mut expressions = Vec::new();
         
         while !self.at_end() {
-            println!("------ Parsing new top level expression ------");
+            parser_log!("------ Parsing new top level expression ------");
             match self.parse_expression() {
                 Ok(expr) => expressions.push(expr),
                 Err(e) => {
-                    println!("Error: {:?}", &e);
+                    parser_log!("Error: {:?}", &e);
                     self.errors.push(e);
                     //self.synchronize(); // Error recovery
                 }
             }
         }
-        println!("------ End of parsing ------");
+        parser_log!("------ End of parsing ------");
 
         if self.errors.is_empty() {
             Ok(Program { expressions })
         } else {
-            println!("------ Errors found ------");
+            parser_log!("------ Errors found ------");
             Err(self.errors.clone())
         }
     }
@@ -100,16 +101,16 @@ impl Parser {
     /// Returns the token if it matches the expected type, otherwise returns an error
     /// Used for tokens like identifiers, keywords, etc.
     fn expect(&mut self, token_type: &TokenType) -> Result<Token, String> {
-        println!("Expecting {:?}", token_type);
+        parser_log!("Expecting {:?}", token_type);
         if let Some(token) = self.bump() {
-            println!("Expecting| actual token:{:?}", token);
+            parser_log!("Expecting| actual token:{:?}", token);
             if token.var() == token_type.var() {
                 Ok(token)
             } else {
                 Err(format!("Expected {:?}, found {:?}", token_type, token.token_type))
             }
         } else {
-            println!("Unexpected end of input");
+            parser_log!("Unexpected end of input");
             Err("Unexpected end of input".to_string())
         }
     }
@@ -117,7 +118,7 @@ impl Parser {
     /// Parse expressions (functions, structs, if statements, for statements, return statements)
     /// TODO: Change to parse_statement()
     pub fn parse_expression(&mut self) -> Result<Expression, String> {
-        println!("Parsing expression| current:{:?}", self.current_type());
+        parser_log!("Parsing expression| current:{:?}", self.current_type());
         let result = match self.current_type(){
             Some(TokenType::Foreign) => self.function(),
             Some(TokenType::Function) => self.function(),
@@ -142,7 +143,7 @@ impl Parser {
             }
             None => Err("No current token".to_string()),
         };
-        println!("Parsing expression| result:{:?}", result);
+        parser_log!("Parsing expression| result:{:?}", result);
         let mut at_newline = self.eat(&TokenType::Newline);
         while at_newline {
             at_newline = self.eat(&TokenType::Newline);
@@ -153,22 +154,22 @@ impl Parser {
     /// Bottom-up operator-precedence parsing of expressions
     /// Any operators, literals, and calls, are parsed here (including parenthesized expressions)
     fn parse_expression_1(&mut self, lhs: Expression, min_precedence: i32) -> Result<Expression, String> {
-        println!("Parsing expression 1| Starting -------------------");
-        println!("Parsing expression 1| lhs:{:?}, current:{:?}", lhs, self.current_type());
+        parser_log!("Parsing expression 1| Starting -------------------");
+        parser_log!("Parsing expression 1| lhs:{:?}, current:{:?}", lhs, self.current_type());
         let mut level_lhs = lhs;
         while let Some(current) = self.current_type() {
             if !current.is_infix() {
-                println!("No infix operator found");
+                parser_log!("No infix operator found");
                 break;
             }
             if !(current.precedence()? >= min_precedence) {
-                println!("Parsing expression 1| precedence:{:?} < {:?}", current.precedence(), min_precedence);
+                parser_log!("Parsing expression 1| precedence:{:?} < {:?}", current.precedence(), min_precedence);
                 break; // Exit the loop if precedence is not greater
             }
             let op = self.bump().ok_or("No operator found".to_string())?;
-            println!("Parsing expression 1| op:{:?}, min_precedence:{:?}", op, min_precedence);
+            parser_log!("Parsing expression 1| op:{:?}, min_precedence:{:?}", op, min_precedence);
             let mut rhs = self.primary()?;
-            println!("Parsing expression 1| rhs:{:?}", rhs);
+            parser_log!("Parsing expression 1| rhs:{:?}", rhs);
 
             // Handle operator precedence and associativity
             while let Some(next) = self.current_type() {
@@ -176,24 +177,24 @@ impl Parser {
                     // No infix operator found, break
                     break;
                 }
-                println!("Parsing expression 1| next op:{:?}", next);
+                parser_log!("Parsing expression 1| next op:{:?}", next);
                 let precedence = next.precedence()?;
                 if precedence > min_precedence {
-                    println!("Parsing expression 1| left associative precedence:{:?}", min_precedence+1);
+                    parser_log!("Parsing expression 1| left associative precedence:{:?}", min_precedence+1);
                     rhs = self.parse_expression_1(rhs.clone(), min_precedence+1)?;
                 } else if precedence == min_precedence && next.is_right_associative() {
-                    println!("Parsing expression 1| right associative precedence:{:?}", min_precedence);
+                    parser_log!("Parsing expression 1| right associative precedence:{:?}", min_precedence);
                     rhs = self.parse_expression_1(rhs.clone(), min_precedence)?;
                 } else {
                     break; // Exit the loop if precedence is not greater
                 }
             }
 
-            println!("Applying infix operator: {:?} {:?} {:?}", level_lhs, op.token_type, rhs);
+            parser_log!("Applying infix operator: {:?} {:?} {:?}", level_lhs, op.token_type, rhs);
             level_lhs = self.apply_infix_operator(level_lhs.clone(), &op, rhs.clone())?;
         }
 
-        println!("Parsing expression 1| End of expression 1");
+        parser_log!("Parsing expression 1| End of expression 1");
         // Don't consume newlines here - let the caller handle it
         Ok(level_lhs) // Return the final expression as a clone
     }
@@ -232,7 +233,7 @@ impl Parser {
     /// prefix -> call -> literal 
     /// primary ::= '-' inner_primary | '!' inner_primary
     fn primary(&mut self) -> Result<Expression, String> {
-        println!("Parsing primary| current:{:?}", self.current_type());
+        parser_log!("Parsing primary| current:{:?}", self.current_type());
         let prefix_op = self.check_prefix_operator();
 
         let inner_primary = self.inner_primary()?;
@@ -246,7 +247,7 @@ impl Parser {
 
     /// inner_primary ::= call | literal
     fn inner_primary(&mut self) -> Result<Expression, String> {
-        println!("Parsing inner primary| current:{:?}", self.current_type());
+        parser_log!("Parsing inner primary| current:{:?}", self.current_type());
         match self.current_type() {
             Some(TokenType::Colon) => self.symbol(),
             Some(TokenType::LParen) => self.parenthesized_expression(),
@@ -261,7 +262,7 @@ impl Parser {
     }
 
     fn check_prefix_operator(&mut self) -> Option<UnaryOperator> {
-        println!("Checking prefix operator| current:{:?}", self.current_type());
+        parser_log!("Checking prefix operator| current:{:?}", self.current_type());
         match self.current_type() {
             Some(TokenType::Minus) => {
                 self.bump()?;
@@ -278,10 +279,10 @@ impl Parser {
     /// Parse parenthesized expressions
     /// Does not allow 
     fn parenthesized_expression(&mut self) -> Result<Expression, String> {
-        println!("Parsing parenthesized expression| current:{:?}", self.current_type());
+        parser_log!("Parsing parenthesized expression| current:{:?}", self.current_type());
         self.expect(&TokenType::LParen)?;
         let primary_expr = self.primary()?; // Store the result of primary
-        println!("Parenthesized | primary expression: {:?}", primary_expr);
+        parser_log!("Parenthesized | primary expression: {:?}", primary_expr);
         let expression = self.parse_expression_1(primary_expr, 0)?; // Use the stored result
         self.expect(&TokenType::RParen)?;
         Ok(expression)
@@ -289,7 +290,7 @@ impl Parser {
 
     /// identifier ::= IDENTIFIER(::Type) | IDENTIFIER '(' parameters ')' (call) | IDENTIFIER.IDENTIFIER (field access)
     fn identifier(&mut self) -> Result<Expression, String> {
-        println!("Parsing identifier| current:{:?}", self.current_type());
+        parser_log!("Parsing identifier| current:{:?}", self.current_type());
         let id = self.id()?;
         let type_expr = if self.eat(&TokenType::TypeDef) {
             Some(self.type_expr()?)
@@ -298,12 +299,12 @@ impl Parser {
         };
 
         if self.eat(&TokenType::LParen) {
-            println!("Function call");
+            parser_log!("Function call");
             let parameters = self.arguments()?;
             self.expect(&TokenType::RParen)?;
             Ok(Expression::FunctionCall { id, arguments: parameters })
         } else {
-            println!("Identifier");
+            parser_log!("Identifier");
             Ok(Expression::Identifier { id, type_expr })
         }
     }
@@ -322,14 +323,14 @@ impl Parser {
         match self.expect(&token_type("Identifier")?)?.token_type {
             TokenType::Identifier(id_str) => Ok(Id { name: id_str }),
             _ => {
-                println!("Expected identifier! found: {:?}", self.current_type());
+                parser_log!("Expected identifier! found: {:?}", self.current_type());
                 Err("Expected identifier".to_string())
             }
         }
     }
 
     fn type_expr(&mut self) -> Result<TypeExpression, String> {
-        println!("Parsing type expression| current:{:?}", self.current_type());
+        parser_log!("Parsing type expression| current:{:?}", self.current_type());
         
         let id = self.id()?; // Parse the base identifier
         if self.eat(&TokenType::LBrace) { // Check for the start of a composite type
@@ -356,7 +357,7 @@ impl Parser {
 
     /// Parse literals (String, int, float, boolean)
     fn literal(&mut self, token_type: &TokenType) -> Result<Expression, String> {
-        println!("Parsing literal| current:{:?} expected:{:?}", self.current_type(), token_type);
+        parser_log!("Parsing literal| current:{:?} expected:{:?}", self.current_type(), token_type);
        let literal = self.expect(token_type)?;
        match literal.token_type {
         TokenType::StringLiteral(s) => Ok(Expression::String(s)),
@@ -371,7 +372,7 @@ impl Parser {
     /// Parse function definitions
     /// Currently only supports standard block function definitions
     fn function(&mut self) -> Result<Expression, String> {
-        println!("Parsing function| current:{:?}", self.current_type());
+        parser_log!("Parsing function| current:{:?}", self.current_type());
         let mut foreign = false;
         if self.eat(&TokenType::Foreign) {
             foreign = true;
@@ -399,7 +400,7 @@ impl Parser {
             self.expect(&TokenType::Newline)?; // TODO: Change to or '=' to support inline functions
             let body = self.block()?;
             self.expect(&TokenType::End)?;
-            println!("Parsing function| End of function");
+            parser_log!("Parsing function| End of function");
             self.expect(&TokenType::Newline); // Should these be eats or expects?
             Ok(Expression::FunctionDefinition {
                 id,
@@ -419,7 +420,7 @@ impl Parser {
     // end
     /// Parse struct definitions (enums not supported yet)
     fn structure(&mut self) -> Result<Expression, String> {
-        println!("Parsing structure| current:{:?}", self.current_type());
+        parser_log!("Parsing structure| current:{:?}", self.current_type());
         self.expect(&TokenType::Struct)?;
         let id = self.id()?;
         self.expect(&TokenType::Newline)?;
@@ -430,13 +431,13 @@ impl Parser {
 
     /// Parse expressions until 'END' token
     fn block(&mut self) -> Result<Expression, String> {
-        println!("Parsing block| Starting block: {:?}", self.current_type());
+        parser_log!("Parsing block| Starting block: {:?}", self.current_type());
         let mut expressions = Vec::new();
         while !self.at(&TokenType::End) {
-            println!("Parsing block| not end: {:?}", self.current_type());
+            parser_log!("Parsing block| not end: {:?}", self.current_type());
             expressions.push(Box::new(self.parse_expression()?));
         }
-        println!("Parsing block| End of block");
+        parser_log!("Parsing block| End of block");
         Ok(Expression::Block(expressions))
     }
 
@@ -444,7 +445,7 @@ impl Parser {
 
     /// Parse expressions until 'RParen' token
     fn parameters(&mut self) -> Result<Vec<Parameter>, String> {
-        println!("Parsing parameters| current:{:?}", self.current_type());
+        parser_log!("Parsing parameters| current:{:?}", self.current_type());
        let mut parameters = Vec::new();
        while !self.at(&TokenType::RParen) {
         let id = self.id()?;
@@ -465,7 +466,7 @@ impl Parser {
     /// Parse field definitions
     /// id::type
     fn field_parameters(&mut self) -> Result<Vec<FieldDefinition>, String> {
-        println!("Parsing field parameters| current:{:?}", self.current_type());
+        parser_log!("Parsing field parameters| current:{:?}", self.current_type());
         let mut fields = Vec::new();
         while self.at(&token_type("Identifier")?) {
             let id = self.id()?;
@@ -480,7 +481,7 @@ impl Parser {
 
     /// Parse arguments of a function call
     fn arguments(&mut self) -> Result<Vec<Expression>, String> {
-        println!("Parsing arguments| current:{:?}", self.current_type());
+        parser_log!("Parsing arguments| current:{:?}", self.current_type());
         let mut arguments = Vec::new();
         while !self.at(&TokenType::RParen) {
             let primary_expr = self.primary()?; // Store the result of primary
@@ -497,7 +498,7 @@ impl Parser {
     /// TODO: Support both block and inline if statements
     /// inline should be within parse_expression_1() and blocks should be within parse_expression()
     fn if_statement(&mut self) -> Result<Expression, String> {
-        println!("Parsing if statement| current:{:?}", self.current_type());
+        parser_log!("Parsing if statement| current:{:?}", self.current_type());
         self.expect(&TokenType::If)?;
         let condition = self.parse_expression()?;
         self.eat(&TokenType::Newline); // Keep as eat to support inline
@@ -530,22 +531,22 @@ impl Parser {
 
 
     fn while_statement(&mut self) -> Result<Expression, String> {
-        println!("Parsing while statement| current:{:?}", self.current_type());
+        parser_log!("Parsing while statement| current:{:?}", self.current_type());
         self.expect(&TokenType::While)?;
         let primary_expr = self.primary()?;
         let condition = self.parse_expression_1(primary_expr, 0)?;
-        println!("Parsing while statement| condition:{:?}", condition);
+        parser_log!("Parsing while statement| condition:{:?}", condition);
         self.eat(&TokenType::Newline); // parse_expression_1() eats the newline
-        println!("Parsing while statement| newline");
+        parser_log!("Parsing while statement| newline");
         let body = self.block()?;
         self.eat(&TokenType::Newline);
         self.expect(&TokenType::End)?;
-        println!("Parsing while statement| body:{:?}", body);
+        parser_log!("Parsing while statement| body:{:?}", body);
         Ok(Expression::While { condition: Box::new(condition), body: Box::new(body) })
     }
 
     fn for_statement(&mut self) -> Result<Expression, String> {
-        println!("Parsing for statement| current:{:?}", self.current_type());
+        parser_log!("Parsing for statement| current:{:?}", self.current_type());
         self.expect(&TokenType::For)?;
         let iterator = self.id()?;
         self.expect(&TokenType::In)?;
@@ -557,17 +558,17 @@ impl Parser {
     }
 
     fn return_statement(&mut self) -> Result<Expression, String> {
-        println!("Parsing return statement| current:{:?}", self.current_type());
+        parser_log!("Parsing return statement| current:{:?}", self.current_type());
         self.expect(&TokenType::Return)?;
         let primary_expr = self.primary()?; // Store the result of primary
         let value = self.parse_expression_1(primary_expr, 0)?;
         self.eat(&TokenType::Newline);
-        println!("Parsing return statement| end of return");
+        parser_log!("Parsing return statement| end of return");
         Ok(Expression::Return(Some(Box::new(value))))
     }
 
     fn print_statement(&mut self) -> Result<Expression, String> {
-        println!("Parsing print statement| current:{:?}", self.current_type());
+        parser_log!("Parsing print statement| current:{:?}", self.current_type());
         self.expect(&TokenType::Print)?;
         let primary_expr = self.primary()?;
         let value = self.parse_expression_1(primary_expr, 0)?;

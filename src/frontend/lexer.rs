@@ -1,3 +1,4 @@
+use crate::{lexer_log};
 use std::fmt;
 use std::io::Write;
 use std::mem::Discriminant;
@@ -311,8 +312,8 @@ impl Lexer {
         // Read the header
         while self.peek_n(3) != ['-', '-', '+'] {
             if self.current_char == '\n' || self.current_char == '\0' {
-                println!("Header: {}", header);
-                println!("Current char: {}", self.current_char);
+                lexer_log!("Header: {}", header);
+                lexer_log!("Current char: {}", self.current_char);
                 return Err("Invalid block comment: header not properly terminated.".to_string());
             }
             header.push(self.current_char);
@@ -605,7 +606,7 @@ impl Lexer {
     }
 
     pub fn lex(&mut self, file_path: &str) -> Result<Vec<Token>, String> {
-        println!("Starting to lex the file"); 
+        lexer_log!("Starting to lex the file"); 
 
         // Initialize the lexer with the file contents
         self.chars = self.source.chars().collect();
@@ -619,7 +620,7 @@ impl Lexer {
         while !self.is_end_of_file() {
             match self.read_token() {
                 Ok(token) => {
-                    //println!("{}", token); // Debug print statement
+                    lexer_log!("{}", token); // Debug print statement
                     tokens.push(token);
                 },
                 Err(e) => return Err(e),
@@ -640,9 +641,9 @@ impl Lexer {
     }
 
     pub fn print_tokens(&self, tokens: &[Token]) {
-        println!("Printing tokens...");
+        lexer_log!("Printing tokens...");
         for token in tokens {
-            println!("{}", token);
+            lexer_log!("{}", token);
         }
     }
 } 
