@@ -152,51 +152,35 @@ fn compile_file(file: &str, arch: &Option<Arch>, release: bool) -> Result<(), St
         (None, false) => "target/debug/Errand",
     };
     
-    let status = Command::new(errand_binary)
-        .arg("--file")
-        .arg(file)
+    // Build the command with new argument structure
+    let mut cmd = Command::new(errand_binary);
+    cmd.arg(file); // File is now a positional argument
+    
+    // Add architecture flag if specified
+    match arch {
+        Some(Arch::Arm) => {
+            cmd.arg("--arch").arg("arm");
+        }
+        Some(Arch::X86) => {
+            cmd.arg("--arch").arg("x86");
+        }
+        None => {}
+    }
+    
+    // Add output flag
+    cmd.arg("-o").arg(&*base_name);
+    
+    // Emit executable by default (no need to specify --emit=exe)
+    
+    let status = cmd
         .status()
         .map_err(|e| format!("Failed to run Errand compiler: {}", e))?;
     if !status.success() {
         return Err("Compilation failed".to_string());
     }
     
-    let bin_file = format!("{}.bin", file.strip_suffix(".err").unwrap_or(file));
-    println!("Linking {}...", bin_file);
-    if !Path::new(&bin_file).exists() {
-        return Err(format!("Expected binary file '{}' not found", bin_file));
-    }
-    let mut gcc_cmd = Command::new("gcc");
-    match arch {
-        Some(Arch::Arm) => {
-            gcc_cmd.arg("-arch").arg("arm64");
-        }
-        Some(Arch::X86) => {
-            gcc_cmd.arg("-arch").arg("x86_64");
-        }
-        None => {}
-    }
-    gcc_cmd
-        .arg("-o")
-        .arg(&*base_name)
-        .arg(&bin_file);
-    
-    // Print the full gcc command for debugging
-    println!("Running gcc command: gcc{}", 
-        gcc_cmd.get_args()
-            .map(|arg| format!(" {}", arg.to_string_lossy()))
-            .collect::<String>()
-    );
-    
-    let status = gcc_cmd
-        .status()
-        .map_err(|e| format!("Failed to run gcc: {}", e))?;
-    if status.success() {
-        println!("Success! Executable created: {}", base_name);
-        Ok(())
-    } else {
-        Err("Linking failed".to_string())
-    }
+    println!("Success! Executable created: {}", base_name);
+    Ok(())
 }
 
 fn parse_to_ast(file: &str) -> Result<(), String> {
