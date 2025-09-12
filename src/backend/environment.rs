@@ -1,3 +1,4 @@
+use crate::{compiler_debug};
 use std::collections::HashMap; // Add this import for HashMap
 use crate::backend::interpreter::Value;
 use std::fmt; // Add this import for formatting
@@ -80,9 +81,9 @@ impl Environment {
     // Not levels away from the current environment
     pub fn assign(&mut self, depth: usize, name: String, value: Value) {
         if self.depth == depth {
-            println!("Env.assign| Assigning {:?} = {:?} at {:?} depth", name, value, depth);
+            compiler_debug!("Env.assign| Assigning {:?} = {:?} at {:?} depth", name, value, depth);
             self.define(name, value);
-            println!("Env.assign| Environment after assignment: {}", self);
+            compiler_debug!("Env.assign| Environment after assignment: {}", self);
         } else if let Some(ref parent) = self.parent_env {
             parent.borrow_mut().assign(depth, name, value);
         }
@@ -94,9 +95,9 @@ impl Environment {
     }
     /*
     pub fn print_environment(&self, indent: &str) {
-        println!("{:?}", self.values);
+        compiler_debug!("{:?}", self.values);
         if let Some(ref parent) = self.parent_env {
-            println!("\n{}{:?}", indent, parent);
+            compiler_debug!("\n{}{:?}", indent, parent);
             parent.print_environment(&format!("  {}", indent));
         }
     }

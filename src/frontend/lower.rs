@@ -1,10 +1,11 @@
+use crate::{lowering_log};
 use crate::frontend::ast::*;
 
 // TODO: Rename to desugar
 
 impl Program {
     pub fn lower(&self) -> Program {
-        println!("------ Lowering program ------");
+        lowering_log!("------ Lowering program ------");
         // 1. Find all struct definitions and generate constructor functions
         let mut constructor_functions = Vec::new();
         for expr in &self.expressions {
@@ -40,7 +41,7 @@ impl Program {
                 .chain(self.expressions.iter().map(|expr| self.lower_expression(expr.clone())))
                 .collect(),
         };
-        println!("------ Program lowered ------");
+        lowering_log!("------ Program lowered ------");
         lowered
     }
 
@@ -60,7 +61,7 @@ impl Program {
                 }
             },
             Expression::FunctionDefinition { id, parameters, body, return_type_expr, foreign } => {
-                println!("[LOWER] Lowering function definition: {} | foreign: {}", id.name, foreign);
+                lowering_log!("[LOWER] Lowering function definition: {} | foreign: {}", id.name, foreign);
                 let lowered_body = Box::new(self.lower_expression(*body));
                 if foreign {
                     // For foreign functions, preserve the flag and do not call lower_function_definition
@@ -171,7 +172,7 @@ impl Program {
 }
 
 fn lower_field_access(left: Box<Expression>, right: Box<Expression>) -> Expression {
-    println!("------ Lowering field access ------");
+    lowering_log!("------ Lowering field access ------");
     let field_symbol = match *right {
         Expression::Identifier { id, .. } => Expression::Symbol(id.name),
         other => panic!("Dot field access expects an identifier as the field name, got: {:?}", other),
@@ -188,7 +189,7 @@ fn lower_field_access(left: Box<Expression>, right: Box<Expression>) -> Expressi
 }
 
 fn lower_function_definition(id: Id, parameters: Vec<Parameter>, body: Box<Expression>, return_type_expr: Option<TypeExpression>) -> Expression {
-    println!("------ Lowering function definition ------");
+    lowering_log!("------ Lowering function definition ------");
     
     // Check if the function body already has a return statement
     let has_return = has_return_statement(&body);
@@ -246,7 +247,7 @@ fn has_return_statement(expr: &Expression) -> bool {
 }
 
 fn lower_for_loop(iterator: Id, range: Box<Expression>, body: Box<Expression>) -> Expression {
-    println!("------ Lowering for loop ------");
+    lowering_log!("------ Lowering for loop ------");
       // Create a dummy variable for the index
       let index_var = Expression::Identifier { id: Id { name: "%index".to_string() }, type_expr: Some(TypeExpression::Int) };
       let index_assignment = Expression::BinaryOp {
