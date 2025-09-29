@@ -6,6 +6,7 @@ use Errand::frontend::ast::Program;
 use Errand::frontend::typeof_eval::TypeofEvaluator;
 use Errand::backend::interpreter::Interpreter;
 use Errand::backend::ir_lowering::IRLoweringPass;
+use Errand::backend::preir_gen::compile_preir;
 use Errand::logging::{init_logger, CompilerLogLevel};
 use Errand::{compiler_info, compiler_debug, compiler_error};
 
@@ -34,6 +35,10 @@ struct Cli {
     /// Generate CLIF IR instead of machine code
     #[arg(long)]
     clif: bool,
+    
+    /// Dump IR instructions to a file
+    #[arg(long)]
+    dump_ir: bool,
     
     /// Log level for compiler output
     #[arg(long, value_enum, default_value = "info")]
@@ -224,6 +229,43 @@ fn main() {
     let typeof_evaluator = TypeofEvaluator;
     let typeof_evaluated_program = typeof_evaluator.eval_program(&typed_program);
     print_ast(file_path, "typeof", &typeof_evaluated_program);
+
+    // Generate IR if requested
+    if cli.dump_ir {
+        compiler_info!("Generating IR instructions");
+        let preir = compile_preir(&typeof_evaluated_program);
+        match preir {
+            Ok(preir) => {
+                let verbir = preir.format_all();
+                let main_ir = preir.format_main();
+                
+                // Determine IR file path
+                let verbir_file_path = if let Some(stripped) = file_path.strip_suffix(".err") {
+                    format!("{}.verbir", stripped)
+                } else {
+                    format!("{}.verbir", file_path)
+                };
+
+                let main_ir_file_path = if let Some(stripped) = file_path.strip_suffix(".err") {
+                    format!("{}.ir", stripped)
+                } else {
+                    format!("{}.ir", file_path)
+                };
+                
+                std::fs::write(&verbir_file_path, verbir)
+                    .expect("Failed to write Verbose IR to file");
+                compiler_info!("IR instructions written to: {}", verbir_file_path);
+
+                std::fs::write(&main_ir_file_path, main_ir)
+                    .expect("Failed to write main IR to file");
+                compiler_info!("IR instructions written to: {}", main_ir_file_path);
+            }
+            Err(e) => {
+                compiler_error!("IR generation failed: {}", e);
+                std::process::exit(1);
+            }
+        }
+    }
 
     // After type inference, add compilation
     let ir_lowering = IRLoweringPass::new();

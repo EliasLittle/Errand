@@ -5,4 +5,6 @@ pub mod cranelift_compiler;
 pub mod ir_lowering;
 pub mod structs;
 pub mod built_in_methods;
+pub mod preir_gen;
+pub mod preir;
 // pub mod llvm_compiler;
