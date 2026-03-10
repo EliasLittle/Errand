@@ -73,6 +73,7 @@ impl TokenType {
         return std::mem::discriminant(self)
     }
 
+    // Higher precedence means the token is evaluated first
     pub fn precedence(&self) -> Result<i32, String> {
         match self {
             | TokenType::Dot => Ok(4),
