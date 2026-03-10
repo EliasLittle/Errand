@@ -116,13 +116,20 @@ pub fn emit_getfield(
     struct_ptr: Value,
     field_symbol: &str,
     struct_type: &str, // The type name of the struct (needed to look up the layout)
-) -> Value {
+) -> Result<Value, String> {
     // Look up the struct layout
     cranelift_log!("Getting field: {:?} of type: {:?}", field_symbol, struct_type);
-    let struct_info = struct_registry.get(struct_type).expect("Struct type not found in registry");
+    let struct_info = struct_registry.get(struct_type).ok_or_else(|| {
+        let available: Vec<&String> = struct_registry.keys().collect();
+        format!(
+            "Struct type '{}' not found in registry. Available structs: {:?}. \
+             Note: '{}' may be a primitive (Int, Bool, String) - getfield requires a struct type.",
+            struct_type, available, struct_type
+        )
+    })?;
     cranelift_log!("Struct info: {:?}", struct_info);
     let field = struct_info.fields.iter().find(|f| f.name == field_symbol)
-        .expect("Field not found in struct");
+        .ok_or_else(|| format!("Field '{}' not found in struct '{}'", field_symbol, struct_type))?;
     let offset = field.offset as i32;
     cranelift_log!("Pointer: {:?}", struct_ptr);
     cranelift_log!("Offset: {:?}", offset);
@@ -133,7 +140,7 @@ pub fn emit_getfield(
         crate::backend::structs::Type::String => types::I64, // pointer to string
         _ => types::I64, // fallback for unsupported types
     };
-    builder.ins().load(cranelift_type, MemFlags::new(), struct_ptr, offset)
+    Ok(builder.ins().load(cranelift_type, MemFlags::new(), struct_ptr, offset))
 }
 
 pub fn emit_ffi(
