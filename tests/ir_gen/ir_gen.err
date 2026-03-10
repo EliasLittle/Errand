@@ -1,0 +1,39 @@
+foreign fn printf(a::Int):: Int
+foreign fn free(a::Int):: Int
+foreign fn strlen(a::Int):: Int
+foreign fn malloc(a::Int):: Int
+foreign fn strcpy(a::Int, b::Int):: Int
+
+fn strlen(a::String)
+    return strlen(as_ptr(a))
+end
+
+fn strcpy(a::String, b::String)
+    return strcpy(as_ptr(a), as_ptr(b))
+end
+
+fn free(a::String)
+    return free(as_ptr(a))
+end
+
+struct Point
+    x::Int
+    y::Int
+end
+
+fn add_one(p::Point)
+    return Point(p.x+1, p.y+1)
+end
+
+fn add_one(a::Int)
+    return a+1
+end
+
+fn main()
+    a = Point(7, 2)
+    b = add_one(a)
+    +-- b = a.y + 3
+    return b.x
+end
+
+printf("%d\n", main())
