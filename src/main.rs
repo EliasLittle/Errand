@@ -1,12 +1,12 @@
 use Errand::frontend::lexer::Lexer;
 use Errand::frontend::parser::Parser as ErrandParser;
-use Errand::frontend::resolver::Resolver;
 use Errand::frontend::type_inference::TypeInferencer;
 use Errand::frontend::ast::Program;
 use Errand::frontend::typeof_eval::TypeofEvaluator;
-use Errand::backend::interpreter::Interpreter;
 use Errand::backend::ir_lowering::IRLoweringPass;
 use Errand::backend::preir_gen::compile_preir;
+use Errand::backend::worklist::ErrandInference;
+use Errand::backend::preir::Instr;
 use Errand::logging::{init_logger, CompilerLogLevel};
 use Errand::{compiler_info, compiler_debug, compiler_error};
 
@@ -47,6 +47,10 @@ struct Cli {
     /// Enable specific logging modules (comma-separated)
     #[arg(long, value_enum)]
     log_modules: Vec<LogModule>,
+    
+    /// Run worklist type inference on PreIR
+    #[arg(long)]
+    type_check_preir: bool,
 }
 
 #[derive(Copy, Clone, PartialEq, Eq, PartialOrd, Ord, ValueEnum)]
@@ -76,6 +80,7 @@ enum LogLevel {
     CodeGen,
     Lowering,
     Cranelift,
+    Worklist,
 }
 
 #[derive(Copy, Clone, PartialEq, Eq, PartialOrd, Ord, ValueEnum)]
@@ -92,6 +97,8 @@ enum LogModule {
     Lowering,
     /// Cranelift compilation debug information
     Cranelift,
+    /// Worklist type inference debug information
+    Worklist,
     /// General compiler debug information
     Compiler,
 }
@@ -110,6 +117,7 @@ impl From<LogLevel> for CompilerLogLevel {
             LogLevel::CodeGen => CompilerLogLevel::CodeGen,
             LogLevel::Lowering => CompilerLogLevel::Lowering,
             LogLevel::Cranelift => CompilerLogLevel::Cranelift,
+            LogLevel::Worklist => CompilerLogLevel::Debug, // Map to debug for now
         }
     }
 }
@@ -123,6 +131,7 @@ impl From<LogModule> for String {
             LogModule::CodeGen => "codegen".to_string(),
             LogModule::Lowering => "lowering".to_string(),
             LogModule::Cranelift => "cranelift".to_string(),
+            LogModule::Worklist => "worklist".to_string(),
             LogModule::Compiler => "compiler".to_string(),
         }
     }
@@ -140,6 +149,90 @@ fn print_ast(path: &str, extension: &str, ast: &Program) {
         };
         std::fs::write(&ast_file_path, format!("{}", ast)).expect("Failed to write AST to file");
         compiler_info!("AST written to: {}", ast_file_path);
+    }
+}
+
+fn type_check_preir(preir: Errand::backend::preir::PreIR, program: &Program) -> Result<(), String> {
+    compiler_info!("Running worklist type inference on PreIR...");
+    compiler_info!("----------------------------------------");
+    
+    // Create inference engine with PreIR and Program
+    let mut inference = ErrandInference::with_preir_and_program(preir, program);
+    
+    let mut type_errors = Vec::new();
+    
+    // Collect function body indices and parameters first to avoid borrow conflicts
+    let mut function_indices = Vec::new();
+    for (index, instruction) in inference.preir.instructions.iter().enumerate() {
+        if let Instr::FuncDecl(func_data) = instruction {
+            function_indices.push((
+                index,
+                func_data.name.clone(),
+                func_data.body_index,
+                func_data.parameters.clone(),
+            ));
+        }
+    }
+
+    // Analyze main region FIRST so module-level variables are discovered before functions.
+    // Functions may reference module-level variables, so they must exist in module_context.
+    compiler_debug!("Type checking main region: {}", inference.preir.format_main());
+    inference.setup_function_context(&[]);
+    let region_data = if let Instr::Region(rd) = &inference.preir.main {
+        rd.clone()
+    } else {
+        return Err("Main is not a Region".to_string());
+    };
+
+    match inference.analyze_region(&region_data) {
+        Ok(main_type) => {
+            compiler_info!("Main region type: {:?}", main_type);
+        }
+        Err(e) => {
+            let error_msg = format!("Type error in main region: {:?}", e);
+            compiler_error!("  ✗ {}", error_msg);
+            type_errors.push(error_msg);
+        }
+    }
+
+    // Promote main region's var_context to module_context so functions can see module-level vars
+    inference.promote_var_context_to_module();
+
+    // Type check each function declaration using Zig-style analysis
+    for (index, func_name, body_index, parameters) in function_indices {
+        compiler_info!("Type checking function {}: {}", func_name, inference.preir.format_instruction(index as i64));
+
+        inference.setup_function_context(&parameters);
+        match inference.analyze_instr_index(body_index) {
+            Ok(_inferred_type) => {
+                compiler_debug!("  ✓ Function {} type checked successfully", func_name);
+            }
+            Err(e) => {
+                let error_msg = format!("Type error in function {}: {:?}", func_name, e);
+                compiler_error!("  ✗ {}", error_msg);
+                type_errors.push(error_msg);
+            }
+        }
+    }
+    
+    // Print inference trace if debug logging is enabled
+    let trace = inference.get_trace();
+    if !trace.is_empty() {
+        compiler_debug!("Type inference trace:");
+        for trace_item in trace {
+            compiler_debug!("  {}", trace_item);
+        }
+    }
+    
+    if type_errors.is_empty() {
+        compiler_info!("✓ All PreIR instructions type checked successfully!");
+        Ok(())
+    } else {
+        compiler_error!("✗ Found {} type error(s) in PreIR", type_errors.len());
+        for error in &type_errors {
+            compiler_error!("  {}", error);
+        }
+        Err(format!("Type checking failed with {} error(s)", type_errors.len()))
     }
 }
 
@@ -188,6 +281,7 @@ fn main() {
     
     // Initialize logging
     let log_level = CompilerLogLevel::from(cli.log_level);
+    compiler_info!("Log level: {:?}", log_level);
     let log_modules: Vec<String> = cli.log_modules
         .into_iter()
         .map(|m| m.into())
@@ -230,44 +324,53 @@ fn main() {
     let typeof_evaluated_program = typeof_evaluator.eval_program(&typed_program);
     print_ast(file_path, "typeof", &typeof_evaluated_program);
 
-    // Generate IR if requested
-    if cli.dump_ir {
-        compiler_info!("Generating IR instructions");
-        let preir = compile_preir(&typeof_evaluated_program);
-        match preir {
-            Ok(preir) => {
-                let verbir = preir.format_all();
-                let main_ir = preir.format_main();
-                
-                // Determine IR file path
-                let verbir_file_path = if let Some(stripped) = file_path.strip_suffix(".err") {
-                    format!("{}.verbir", stripped)
-                } else {
-                    format!("{}.verbir", file_path)
-                };
+    // Generate PreIR
+    compiler_info!("Generating PreIR instructions");
+    let preir = compile_preir(&typeof_evaluated_program);
+    let preir = match preir {
+        Ok(preir) => preir,
+        Err(e) => {
+            compiler_error!("PreIR generation failed: {}", e);
+            std::process::exit(1);
+        }
+    };
 
-                let main_ir_file_path = if let Some(stripped) = file_path.strip_suffix(".err") {
-                    format!("{}.ir", stripped)
-                } else {
-                    format!("{}.ir", file_path)
-                };
-                
-                std::fs::write(&verbir_file_path, verbir)
-                    .expect("Failed to write Verbose IR to file");
-                compiler_info!("IR instructions written to: {}", verbir_file_path);
-
-                std::fs::write(&main_ir_file_path, main_ir)
-                    .expect("Failed to write main IR to file");
-                compiler_info!("IR instructions written to: {}", main_ir_file_path);
-            }
-            Err(e) => {
-                compiler_error!("IR generation failed: {}", e);
-                std::process::exit(1);
-            }
+    // Run worklist type inference if requested
+    if cli.type_check_preir {
+        if let Err(e) = type_check_preir(preir.clone(), &typeof_evaluated_program) {
+            compiler_error!("PreIR type checking failed: {}", e);
+            std::process::exit(1);
         }
     }
 
-    // After type inference, add compilation
+    // Dump IR if requested
+    if cli.dump_ir {
+        let verbir = preir.format_all();
+        let main_ir = preir.format_main();
+        
+        // Determine IR file path
+        let verbir_file_path = if let Some(stripped) = file_path.strip_suffix(".err") {
+            format!("{}.verbir", stripped)
+        } else {
+            format!("{}.verbir", file_path)
+        };
+
+        let main_ir_file_path = if let Some(stripped) = file_path.strip_suffix(".err") {
+            format!("{}.ir", stripped)
+        } else {
+            format!("{}.ir", file_path)
+        };
+        
+        std::fs::write(&verbir_file_path, verbir)
+            .expect("Failed to write Verbose IR to file");
+        compiler_info!("IR instructions written to: {}", verbir_file_path);
+
+        std::fs::write(&main_ir_file_path, main_ir)
+            .expect("Failed to write main IR to file");
+        compiler_info!("IR instructions written to: {}", main_ir_file_path);
+    }
+
+    // After PreIR generation and optional type checking, proceed with compilation
     let ir_lowering = IRLoweringPass::new();
     
     // Check if we're in CLIF mode

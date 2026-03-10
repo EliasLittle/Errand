@@ -204,7 +204,7 @@ impl PreIR {
 pub type instr_index = i64;
 pub type decl_index = i64;
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq)]
 pub enum Instr {
     Literal(LiteralPl),
     VarRef(VarRefData),
@@ -226,20 +226,20 @@ pub enum Instr {
 // Declaration Values
 //
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq)]
 pub struct VarDeclData {
     pub name: String,
     pub value: instr_index,
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq)]
 pub struct FuncData {
     pub name: String,
     pub parameters: Vec<Parameter>,
     pub body_index: i64, // index into the instruction vector
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq)]
 pub struct StructData {
     pub name: String,
     pub fields: Vec<FieldDefinition>,
@@ -249,12 +249,12 @@ pub struct StructData {
 // Instruction Values
 //
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq)]
 pub struct VarRefData {
     pub name: String,
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq)]
 pub enum LiteralPl {
     Int(i64),
     Float(f64),
@@ -264,46 +264,46 @@ pub enum LiteralPl {
     Unit,
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq)]
 pub struct UnOpPl {
     pub op: UnaryOperator,
     pub operand: instr_index,
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq)]
 pub struct BinOpPl {
     pub op: BinaryOperator,
     pub left: instr_index, 
     pub right: instr_index,
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq)]
 pub struct FnCallPl {
     pub name: String,
     pub arguments: Vec<instr_index>,
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq)]
 pub struct IfStatementData {
     pub condition: instr_index,
     pub then_branch: instr_index,
     pub else_branch: Option<instr_index>,
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq)]
 pub struct WhileLoopData {
     pub condition: instr_index,
     pub body: instr_index,
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq)]
 pub struct ForLoopData {
     pub iterator: String,
     pub range: instr_index,
     pub body: instr_index,
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq)]
 pub struct RegionData {
     // _start and _end define a slice into the instruction and declaration vectors
     pub instr_start: instr_index,
@@ -311,7 +311,7 @@ pub struct RegionData {
     pub return_loc: instr_index,
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq)]
 pub struct ReturnData {
     pub value: Option<instr_index>,
 }

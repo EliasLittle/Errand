@@ -1,5 +1,9 @@
 use crate::frontend::ast::{Program, Expression, BinaryOperator};
-use crate::backend::preir::{PreIR, Instr, LiteralPl, UnOpPl, BinOpPl, FnCallPl, IfStatementData, WhileLoopData, ForLoopData, RegionData, ReturnData, FuncData, StructData, VarDeclData, VarRefData, instr_index, decl_index};
+use crate::backend::preir::{PreIR, Instr, LiteralPl, UnOpPl, BinOpPl, FnCallPl, IfStatementData, WhileLoopData, ForLoopData, RegionData, ReturnData, FuncData, StructData, VarDeclData, VarRefData, instr_index};
+use crate::backend::worklist::ErrandType;
+use crate::backend::errand_builtins::{add_builtin_data_constructors, add_builtin_functions, type_expr_to_errand_type};
+use std::collections::HashMap;
+use log::info;
 
 
 pub fn compile_preir(program: &Program) -> Result<PreIR, String> {
@@ -61,6 +65,60 @@ pub fn compile_preir(program: &Program) -> Result<PreIR, String> {
     Ok(PreIR {
         main,
         instructions: ctx.instructions,
+    })
+}
+
+/// Extract function signatures from a Program to build typing context
+/// Returns (data_constructors, function_types) for type inference
+pub fn extract_typing_context(program: &Program) -> (HashMap<String, ErrandType>, HashMap<String, ErrandType>) {
+    let data_constructors = add_builtin_data_constructors();
+    let mut function_types = add_builtin_functions();
+
+    // Extract user-defined function signatures and variable assignments
+    for expr in &program.expressions {
+        info!("Extracting typing context for expression: {:?}", expr);
+        // Extract function definitions
+        if let Expression::FunctionDefinition { id, parameters, return_type_expr, .. } = expr {
+            let function_type = build_function_type(parameters, return_type_expr);
+            function_types.insert(id.name.clone(), function_type);
+        }
+        
+        // Extract variable assignments (zero-parameter functions)
+        if let Expression::BinaryOp { 
+            operator: BinaryOperator::Assignment, 
+            left, 
+            right: _ 
+        } = expr {
+            if let Expression::Identifier { id, type_expr } = left.as_ref() {
+                let var_type = match type_expr {
+                    Some(ty) => type_expr_to_errand_type(ty),
+                    None => ErrandType::ETVar(format!("var_{}", id.name)), // Create type variable for inference
+                };
+                function_types.insert(id.name.clone(), var_type);
+            }
+        }
+    }
+    
+    (data_constructors, function_types)
+}
+
+/// Build a function type from parameters and return type
+fn build_function_type(
+    parameters: &[crate::frontend::ast::Parameter], 
+    return_type_expr: &Option<crate::frontend::ast::TypeExpression>
+) -> ErrandType {
+    let return_type = match return_type_expr {
+        Some(type_expr) => type_expr_to_errand_type(type_expr),
+        None => ErrandType::Con("Unit".to_string()), // Default to Unit if no return type specified
+    };
+    
+    // Build function type by folding parameter types: T1 -> T2 -> ... -> ReturnType
+    parameters.iter().rev().fold(return_type, |acc, param| {
+        let param_type = match &param.type_expr {
+            Some(type_expr) => type_expr_to_errand_type(type_expr),
+            None => ErrandType::ETVar(format!("param_{}", param.id.name)), // Create type variable for untyped params
+        };
+        ErrandType::Arrow(Box::new(param_type), Box::new(acc))
     })
 }
 
