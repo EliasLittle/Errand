@@ -224,11 +224,13 @@ impl ErrandInference {
         preir: PreIR,
         _program: &crate::frontend::ast::Program,
     ) -> Self {
-        // Collect global definitions (structs + function placeholders)
-        let data_constructors = Self::collect_global_definitions(&preir);
-        
+        // Create worklist first so placeholder creation and inference share the same
+        // next_var counter (avoids ETVar name collisions)
+        let mut worklist = Worklist::new();
+        let data_constructors = Self::collect_global_definitions(&preir, &mut worklist);
+
         let mut inference = ErrandInference {
-            worklist: Worklist::new(),
+            worklist,
             trace: Vec::new(),
             data_constructors: HashMap::new(), // Temporary empty map
             var_context: HashMap::new(),
@@ -606,7 +608,7 @@ impl ErrandInference {
     ///    - Otherwise, create existential type variable for mutual recursion support
     /// 
     /// Returns the populated data_constructors map (including builtins)
-    pub fn collect_global_definitions(preir: &PreIR) -> HashMap<String, ErrandType> {
+    pub fn collect_global_definitions(preir: &PreIR, worklist: &mut Worklist) -> HashMap<String, ErrandType> {
         let mut data_constructors = add_builtin_data_constructors();
         
         // Add builtin functions
@@ -615,7 +617,6 @@ impl ErrandInference {
         }
 
         // Collect function definitions with placeholder types first
-        let mut worklist = Worklist::new();
         for instr in &preir.instructions {
             if let Instr::FuncDecl(FuncData { name, .. }) = instr {
                 // Don't overwrite builtins (printf, malloc, free, as_ptr, getfield)
