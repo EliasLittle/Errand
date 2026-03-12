@@ -1,8 +1,8 @@
 use Errand::frontend::lexer::Lexer;
 use Errand::frontend::parser::Parser as ErrandParser;
 use Errand::frontend::type_inference::TypeInferencer;
-use Errand::frontend::ast::Program;
 use Errand::frontend::typeof_eval::TypeofEvaluator;
+use Errand::frontend::ast::Program;
 use Errand::backend::ir_lowering::IRLoweringPass;
 use Errand::backend::preir_gen::compile_preir;
 use Errand::backend::worklist::ErrandInference;
@@ -324,7 +324,8 @@ fn main() {
     let typed_program = type_inferencer.infer_program(&lowered).expect("Type inference failed");
     print_ast(file_path, "tast", &typed_program);
 
-    // Evaluate `typeof` calls
+    // Evaluate `typeof` calls (temporary: keeps Cranelift backend working until
+    // the new SIR-based pipeline is complete).
     let typeof_evaluator = TypeofEvaluator;
     let typeof_evaluated_program = typeof_evaluator.eval_program(&typed_program);
     print_ast(file_path, "typeof", &typeof_evaluated_program);

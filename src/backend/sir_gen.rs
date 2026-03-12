@@ -1,11 +1,11 @@
 use std::collections::HashMap;
 
 use crate::backend::preir::{
-    BinOpPl, FnCallPl, ForLoopData, IfStatementData, Instr, RegionData, ReturnData, UnOpPl,
-    VarDeclData, FuncData, instr_index,
+    BinOpPl, FnCallPl, ForLoopData, IfStatementData, Instr, LiteralPl, RegionData, ReturnData,
+    UnOpPl, VarDeclData, FuncData, instr_index,
 };
 use crate::backend::sir::{SIR, SIRInstr, SIRModule};
-use crate::backend::worklist::ErrandInference;
+use crate::backend::worklist::{ErrandInference, ErrandType};
 use crate::frontend::ast::{Parameter, Program};
 use crate::backend::preir::PreIR;
 
@@ -141,6 +141,25 @@ impl SirGen {
                 .map_err(|e| format!("{:?}", e))?;
             // Return a sentinel; callers that walk regions skip these.
             return Ok(-1);
+        }
+
+        // Comptime fold: typeof(arg) → Literal(Symbol(type_name)) : Type
+        if let Instr::FnCall(ref call) = instr {
+            if call.name == "typeof" && call.arguments.len() == 1 {
+                let arg_global_idx = call.arguments[0];
+                self.analyze_and_emit(arg_global_idx, sir)?;
+                let resolved_ty = self.inference
+                    .analyze_instr_index(arg_global_idx)
+                    .unwrap_or(ErrandType::ETVar("?".to_string()));
+                let type_name = errand_type_name(&resolved_ty);
+                let local_idx = sir.instructions.len() as instr_index;
+                sir.instructions.push(SIRInstr {
+                    instr: Instr::Literal(LiteralPl::Symbol(type_name)),
+                    ty: Some(ErrandType::Con("Type".to_string())),
+                });
+                self.preir_to_sir.insert(global_idx, local_idx);
+                return Ok(local_idx);
+            }
         }
 
         // Recursively emit all operand dependencies first, collecting their
@@ -283,5 +302,15 @@ impl SirGen {
             // Region is handled separately in emit_region_instr.
             Instr::Region(_) => unreachable!("Region should be handled before remap_operands"),
         }
+    }
+}
+
+fn errand_type_name(ty: &ErrandType) -> String {
+    match ty {
+        ErrandType::Con(n) | ErrandType::Var(n) | ErrandType::ETVar(n) => n.clone(),
+        ErrandType::Arrow(_, _) => "Function".to_string(),
+        ErrandType::Forall(_, _) => "Forall".to_string(),
+        ErrandType::Product(_) => "Product".to_string(),
+        ErrandType::Sum(_) => "Sum".to_string(),
     }
 }
