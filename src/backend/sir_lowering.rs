@@ -31,6 +31,9 @@ use crate::frontend::ast::{BinaryOperator, UnaryOperator};
 pub struct SIRLoweringPass {
     module: Option<ObjectModule>,
     isa: Option<Arc<dyn cranelift_codegen::isa::TargetIsa>>,
+    /// True when compiling a function that makes calls (non-leaf) or is foreign.
+    /// Used to avoid stack-allocating structs in the red zone.
+    is_non_leaf: bool,
     /// Maps a canonical lookup key → FuncId.
     ///
     /// Keys:
@@ -52,6 +55,7 @@ impl SIRLoweringPass {
         SIRLoweringPass {
             module: None,
             isa: None,
+            is_non_leaf: false,
             func_ids: HashMap::new(),
             func_sigs: HashMap::new(),
             func_overloads: HashMap::new(),
@@ -311,6 +315,10 @@ impl SIRLoweringPass {
             var_map.insert(param_name.clone(), var);
         }
 
+        // Foreign functions and non-leaf functions must heap-allocate structs to avoid
+        // red zone corruption when calling into C library code (e.g. printf).
+        self.is_non_leaf = info.is_foreign || sir_contains_calls(&sir);
+
         let mut value_map: Vec<Option<Value>> = vec![None; sir.instructions.len()];
         let nested = compute_nested(&sir);
 
@@ -366,6 +374,9 @@ impl SIRLoweringPass {
         builder.append_block_param(entry_block, types::I64);
         builder.switch_to_block(entry_block);
         builder.seal_block(entry_block);
+
+        // Main body typically has calls (printf, main, etc.); treat as non-leaf.
+        self.is_non_leaf = sir_contains_calls(sir);
 
         let mut value_map: Vec<Option<Value>> = vec![None; sir.instructions.len()];
         let mut var_map: HashMap<String, Variable> = HashMap::new();
@@ -879,9 +890,10 @@ impl SIRLoweringPass {
                         &struct_info,
                         &compiled_args,
                         Some((id, module, unsafe { &mut *func_ptr })),
+                        self.is_non_leaf,
                     )
                 } else {
-                    emit_new(builder, &struct_info, &compiled_args, None)
+                    emit_new(builder, &struct_info, &compiled_args, None, self.is_non_leaf)
                 };
                 Ok(val)
             }
@@ -1126,6 +1138,61 @@ fn mark_nested_deps(sir: &SIR, idx: usize, nested: &mut HashSet<usize>) {
         // Region and control-flow — handled by mark_nested_region; stop here.
         _ => {}
     }
+}
+
+/// Returns true if the SIR contains any function call (including inside regions,
+/// if/while/for bodies). Used to determine if a function is non-leaf for stack
+/// allocation (avoid red zone corruption).
+fn sir_contains_calls(sir: &SIR) -> bool {
+    fn contains_calls_in_range(sir: &SIR, start: usize, end: usize, seen: &mut HashSet<usize>) -> bool {
+        for i in start..end.min(sir.instructions.len()) {
+            if seen.contains(&i) {
+                continue;
+            }
+            seen.insert(i);
+            match &sir.instructions[i].instr {
+                Instr::FnCall(_) => return true,
+                Instr::Region(data) => {
+                    if contains_calls_in_range(sir, data.instr_start as usize, data.instr_end as usize, seen) {
+                        return true;
+                    }
+                    if contains_calls_in_range(sir, data.return_loc as usize, data.return_loc as usize + 1, seen) {
+                        return true;
+                    }
+                }
+                Instr::IfStatement(d) => {
+                    if contains_calls_in_range(sir, d.then_branch as usize, d.then_branch as usize + 1, seen) {
+                        return true;
+                    }
+                    if let Some(e) = d.else_branch {
+                        if contains_calls_in_range(sir, e as usize, e as usize + 1, seen) {
+                            return true;
+                        }
+                    }
+                }
+                Instr::WhileLoop(d) => {
+                    if contains_calls_in_range(sir, d.condition as usize, d.condition as usize + 1, seen) {
+                        return true;
+                    }
+                    if contains_calls_in_range(sir, d.body as usize, d.body as usize + 1, seen) {
+                        return true;
+                    }
+                }
+                Instr::ForLoop(d) => {
+                    if contains_calls_in_range(sir, d.range as usize, d.range as usize + 1, seen) {
+                        return true;
+                    }
+                    if contains_calls_in_range(sir, d.body as usize, d.body as usize + 1, seen) {
+                        return true;
+                    }
+                }
+                _ => {}
+            }
+        }
+        false
+    }
+    let mut seen = HashSet::new();
+    contains_calls_in_range(sir, 0, sir.instructions.len(), &mut seen)
 }
 
 // ─── Small helpers ────────────────────────────────────────────────────────────

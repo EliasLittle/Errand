@@ -11,10 +11,12 @@ pub fn emit_new(
     struct_info: &BackendStruct,
     compiled_args: &[Value],
     malloc_func: Option<(cranelift_module::FuncId, &mut cranelift_object::ObjectModule, &mut cranelift_codegen::ir::Function)>,
+    is_non_leaf: bool,
 ) -> Value {
     let struct_size = struct_info.size as i64;
-    let struct_ptr = if struct_size <= 128 {
-        // Stack allocate
+    let struct_ptr = if struct_size <= 128 && !is_non_leaf {
+        // Stack allocate only for leaf functions; non-leaf functions may have
+        // their stack slots corrupted by callees (e.g. printf) using the red zone.
         let slot = builder.create_sized_stack_slot(StackSlotData::new(
             StackSlotKind::ExplicitSlot,
             struct_size as u32,

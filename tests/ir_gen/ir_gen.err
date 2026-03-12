@@ -31,11 +31,12 @@ end
 
 fn main()
     a = Point(7, 2)
-    +-- printf("X (int): %d\n", a.x)
-    +-- printf("Y (int): %d\n", a.y)
+    printf("X (int): %d\n", a.x)
+    printf("Y (int): %d\n", a.y)
     b = add_one(a)
+    c = add_one(b)
     +-- b = a.y + 3
-    return b.x
+    return c.x
 end
 
 printf("%d\n", main())

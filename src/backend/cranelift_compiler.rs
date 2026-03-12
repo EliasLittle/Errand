@@ -824,6 +824,7 @@ impl CraneliftCompiler {
                         struct_info,
                         &compiled_args,
                         malloc_func.map(|(id, module, func_ptr)| (id, module, unsafe { &mut *func_ptr })),
+                        true, // Legacy codegen: assume non-leaf to avoid red zone issues
                     ));
                 } else if id.name == "printf" {
                     let printf_func = if let Some(id) = self.functions.get("printf").and_then(|m| m.values().next().copied()) {
