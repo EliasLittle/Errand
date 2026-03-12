@@ -9,4 +9,6 @@ pub mod built_in_methods;
 pub mod preir_gen;
 pub mod preir;
 pub mod worklist;
+pub mod sir;
+pub mod sir_gen;
 // pub mod llvm_compiler;

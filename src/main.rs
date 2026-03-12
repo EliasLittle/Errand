@@ -7,6 +7,7 @@ use Errand::backend::ir_lowering::IRLoweringPass;
 use Errand::backend::preir_gen::compile_preir;
 use Errand::backend::worklist::ErrandInference;
 use Errand::backend::preir::Instr;
+use Errand::backend::sir_gen::SirGen;
 use Errand::logging::{init_logger, CompilerLogLevel};
 use Errand::{compiler_info, compiler_debug, compiler_error};
 
@@ -51,6 +52,10 @@ struct Cli {
     /// Run worklist type inference on PreIR
     #[arg(long)]
     type_check_preir: bool,
+
+    /// Generate SIR (typed IR) from PreIR and dump to file
+    #[arg(long)]
+    dump_sir: bool,
 }
 
 #[derive(Copy, Clone, PartialEq, Eq, PartialOrd, Ord, ValueEnum)]
@@ -319,7 +324,7 @@ fn main() {
     let typed_program = type_inferencer.infer_program(&lowered).expect("Type inference failed");
     print_ast(file_path, "tast", &typed_program);
 
-    // Evaluate typeof calls
+    // Evaluate `typeof` calls
     let typeof_evaluator = TypeofEvaluator;
     let typeof_evaluated_program = typeof_evaluator.eval_program(&typed_program);
     print_ast(file_path, "typeof", &typeof_evaluated_program);
@@ -341,6 +346,32 @@ fn main() {
             compiler_error!("PreIR type checking failed: {}", e);
             std::process::exit(1);
         }
+    }
+
+    // Generate SIR (single interleaved typing + emission pass) — always runs.
+    compiler_info!("Generating SIR...");
+    let sir_module = match SirGen::emit_sir_module(preir.clone(), &typeof_evaluated_program) {
+        Ok(sir_module) => {
+            compiler_info!("SIR generation successful");
+            sir_module
+        }
+        Err(e) => {
+            compiler_error!("SIR generation failed: {}", e);
+            std::process::exit(1);
+        }
+    };
+
+    // Dump SIR to file if requested.
+    if cli.dump_sir {
+        let sir_output = sir_module.format_all();
+        let sir_file_path = if let Some(stripped) = file_path.strip_suffix(".err") {
+            format!("{}.sir", stripped)
+        } else {
+            format!("{}.sir", file_path)
+        };
+        std::fs::write(&sir_file_path, sir_output)
+            .expect("Failed to write SIR to file");
+        compiler_info!("SIR written to: {}", sir_file_path);
     }
 
     // Dump IR if requested
