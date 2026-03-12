@@ -193,7 +193,7 @@ pub struct ErrandInference {
     // Data constructors
     data_constructors: HashMap<String, ErrandType>,
     /// Variable typing context for locals and parameters (per-function)
-    var_context: HashMap<String, ErrandType>,
+    pub var_context: HashMap<String, ErrandType>,
     /// Module-level variables (visible to all functions)
     module_context: HashMap<String, ErrandType>,
     /// Analysis cache: instruction index -> analysis result (Zig-style)

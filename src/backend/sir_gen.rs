@@ -1,10 +1,11 @@
 use std::collections::HashMap;
 
+use crate::backend::errand_builtins::type_expr_to_errand_type;
 use crate::backend::preir::{
     BinOpPl, FnCallPl, ForLoopData, IfStatementData, Instr, LiteralPl, RegionData, ReturnData,
     UnOpPl, VarDeclData, FuncData, instr_index,
 };
-use crate::backend::sir::{SIR, SIRInstr, SIRModule};
+use crate::backend::sir::{SIR, SIRFunctionInfo, SIRInstr, SIRModule, SIRStructField, SIRStructLayout};
 use crate::backend::worklist::{ErrandInference, ErrandType};
 use crate::frontend::ast::{Parameter, Program};
 use crate::backend::preir::PreIR;
@@ -32,15 +33,59 @@ impl SirGen {
         let inference = ErrandInference::with_preir_and_program(preir, program);
         let mut gen = SirGen::new(inference);
 
-        // Collect FuncDecl metadata before any mutable borrows of `gen.inference`.
-        let function_indices: Vec<(String, instr_index, Vec<Parameter>)> = gen
+        // Collect FuncDecl and StructDecl metadata before any mutable borrows.
+        struct FuncMeta {
+            name: String,
+            body_index: instr_index,
+            parameters: Vec<Parameter>,
+            return_type: Option<crate::frontend::ast::TypeExpression>,
+            is_foreign: bool,
+        }
+        let function_meta: Vec<FuncMeta> = gen
             .inference
             .preir
             .instructions
             .iter()
             .filter_map(|instr| {
                 if let Instr::FuncDecl(fd) = instr {
-                    Some((fd.name.clone(), fd.body_index, fd.parameters.clone()))
+                    Some(FuncMeta {
+                        name: fd.name.clone(),
+                        body_index: fd.body_index,
+                        parameters: fd.parameters.clone(),
+                        return_type: fd.return_type.clone(),
+                        is_foreign: fd.is_foreign,
+                    })
+                } else {
+                    None
+                }
+            })
+            .collect();
+
+        // Build struct layouts from StructDecl instructions.
+        let struct_layouts: HashMap<String, SIRStructLayout> = gen
+            .inference
+            .preir
+            .instructions
+            .iter()
+            .filter_map(|instr| {
+                if let Instr::StructDecl(sd) = instr {
+                    let mut offset = 0usize;
+                    let fields = sd
+                        .fields
+                        .iter()
+                        .map(|f| {
+                            let ty = type_expr_to_errand_type(&f.field_type);
+                            let size = errand_type_size(&ty);
+                            let field = SIRStructField {
+                                name: f.id.name.clone(),
+                                ty,
+                                byte_offset: offset,
+                            };
+                            offset += size;
+                            field
+                        })
+                        .collect();
+                    Some((sd.name.clone(), SIRStructLayout { fields, total_size: offset }))
                 } else {
                     None
                 }
@@ -59,14 +104,53 @@ impl SirGen {
         gen.inference.promote_var_context_to_module();
 
         // Process each function as an independent entry point.
-        let mut functions = HashMap::new();
-        for (name, body_index, parameters) in function_indices {
-            gen.inference.setup_function_context(&parameters);
-            let func_sir = gen.emit_body_sir(body_index)?;
-            functions.insert(name, func_sir);
+        let mut functions: HashMap<String, HashMap<Vec<String>, SIRFunctionInfo>> = HashMap::new();
+        for meta in function_meta {
+            gen.inference.setup_function_context(&meta.parameters);
+            let func_sir = gen.emit_body_sir(meta.body_index)?;
+
+            // Resolve parameter types from the inference var_context (populated by
+            // setup_function_context).
+            let params: Vec<(String, ErrandType)> = meta
+                .parameters
+                .iter()
+                .map(|p| {
+                    let ty = gen
+                        .inference
+                        .var_context
+                        .get(&p.id.name)
+                        .cloned()
+                        .unwrap_or_else(|| ErrandType::ETVar("?".to_string()));
+                    (p.id.name.clone(), ty)
+                })
+                .collect();
+
+            // Return type: the type annotation on the return_loc instruction, falling
+            // back to the declared return type expression, then Void.
+            let return_type = func_sir
+                .instructions
+                .get(func_sir.return_loc as usize)
+                .and_then(|i| i.ty.clone())
+                .or_else(|| meta.return_type.as_ref().map(type_expr_to_errand_type))
+                .unwrap_or_else(|| ErrandType::Con("Void".to_string()));
+
+            let type_key: Vec<String> =
+                params.iter().map(|(_, ty)| errand_type_name(ty)).collect();
+
+            let info = SIRFunctionInfo {
+                params,
+                return_type,
+                is_foreign: meta.is_foreign,
+                body: if meta.is_foreign { None } else { Some(func_sir) },
+            };
+
+            functions
+                .entry(meta.name)
+                .or_default()
+                .insert(type_key, info);
         }
 
-        Ok(SIRModule { main: main_sir, functions })
+        Ok(SIRModule { main: main_sir, functions, structs: struct_layouts })
     }
 
     /// Emit SIR for a function body rooted at `root_idx`.
@@ -296,6 +380,8 @@ impl SirGen {
                     name: data.name,
                     parameters: data.parameters,
                     body_index,
+                    return_type: data.return_type,
+                    is_foreign: data.is_foreign,
                 }))
             }
 
@@ -305,12 +391,24 @@ impl SirGen {
     }
 }
 
-fn errand_type_name(ty: &ErrandType) -> String {
+pub(crate) fn errand_type_name(ty: &ErrandType) -> String {
     match ty {
         ErrandType::Con(n) | ErrandType::Var(n) | ErrandType::ETVar(n) => n.clone(),
         ErrandType::Arrow(_, _) => "Function".to_string(),
         ErrandType::Forall(_, _) => "Forall".to_string(),
         ErrandType::Product(_) => "Product".to_string(),
         ErrandType::Sum(_) => "Sum".to_string(),
+    }
+}
+
+/// Returns the byte size of an `ErrandType` for struct field layout computation.
+fn errand_type_size(ty: &ErrandType) -> usize {
+    match ty {
+        ErrandType::Con(n) => match n.as_str() {
+            "Int32" => 4,
+            "Bool" => 1,
+            _ => 8, // Int, Float, String, pointers, structs, etc.
+        },
+        _ => 8,
     }
 }

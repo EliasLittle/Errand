@@ -12,12 +12,14 @@ pub fn compile_preir(program: &Program) -> Result<PreIR, String> {
     // First pass: collect function and struct definitions
     for expr in &program.expressions {
         match expr {
-            Expression::FunctionDefinition { id, parameters, body, .. } => {
+            Expression::FunctionDefinition { id, parameters, body, return_type_expr, foreign } => {
                 // Reserve space for function declaration
                 let func = FuncData {
                     name: id.name.clone(),
                     parameters: parameters.clone(),
                     body_index: compile_expression(&mut ctx, body)?,
+                    return_type: return_type_expr.clone(),
+                    is_foreign: *foreign,
                 };
                 ctx.emit_instruction(Instr::FuncDecl(func));
             }
@@ -202,13 +204,15 @@ fn compile_expression(ctx: &mut PreIR, expr: &Expression) -> Result<instr_index,
             });
             Ok(ctx.emit_instruction(instr))
         }
-        Expression::FunctionDefinition { id, parameters, body, return_type_expr: _, foreign: _ } => {
+        Expression::FunctionDefinition { id, parameters, body, return_type_expr, foreign } => {
             let body_idx = compile_expression(ctx, body)?;
             
             let func = Instr::FuncDecl(FuncData {
                 name: id.name.clone(),
                 parameters: parameters.clone(),
                 body_index: body_idx,
+                return_type: return_type_expr.clone(),
+                is_foreign: *foreign,
             });
             
             Ok(ctx.emit_instruction(func))

@@ -21,11 +21,42 @@ pub struct SIR {
     pub return_loc: instr_index,
 }
 
+/// Metadata for one overload of a named function.
+/// `body` is `None` for foreign/extern declarations that have no Errand body.
+#[derive(Debug, Clone)]
+pub struct SIRFunctionInfo {
+    /// Parameter names paired with their resolved types.
+    pub params: Vec<(String, ErrandType)>,
+    pub return_type: ErrandType,
+    pub is_foreign: bool,
+    pub body: Option<SIR>,
+}
+
+/// A single field in a struct's memory layout.
+#[derive(Debug, Clone)]
+pub struct SIRStructField {
+    pub name: String,
+    pub ty: ErrandType,
+    pub byte_offset: usize,
+}
+
+/// Full memory layout of a struct computed at SIR generation time.
+#[derive(Debug, Clone)]
+pub struct SIRStructLayout {
+    pub fields: Vec<SIRStructField>,
+    pub total_size: usize,
+}
+
 /// All SIR for a program: one for the top-level main body, one per function.
+///
+/// `functions` uses a nested map: `plain_name → param_type_keys → SIRFunctionInfo`.
+/// `Vec<String>` keys are the stringified `ErrandType` of each parameter (in order),
+/// matching the output of `errand_type_name`. This avoids requiring `Hash` on `ErrandType`.
 #[derive(Debug, Clone)]
 pub struct SIRModule {
     pub main: SIR,
-    pub functions: HashMap<String, SIR>,
+    pub functions: HashMap<String, HashMap<Vec<String>, SIRFunctionInfo>>,
+    pub structs: HashMap<String, SIRStructLayout>,
 }
 
 // ─── Formatting ──────────────────────────────────────────────────────────────
@@ -73,8 +104,31 @@ impl SIRModule {
         let mut names: Vec<&String> = self.functions.keys().collect();
         names.sort();
         for name in names {
-            out.push_str(&format!("\n=== SIR: {} ===\n", name));
-            out.push_str(&self.functions[name].format_all());
+            let overloads = &self.functions[name];
+            let mut keys: Vec<&Vec<String>> = overloads.keys().collect();
+            keys.sort();
+            for key in keys {
+                let info = &overloads[key];
+                let params_str = info
+                    .params
+                    .iter()
+                    .map(|(n, t)| format!("{}: {}", n, errand_type_to_string(t)))
+                    .collect::<Vec<_>>()
+                    .join(", ");
+                let foreign_tag = if info.is_foreign { " [foreign]" } else { "" };
+                out.push_str(&format!(
+                    "\n=== SIR: {}({}){}  -> {} ===\n",
+                    name,
+                    params_str,
+                    foreign_tag,
+                    errand_type_to_string(&info.return_type)
+                ));
+                if let Some(body) = &info.body {
+                    out.push_str(&body.format_all());
+                } else {
+                    out.push_str("    (no body — extern declaration)\n");
+                }
+            }
         }
         out
     }

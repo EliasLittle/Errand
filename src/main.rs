@@ -56,6 +56,10 @@ struct Cli {
     /// Generate SIR (typed IR) from PreIR and dump to file
     #[arg(long)]
     dump_sir: bool,
+
+    /// Use the legacy AST-based Cranelift backend instead of the SIR-based one
+    #[arg(long)]
+    legacy_codegen: bool,
 }
 
 #[derive(Copy, Clone, PartialEq, Eq, PartialOrd, Ord, ValueEnum)]
@@ -430,11 +434,55 @@ fn main() {
                 std::process::exit(1);
             }
         }
-    } else {
-        // Compile the entire program (including function definitions)
+    } else if cli.legacy_codegen {
+        // Legacy path: compile directly from the typed AST via the old CraneliftCompiler.
+        compiler_info!("Using legacy AST-based Cranelift backend");
         match ir_lowering.lower_to_cranelift(&typeof_evaluated_program) {
             Ok(compiled_code) => {
                 compiler_info!("Successfully compiled to machine code ({} bytes)", compiled_code.len());
+
+                let obj_file_path = if let Some(stripped) = file_path.strip_suffix(".err") {
+                    format!("{}.bin", stripped)
+                } else {
+                    format!("{}.bin", file_path)
+                };
+
+                std::fs::write(&obj_file_path, &compiled_code)
+                    .expect("Failed to write compiled code to file");
+                compiler_info!("Machine code written to: {}", obj_file_path);
+
+                match cli.emit {
+                    EmitType::Obj => {
+                        if let Some(output) = cli.output {
+                            std::fs::copy(&obj_file_path, &output)
+                                .expect("Failed to copy object file");
+                            compiler_info!("Object file copied to: {}", output);
+                        }
+                    }
+                    EmitType::Exe => {
+                        let output_path = cli.output.unwrap_or_else(|| {
+                            Path::new(file_path).file_stem()
+                                .unwrap()
+                                .to_string_lossy()
+                                .to_string()
+                        });
+                        if let Err(e) = link_object_file(&obj_file_path, &output_path, cli.arch) {
+                            compiler_error!("Error: {}", e);
+                            std::process::exit(1);
+                        }
+                    }
+                }
+            }
+            Err(e) => {
+                compiler_error!("Compilation failed: {}", e);
+                std::process::exit(1);
+            }
+        }
+    } else {
+        // Compile via the new SIR-based Cranelift backend.
+        match ir_lowering.lower_sir_to_cranelift(&sir_module) {
+            Ok(compiled_code) => {
+                compiler_info!("Successfully compiled SIR to machine code ({} bytes)", compiled_code.len());
                 
                 // Determine object file path
                 let obj_file_path = if let Some(stripped) = file_path.strip_suffix(".err") {

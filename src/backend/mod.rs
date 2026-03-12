@@ -11,4 +11,5 @@ pub mod preir;
 pub mod worklist;
 pub mod sir;
 pub mod sir_gen;
+pub mod sir_lowering;
 // pub mod llvm_compiler;

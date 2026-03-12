@@ -237,6 +237,8 @@ pub struct FuncData {
     pub name: String,
     pub parameters: Vec<Parameter>,
     pub body_index: i64, // index into the instruction vector
+    pub return_type: Option<TypeExpression>,
+    pub is_foreign: bool,
 }
 
 #[derive(Debug, Clone, PartialEq)]
