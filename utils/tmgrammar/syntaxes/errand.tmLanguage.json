@@ -1,0 +1,162 @@
+{
+  "$schema": "https://raw.githubusercontent.com/martinring/tmlanguage/master/tmlanguage.json",
+  "name": "Errand",
+  "scopeName": "source.errand",
+  "fileTypes": ["err"],
+  "patterns": [
+    { "include": "#block_comment" },
+    { "include": "#line_comment" },
+    { "include": "#string" },
+    { "include": "#function_def" },
+    { "include": "#struct_def" },
+    { "include": "#type_annotation" },
+    { "include": "#function_call" },
+    { "include": "#keywords" },
+    { "include": "#number" },
+    { "include": "#operators" }
+  ],
+  "repository": {
+    "block_comment": {
+      "comment": "Block comment: +-- Header --+ / body lines / +-- Footer --+",
+      "begin": "\\+--[^\\n]*--\\+",
+      "end": "\\+--[^\\n]*--\\+",
+      "name": "comment.block.errand",
+      "beginCaptures": {
+        "0": { "name": "comment.block.errand" }
+      },
+      "endCaptures": {
+        "0": { "name": "comment.block.errand" }
+      }
+    },
+    "line_comment": {
+      "comment": "Line comment: +-- text (no --+ on same line)",
+      "match": "\\+--.*$",
+      "name": "comment.line.errand"
+    },
+    "string": {
+      "name": "string.quoted.double.errand",
+      "begin": "\"",
+      "end": "\"",
+      "patterns": [
+        {
+          "name": "constant.character.escape.errand",
+          "match": "\\\\[ntr\\\\\"']"
+        }
+      ]
+    },
+    "function_def": {
+      "comment": "Highlight function name in: fn name(...) or foreign fn name(...)",
+      "match": "\\b(foreign\\s+fn|fn)\\s+([a-zA-Z_][a-zA-Z0-9_]*)",
+      "captures": {
+        "1": { "name": "keyword.control.errand" },
+        "2": { "name": "entity.name.function.errand" }
+      }
+    },
+    "struct_def": {
+      "comment": "Highlight struct name in: struct Name",
+      "match": "\\b(struct)\\s+([a-zA-Z_][a-zA-Z0-9_]*)",
+      "captures": {
+        "1": { "name": "keyword.control.errand" },
+        "2": { "name": "entity.name.type.errand" }
+      }
+    },
+    "type_annotation": {
+      "comment": "Type annotations: ::TypeName or <: TypeName",
+      "patterns": [
+        {
+          "match": "(::)\\s*([a-zA-Z_][a-zA-Z0-9_]*)",
+          "captures": {
+            "1": { "name": "keyword.operator.type.errand" },
+            "2": { "name": "entity.name.type.errand" }
+          }
+        },
+        {
+          "match": "(<:)\\s*([a-zA-Z_][a-zA-Z0-9_]*)",
+          "captures": {
+            "1": { "name": "keyword.operator.type.errand" },
+            "2": { "name": "entity.name.type.errand" }
+          }
+        }
+      ]
+    },
+    "function_call": {
+      "comment": "Highlight function name before a call: name(",
+      "match": "\\b([a-zA-Z_][a-zA-Z0-9_]*)\\s*(?=\\()",
+      "captures": {
+        "1": { "name": "entity.name.function.errand" }
+      }
+    },
+    "keywords": {
+      "patterns": [
+        {
+          "comment": "Control flow and structure keywords",
+          "match": "\\b(fn|foreign|struct|return|if|else|while|for|in|begin|end)\\b",
+          "name": "keyword.control.errand"
+        },
+        {
+          "comment": "Built-in print statement",
+          "match": "\\b(print)\\b",
+          "name": "support.function.builtin.errand"
+        },
+        {
+          "comment": "Boolean literals",
+          "match": "\\b(true|false)\\b",
+          "name": "constant.language.errand"
+        },
+        {
+          "comment": "Primitive type keywords",
+          "match": "\\b(int|bool|void)\\b",
+          "name": "storage.type.errand"
+        }
+      ]
+    },
+    "number": {
+      "patterns": [
+        {
+          "comment": "Float literal",
+          "match": "\\b[0-9]+\\.[0-9]+\\b",
+          "name": "constant.numeric.float.errand"
+        },
+        {
+          "comment": "Integer literal",
+          "match": "\\b[0-9]+\\b",
+          "name": "constant.numeric.integer.errand"
+        }
+      ]
+    },
+    "operators": {
+      "patterns": [
+        {
+          "comment": "Arrow operator for return types",
+          "match": "->",
+          "name": "keyword.operator.arrow.errand"
+        },
+        {
+          "comment": "Comparison and equality operators",
+          "match": "(==|!=|<=|>=|<|>)",
+          "name": "keyword.operator.comparison.errand"
+        },
+        {
+          "comment": "Logical operators",
+          "match": "(&&|\\|\\||!)",
+          "name": "keyword.operator.logical.errand"
+        },
+        {
+          "comment": "Assignment operator",
+          "match": "(?<![=!<>])=(?!=)",
+          "name": "keyword.operator.assignment.errand"
+        },
+        {
+          "comment": "Arithmetic operators",
+          "match": "[+\\-*/%^]",
+          "name": "keyword.operator.arithmetic.errand"
+        },
+        {
+          "comment": "Bitwise / pipe operators",
+          "match": "[&|]",
+          "name": "keyword.operator.bitwise.errand"
+        }
+      ]
+    }
+  }
+}
