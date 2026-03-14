@@ -23,7 +23,7 @@ impl TypeofEvaluator {
                     Expression::Identifier { type_expr: Some(TypeExpression::Bool), .. } => Expression::Symbol("Bool".to_string()),
                     Expression::Identifier { type_expr: Some(TypeExpression::String), .. } => Expression::Symbol("String".to_string()),
                     Expression::Identifier { type_expr: Some(TypeExpression::Void), .. } => Expression::Symbol("Void".to_string()),
-                    Expression::Identifier { type_expr: None, .. } => panic!("Cannot determine type for typeof: identifier has no type annotation"),
+                    Expression::Identifier { type_expr: None, .. } => panic!("Cannot determine type for typeof: identifier has no type annotation ({:?} in function call {})", arg, id.name),
                     _ => panic!("typeof only supported for identifiers with type annotations for now"),
                 }
             }

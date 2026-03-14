@@ -14,6 +14,8 @@ pub enum Type {
         parameters: Vec<Type>,
         return_type: Box<Type>,
     },
+    /// Multiple function overloads (e.g. add_one(Point) and add_one(Int))
+    Overloaded(Vec<Type>),
     Struct {
         name: String,
         fields: HashMap<String, Type>,
@@ -63,6 +65,7 @@ impl From<Type> for TypeExpression {
             Type::String => TypeExpression::String,
             Type::Unit => TypeExpression::Void,
             Type::Function { .. } => TypeExpression::Void, // TODO: Handle function types
+            Type::Overloaded(ref overloads) => overloads.first().map(|t| TypeExpression::from(t.clone())).unwrap_or(TypeExpression::Void),
             Type::Struct { name, .. } => TypeExpression::Struct(Id { name }, None),
             Type::Union(_) => TypeExpression::Int, // TODO: Handle union types
             Type::Unknown(_) => TypeExpression::Int, // TODO: Handle type variables
@@ -107,14 +110,77 @@ impl TypeEnvironment {
         self.types.insert(name, ty);
     }
 
+    /// Add a function overload; if name already has a Function, convert to Overloaded
+    fn add_function_overload(&mut self, name: String, func_ty: Type) {
+        if let Type::Function { .. } = func_ty {
+            if let Some(existing) = self.types.remove(&name) {
+                let overloads = match existing {
+                    Type::Overloaded(mut list) => {
+                        list.push(func_ty);
+                        list
+                    }
+                    Type::Function { .. } => vec![existing, func_ty],
+                    other => {
+                        self.types.insert(name, other);
+                        return;
+                    }
+                };
+                self.types.insert(name, Type::Overloaded(overloads));
+            } else {
+                self.types.insert(name, func_ty);
+            }
+        } else {
+            self.types.insert(name, func_ty);
+        }
+    }
+
+    /// Update the return type of a function overload that matches the given param_types.
+    /// Preserves overload sets instead of overwriting with set_type.
+    fn update_function_overload_return_type(&mut self, name: String, param_types: Vec<Type>, return_type: Type) {
+        let refined = Type::Function {
+            parameters: param_types.clone(),
+            return_type: Box::new(return_type),
+        };
+        if let Some(existing) = self.types.remove(&name) {
+            match existing {
+                Type::Overloaded(mut list) => {
+                    let mut found = false;
+                    for overload in list.iter_mut() {
+                        if let Type::Function { parameters, .. } = overload {
+                            if *parameters == param_types {
+                                *overload = refined.clone();
+                                found = true;
+                                break;
+                            }
+                        }
+                    }
+                    if !found {
+                        list.push(refined);
+                    }
+                    self.types.insert(name, Type::Overloaded(list));
+                }
+                Type::Function { parameters, .. } if parameters == &param_types[..] => {
+                    self.types.insert(name, refined);
+                }
+                other => {
+                    self.types.insert(name, other);
+                }
+            }
+        } else {
+            self.types.insert(name, refined);
+        }
+    }
+
     fn type_from_expr(&self, expr: Expression) -> Type {
         match expr {
             Expression::Int(_) => Type::Int,
             Expression::Float(_) => Type::Float,
             Expression::Boolean(_) => Type::Bool,
             Expression::String(_) => Type::String,
-            Expression::Identifier { id, type_expr } => Type::from(type_expr.unwrap()),
-            //Expression::VariableAssignment { id, value } => self.type_from_expr(*value.clone()),
+            Expression::Identifier { id, type_expr } => type_expr
+                .map(|te| Type::from(te))
+                .or_else(|| self.get_type(&id.name).cloned())
+                .unwrap_or(Type::Any),
             Expression::FunctionCall { id, arguments } => {
                 if id.name == "as_ptr" {
                     Type::Int
@@ -123,9 +189,70 @@ impl TypeEnvironment {
                 } else {
                     match self.get_type(&id.name) {
                         Some(Type::Function { parameters: _, return_type }) => *return_type.clone(),
+                        Some(Type::Overloaded(overloads)) => {
+                            let arg_types: Vec<Type> = arguments.iter()
+                                .map(|a| self.type_from_expr(a.clone()))
+                                .collect();
+                            // Find overload whose parameters match argument types
+                            for overload in overloads {
+                                if let Type::Function { parameters, return_type } = overload {
+                                    if parameters.len() == arg_types.len()
+                                        && parameters.iter().zip(&arg_types).all(|(p, a)| p == a || *p == Type::Any)
+                                    {
+                                        return *return_type.clone();
+                                    }
+                                }
+                            }
+                            // Fallback: first overload's return type
+                            overloads.first()
+                                .and_then(|o| if let Type::Function { return_type, .. } = o {
+                                    Some(*return_type.clone())
+                                } else {
+                                    None
+                                })
+                                .unwrap_or(Type::Any)
+                        }
                         Some(ty) => ty.clone(),
                         None => Type::Any,
                     }
+                }
+            }
+            Expression::Block(exprs) => {
+                exprs
+                    .last()
+                    .map(|e| self.type_from_expr(*e.clone()))
+                    .unwrap_or(Type::Unit)
+            }
+            Expression::Return(expr) => expr
+                .as_ref()
+                .map(|e| self.type_from_expr(*e.clone()))
+                .unwrap_or(Type::Unit),
+            Expression::BinaryOp { operator, left, right } => {
+                let left_ty = self.type_from_expr(*left);
+                let right_ty = self.type_from_expr(*right);
+                match operator {
+                    BinaryOperator::Add
+                    | BinaryOperator::Subtract
+                    | BinaryOperator::Multiply
+                    | BinaryOperator::Divide
+                    | BinaryOperator::Modulo
+                    | BinaryOperator::Power => {
+                        if left_ty == Type::Float || right_ty == Type::Float {
+                            Type::Float
+                        } else {
+                            Type::Int
+                        }
+                    }
+                    BinaryOperator::LessThan
+                    | BinaryOperator::LessThanEqual
+                    | BinaryOperator::GreaterThan
+                    | BinaryOperator::GreaterThanEqual
+                    | BinaryOperator::Equal
+                    | BinaryOperator::NotEqual => Type::Bool,
+                    BinaryOperator::And | BinaryOperator::Or => Type::Bool,
+                    BinaryOperator::Ampersand | BinaryOperator::Pipe => Type::Int,
+                    BinaryOperator::Assignment => right_ty,
+                    BinaryOperator::Dot => Type::Int,
                 }
             }
             _ => Type::Any,
@@ -174,16 +301,19 @@ impl TypeInferencer {
         for expr in &program.expressions {
             match expr {
                 Expression::FunctionDefinition { id, parameters, body, return_type_expr, foreign: _ } => {
-                    // Create a fresh type variable for each parameter and the return type
+                    // Use explicit parameter types when available for overload resolution
                     let param_types: Vec<Type> = parameters.iter()
-                        .map(|_| self.env.fresh_type_var())
+                        .map(|p| match &p.type_expr {
+                            Some(te) => Type::from(te.clone()),
+                            None => self.env.fresh_type_var(),
+                        })
                         .collect();
                     let return_type = match return_type_expr {
                         Some(ty) => Type::from(ty.clone()),
                         None => self.env.fresh_type_var(),
                     };
                     
-                    self.env.set_type(
+                    self.env.add_function_overload(
                         id.name.clone(),
                         Type::Function {
                             parameters: param_types,
@@ -384,16 +514,36 @@ impl TypeInferencer {
                         Some(ty) => Type::from(ty.clone()),
                         None => self.env.fresh_type_var(),
                     };
+                    self.env.set_type(param.id.name.clone(), param_type.clone());
                     typed_params.push(Parameter {
                         id: param.id.clone(),
                         type_expr: Some(TypeExpression::from(param_type)),
                     });
                 }
+                let typed_body = self.infer_expression(body)?;
                 let return_type = match return_type_expr {
-                    Some(ty) => Type::from(ty.clone()), 
-                    None => self.env.fresh_type_var(), // TODO: Try to infer from body
+                    Some(ty) => Type::from(ty.clone()),
+                    None => self.env.type_from_expr(typed_body.clone()),
                 };
-                Ok(Expression::FunctionDefinition { id: id.clone(), parameters: typed_params, body: body.clone(), return_type_expr: Some(TypeExpression::from(return_type)), foreign: *foreign })
+                // Update the function's type in the environment with the inferred return type
+                // so that callers (e.g. b = add_one(a)) see the correct type.
+                // Use update_function_overload_return_type to preserve overload sets instead of
+                // overwriting (which would cause add_one(a::Point) to wrongly return Int).
+                let param_types: Vec<Type> = typed_params.iter()
+                    .map(|p| Type::from(p.type_expr.as_ref().unwrap().clone()))
+                    .collect();
+                self.env.update_function_overload_return_type(
+                    id.name.clone(),
+                    param_types,
+                    return_type.clone(),
+                );
+                Ok(Expression::FunctionDefinition {
+                    id: id.clone(),
+                    parameters: typed_params,
+                    body: Box::new(typed_body),
+                    return_type_expr: Some(TypeExpression::from(return_type)),
+                    foreign: *foreign,
+                })
             }
             // TODO: This should set the type of the identifier
             /*Expression::VariableAssignment { id, value } => {
@@ -408,6 +558,13 @@ impl TypeInferencer {
                     typed_exprs.push(Box::new(typed));
                 }
                 Ok(Expression::Block(typed_exprs))
+            }
+            Expression::Return(expr) => {
+                let typed_value = expr
+                    .as_ref()
+                    .map(|e| self.infer_expression(e))
+                    .transpose()?;
+                Ok(Expression::Return(typed_value.map(Box::new)))
             }
             // Handle other expression types...
             _ => Ok(expr.clone()),

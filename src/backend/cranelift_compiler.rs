@@ -824,6 +824,7 @@ impl CraneliftCompiler {
                         struct_info,
                         &compiled_args,
                         malloc_func.map(|(id, module, func_ptr)| (id, module, unsafe { &mut *func_ptr })),
+                        true, // Legacy codegen: assume non-leaf to avoid red zone issues
                     ));
                 } else if id.name == "printf" {
                     let printf_func = if let Some(id) = self.functions.get("printf").and_then(|m| m.values().next().copied()) {
@@ -864,13 +865,13 @@ impl CraneliftCompiler {
                         Expression::String(s) => s.as_str(),
                         _ => return Err("Third argument to getfield must be a symbol or string".to_string()),
                     };
-                    return Ok(emit_getfield(
+                    return emit_getfield(
                         builder,
                         &self.struct_registry,
                         compiled_args[0],
                         field_symbol,
                         struct_type_name,
-                    ));
+                    );
                 } else if id.name == "ffi" {
                     if arguments.is_empty() {
                         return Err("'ffi' expects at least a function name argument".to_string());

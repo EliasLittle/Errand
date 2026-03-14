@@ -167,7 +167,8 @@ impl Parser {
                 break; // Exit the loop if precedence is not greater
             }
             let op = self.bump().ok_or("No operator found".to_string())?;
-            parser_log!("Parsing expression 1| op:{:?}, min_precedence:{:?}", op, min_precedence);
+            let op_precedence = op.precedence()?;
+            parser_log!("Parsing expression 1| op:{:?}, op_precedence:{:?}", op, op_precedence);
             let mut rhs = self.primary()?;
             parser_log!("Parsing expression 1| rhs:{:?}", rhs);
 
@@ -179,12 +180,12 @@ impl Parser {
                 }
                 parser_log!("Parsing expression 1| next op:{:?}", next);
                 let precedence = next.precedence()?;
-                if precedence > min_precedence {
-                    parser_log!("Parsing expression 1| left associative precedence:{:?}", min_precedence+1);
-                    rhs = self.parse_expression_1(rhs.clone(), min_precedence+1)?;
-                } else if precedence == min_precedence && next.is_right_associative() {
-                    parser_log!("Parsing expression 1| right associative precedence:{:?}", min_precedence);
-                    rhs = self.parse_expression_1(rhs.clone(), min_precedence)?;
+                if precedence > op_precedence {
+                    parser_log!("Parsing expression 1| left associative precedence:{:?}", op_precedence+1);
+                    rhs = self.parse_expression_1(rhs.clone(), op_precedence+1)?;
+                } else if precedence == op_precedence && next.is_right_associative() {
+                    parser_log!("Parsing expression 1| right associative precedence:{:?}", op_precedence);
+                    rhs = self.parse_expression_1(rhs.clone(), op_precedence)?;
                 } else {
                     break; // Exit the loop if precedence is not greater
                 }

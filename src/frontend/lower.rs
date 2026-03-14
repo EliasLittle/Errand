@@ -28,7 +28,7 @@ impl Program {
                 let constructor = Expression::FunctionDefinition {
                     id: id.clone(),
                     parameters: parameters.clone(),
-                    body: Box::new(Expression::Block(vec![])),
+                    body: body,
                     return_type_expr: Some(TypeExpression::Struct(id.clone(), None)),
                     foreign: false,
                 };
@@ -126,7 +126,12 @@ impl Program {
                     let tmp_id = Id { name: tmp_name };
                     let free_call = Expression::FunctionCall {
                         id: Id { name: "free".to_string() },
-                        arguments: vec![Expression::Identifier { id: tmp_id, type_expr: Some(TypeExpression::String) }],
+                        arguments: vec![
+                            Expression::FunctionCall {
+                                id: Id { name: "as_ptr".to_string() },
+                                arguments: vec![Expression::Identifier { id: tmp_id, type_expr: Some(TypeExpression::String) }],
+                            },
+                        ],
                     };
                     new_block.push(Box::new(free_call));
                 }

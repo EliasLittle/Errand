@@ -11,10 +11,12 @@ pub fn emit_new(
     struct_info: &BackendStruct,
     compiled_args: &[Value],
     malloc_func: Option<(cranelift_module::FuncId, &mut cranelift_object::ObjectModule, &mut cranelift_codegen::ir::Function)>,
+    is_non_leaf: bool,
 ) -> Value {
     let struct_size = struct_info.size as i64;
-    let struct_ptr = if struct_size <= 128 {
-        // Stack allocate
+    let struct_ptr = if struct_size <= 128 && !is_non_leaf {
+        // Stack allocate only for leaf functions; non-leaf functions may have
+        // their stack slots corrupted by callees (e.g. printf) using the red zone.
         let slot = builder.create_sized_stack_slot(StackSlotData::new(
             StackSlotKind::ExplicitSlot,
             struct_size as u32,
@@ -116,13 +118,20 @@ pub fn emit_getfield(
     struct_ptr: Value,
     field_symbol: &str,
     struct_type: &str, // The type name of the struct (needed to look up the layout)
-) -> Value {
+) -> Result<Value, String> {
     // Look up the struct layout
     cranelift_log!("Getting field: {:?} of type: {:?}", field_symbol, struct_type);
-    let struct_info = struct_registry.get(struct_type).expect("Struct type not found in registry");
+    let struct_info = struct_registry.get(struct_type).ok_or_else(|| {
+        let available: Vec<&String> = struct_registry.keys().collect();
+        format!(
+            "Struct type '{}' not found in registry. Available structs: {:?}. \
+             Note: '{}' may be a primitive (Int, Bool, String) - getfield requires a struct type.",
+            struct_type, available, struct_type
+        )
+    })?;
     cranelift_log!("Struct info: {:?}", struct_info);
     let field = struct_info.fields.iter().find(|f| f.name == field_symbol)
-        .expect("Field not found in struct");
+        .ok_or_else(|| format!("Field '{}' not found in struct '{}'", field_symbol, struct_type))?;
     let offset = field.offset as i32;
     cranelift_log!("Pointer: {:?}", struct_ptr);
     cranelift_log!("Offset: {:?}", offset);
@@ -133,7 +142,7 @@ pub fn emit_getfield(
         crate::backend::structs::Type::String => types::I64, // pointer to string
         _ => types::I64, // fallback for unsupported types
     };
-    builder.ins().load(cranelift_type, MemFlags::new(), struct_ptr, offset)
+    Ok(builder.ins().load(cranelift_type, MemFlags::new(), struct_ptr, offset))
 }
 
 pub fn emit_ffi(

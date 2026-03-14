@@ -81,13 +81,13 @@ pub struct Program {
     pub expressions: Vec<Expression>,
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq)]
 pub enum UnaryOperator {
     Not,
     Negate,
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq)]
 pub enum BinaryOperator {
     Add,
     Subtract,
@@ -110,14 +110,14 @@ pub enum BinaryOperator {
 }
 
 // Parameters can optionally have a type
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq)]
 pub struct Parameter {
     pub id: Id,
     pub type_expr: Option<TypeExpression>,
 }
 
 // Fields must have a type
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq)]
 pub struct FieldDefinition {
     pub id: Id,
     pub field_type: TypeExpression,

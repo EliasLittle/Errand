@@ -1,5 +1,7 @@
-use crate::frontend::ast::{Expression, Program, TypeExpression};
+use crate::frontend::ast::Program;
 use crate::backend::cranelift_compiler::CraneliftCompiler;
+use crate::backend::sir_lowering::SIRLoweringPass;
+use crate::backend::sir::SIRModule;
 use cranelift_codegen::ir::Function;
 
 pub struct IRLoweringPass;
@@ -36,6 +38,13 @@ impl IRLoweringPass {
         
         // Use the new compilation approach
         compiler.compile_program(&program)
+    }
+
+    /// Lower a typed `SIRModule` to native machine code via the new SIR-based
+    /// Cranelift backend.  This is the preferred compilation path once SIR
+    /// generation is complete.
+    pub fn lower_sir_to_cranelift(&self, sir_module: &SIRModule) -> Result<Vec<u8>, String> {
+        SIRLoweringPass::compile_sir_module(sir_module)
     }
 
     // You can add more IR lowering passes here for different targets
