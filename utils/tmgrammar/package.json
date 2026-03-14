@@ -1,0 +1,27 @@
+{
+  "name": "errand-language",
+  "displayName": "Errand Language",
+  "description": "Syntax highlighting for the Errand programming language (.err files)",
+  "version": "0.1.0",
+  "engines": {
+    "vscode": "^1.75.0"
+  },
+  "categories": ["Programming Languages"],
+  "contributes": {
+    "languages": [
+      {
+        "id": "errand",
+        "aliases": ["Errand", "errand"],
+        "extensions": [".err"],
+        "configuration": "./language-configuration.json"
+      }
+    ],
+    "grammars": [
+      {
+        "language": "errand",
+        "scopeName": "source.errand",
+        "path": "./syntaxes/errand.tmLanguage.json"
+      }
+    ]
+  }
+}
