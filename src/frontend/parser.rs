@@ -1,6 +1,6 @@
 use crate::{parser_log};
 use super::lexer::{Token, TokenType, token_type};
-use super::ast::{Expression, Program, UnaryOperator, BinaryOperator, Parameter, FieldDefinition, Id, TypeExpression}; //, TypeExpression, MatchCase};
+use super::ast::{Expression, Program, UnaryOperator, BinaryOperator, Parameter, FieldDefinition, EnumVariantDefinition, Id, TypeExpression}; //, TypeExpression, MatchCase};
 use std::iter::Peekable;
 use std::vec::IntoIter;
 
@@ -123,6 +123,7 @@ impl Parser {
             Some(TokenType::Foreign) => self.function(),
             Some(TokenType::Function) => self.function(),
             Some(TokenType::Struct) => self.structure(),
+            Some(TokenType::Enum) => self.enum_definition(),
             Some(TokenType::If) => self.if_statement(), // TODO: Move to parse_expression_1
             Some(TokenType::While) => self.while_statement(),
             Some(TokenType::For) => self.for_statement(),
@@ -430,6 +431,16 @@ impl Parser {
         Ok(Expression::StructDefinition { id, fields })
     }
 
+    fn enum_definition(&mut self) -> Result<Expression, String> {
+        parser_log!("Parsing enum definition| current:{:?}", self.current_type());
+        self.expect(&TokenType::Enum)?;
+        let id = self.id()?;
+        self.expect(&TokenType::Newline)?;
+        let variants = self.enum_variants()?;
+        self.expect(&TokenType::End)?;
+        Ok(Expression::EnumDefinition { id, variants })
+    }
+
     /// Parse expressions until 'END' token
     fn block(&mut self) -> Result<Expression, String> {
         parser_log!("Parsing block| Starting block: {:?}", self.current_type());
@@ -478,6 +489,22 @@ impl Parser {
             fields.push(field);
         }
         Ok(fields)
+    }
+
+    fn enum_variants(&mut self) -> Result<Vec<EnumVariantDefinition>, String> {
+        parser_log!("Parsing enum variants| current:{:?}", self.current_type());
+        let mut variants = Vec::new();
+        while self.at(&token_type("Identifier")?) {
+            let id = self.id()?;
+            let payload_type = if self.eat(&TokenType::TypeDef) {
+                Some(self.type_expr()?)
+            } else {
+                None
+            };
+            self.expect(&TokenType::Newline)?;
+            variants.push(EnumVariantDefinition { id, payload_type });
+        }
+        Ok(variants)
     }
 
     /// Parse arguments of a function call

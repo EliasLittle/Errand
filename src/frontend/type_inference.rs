@@ -20,6 +20,10 @@ pub enum Type {
         name: String,
         fields: HashMap<String, Type>,
     },
+    Enum {
+        name: String,
+        variants: HashMap<String, Option<Type>>,
+    },
     Union(Vec<Type>),
     Unknown(usize), // Type variable for inference
     Any, // Top type
@@ -67,6 +71,7 @@ impl From<Type> for TypeExpression {
             Type::Function { .. } => TypeExpression::Void, // TODO: Handle function types
             Type::Overloaded(ref overloads) => overloads.first().map(|t| TypeExpression::from(t.clone())).unwrap_or(TypeExpression::Void),
             Type::Struct { name, .. } => TypeExpression::Struct(Id { name }, None),
+            Type::Enum { name, .. } => TypeExpression::Struct(Id { name }, None),
             Type::Union(_) => TypeExpression::Int, // TODO: Handle union types
             Type::Unknown(_) => TypeExpression::Int, // TODO: Handle type variables
             Type::Any => TypeExpression::Int, // TODO: Handle any type
@@ -322,6 +327,9 @@ impl TypeInferencer {
                     );
                 }
                 Expression::StructDefinition { id, fields } => {
+                    if matches!(self.env.get_type(&id.name), Some(Type::Enum { .. })) {
+                        continue;
+                    }
                     let mut field_types = HashMap::new();
                     for field in fields {
                         let field_type = Type::from(field.field_type.clone());
@@ -339,11 +347,29 @@ impl TypeInferencer {
                         }
                     );
                 }
+                Expression::EnumDefinition { id, variants } => {
+                    let mut variant_types = HashMap::new();
+                    for variant in variants {
+                        let payload_type = variant
+                            .payload_type
+                            .as_ref()
+                            .map(|ty| Type::from(ty.clone()));
+                        variant_types.insert(variant.id.name.clone(), payload_type);
+                    }
+                    self.env.set_type(
+                        id.name.clone(),
+                        Type::Enum {
+                            name: id.name.clone(),
+                            variants: variant_types,
+                        },
+                    );
+                }
                 Expression::Identifier { id, type_expr } => {
                     if let Some(ty) = type_expr {
+                        let resolved_type = self.resolve_annotated_type(ty);
                         self.env.set_type(
                             id.name.clone(), 
-                            Type::from(ty.clone())
+                            resolved_type
                         );
                     }
                 }
@@ -376,7 +402,7 @@ impl TypeInferencer {
                 if let Some(id_type_expr) = type_expr {
                     match env_type {
                         Some(ty) => {
-                            if ty != &Type::from(id_type_expr.clone()) {
+                            if !Self::annotation_matches_type(id_type_expr, ty) {
                                 return Err(format!("Type mismatch for identifier: {:?}", id.name));
                             } else {
                                 // Always return identifier with type_expr set from environment if available
@@ -388,7 +414,8 @@ impl TypeInferencer {
                         }
                         None => {
                             type_inference_log!("Typing | Missed type for identifier: {:?} in initial pass", id.name);
-                            self.env.set_type(id.name.clone(), Type::from(id_type_expr.clone()));
+                            let resolved_type = self.resolve_annotated_type(id_type_expr);
+                            self.env.set_type(id.name.clone(), resolved_type.clone());
                             return Ok(Expression::Identifier {
                                 id: id.clone(),
                                 type_expr: Some(id_type_expr.clone()),
@@ -414,19 +441,21 @@ impl TypeInferencer {
                 let right_expr = self.infer_expression(right)?;
                 // Special handling for Assignment: update the left identifier's type annotation in the AST
                 if let BinaryOperator::Assignment = operator {
-                    if let Expression::Identifier { id, .. } = &left_expr {
+                    if let Expression::Identifier { id, type_expr } = &left_expr {
                         let right_type = self.env.type_from_expr(right_expr.clone());
                         let current_type = self.env.get_type(&id.name);
-                        // Only set type if right_type is not Any, or if variable has no type yet
-                        if right_type != Type::Any || current_type.is_none() {
-                            self.env.set_type(id.name.clone(), right_type.clone());
+                        let explicit_left_type = type_expr.as_ref().map(|te| self.resolve_annotated_type(te));
+                        let assignment_type = explicit_left_type.unwrap_or_else(|| right_type.clone());
+                        // Keep explicit annotation types stable; otherwise infer from RHS when possible.
+                        if assignment_type != Type::Any || current_type.is_none() {
+                            self.env.set_type(id.name.clone(), assignment_type.clone());
                         }
                         type_inference_log!("Type environment: {:?}", self.env);
                         // Update the left_expr to have the correct type annotation
-                        type_inference_log!("Typing | Assignment: {:?} := {:?}", id.name, &right_type);
+                        type_inference_log!("Typing | Assignment: {:?} := {:?}", id.name, &assignment_type);
                         let left_expr = Expression::Identifier {
                             id: id.clone(),
-                            type_expr: Some(TypeExpression::from(right_type)),
+                            type_expr: Some(TypeExpression::from(assignment_type)),
                         };
                         return Ok(Expression::BinaryOp {
                             operator: operator.clone(),
@@ -568,6 +597,29 @@ impl TypeInferencer {
             }
             // Handle other expression types...
             _ => Ok(expr.clone()),
+        }
+    }
+
+    fn annotation_matches_type(annotation: &TypeExpression, ty: &Type) -> bool {
+        match (annotation, ty) {
+            (TypeExpression::Struct(id, _), Type::Enum { name, .. }) => id.name == *name,
+            _ => Type::from(annotation.clone()) == *ty,
+        }
+    }
+
+    fn resolve_annotated_type(&self, annotation: &TypeExpression) -> Type {
+        match annotation {
+            TypeExpression::Struct(id, _) => {
+                if let Some(Type::Enum { name, variants }) = self.env.get_type(&id.name) {
+                    Type::Enum {
+                        name: name.clone(),
+                        variants: variants.clone(),
+                    }
+                } else {
+                    Type::from(annotation.clone())
+                }
+            }
+            _ => Type::from(annotation.clone()),
         }
     }
 

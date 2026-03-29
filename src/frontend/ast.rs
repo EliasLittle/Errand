@@ -37,6 +37,10 @@ pub enum Expression {
         id: Id,
         fields: Vec<FieldDefinition>,
     },
+    EnumDefinition {
+        id: Id,
+        variants: Vec<EnumVariantDefinition>,
+    },
     If {
         condition: Box<Expression>,
         then_branch: Box<Expression>,
@@ -123,6 +127,12 @@ pub struct FieldDefinition {
     pub field_type: TypeExpression,
 }
 
+#[derive(Debug, Clone, PartialEq)]
+pub struct EnumVariantDefinition {
+    pub id: Id,
+    pub payload_type: Option<TypeExpression>,
+}
+
 /*
 #[derive(Debug, Clone)]
 pub struct MatchCase {
@@ -190,6 +200,15 @@ impl fmt::Display for Expression {
                 let fields_str: Vec<String> = fields.iter().map(|field| format!("{}", field.id.name)).collect();
                 write!(f, "struct {} {{ {} }}", id.name, fields_str.join(", "))
             },
+            Expression::EnumDefinition { id, variants } => {
+                let variants_str: Vec<String> = variants.iter().map(|variant| {
+                    match &variant.payload_type {
+                        Some(payload_type) => format!("{}::{}", variant.id.name, payload_type.name()),
+                        None => variant.id.name.clone(),
+                    }
+                }).collect();
+                write!(f, "enum {} {{ {} }}", id.name, variants_str.join(", "))
+            },
             Expression::If { condition, then_branch, else_branch } => {
                 let else_str = if let Some(else_branch) = else_branch {
                     format!(" else {}", else_branch)
@@ -236,6 +255,15 @@ impl fmt::Display for FieldDefinition {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         write!(f, "{}::{}", self.id.name, self.field_type.name())
         //write!(f, "{}: {:?}", self.id.name, self.type_expr)
+    }
+}
+
+impl fmt::Display for EnumVariantDefinition {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        match &self.payload_type {
+            Some(payload_type) => write!(f, "{}::{}", self.id.name, payload_type.name()),
+            None => write!(f, "{}", self.id.name),
+        }
     }
 }
 

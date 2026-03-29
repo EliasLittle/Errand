@@ -266,6 +266,7 @@ impl Interpreter {
             Expression::FunctionCall { id, arguments } => self.eval_call(id, arguments),
             Expression::FunctionDefinition { id, parameters, body, return_type_expr, foreign: _ } => self.eval_function_definition(id, parameters, body, return_type_expr),
             Expression::StructDefinition { id, fields } => self.eval_struct_definition(id, fields),
+            Expression::EnumDefinition { .. } => Ok(Value::Unit),
             Expression::If { condition, then_branch, else_branch } => self.eval_if(condition, then_branch, else_branch),
             Expression::While { condition, body } => self.eval_while(condition, body),
             Expression::Block(expressions) => {

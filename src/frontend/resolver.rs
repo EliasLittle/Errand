@@ -101,6 +101,11 @@ impl Resolver {
                 self.end_scope();
                 Ok(())
             },
+            Expression::EnumDefinition { id, variants: _ } => {
+                self.declare(id)?;
+                self.define(id);
+                Ok(())
+            },
             Expression::If { condition, then_branch, else_branch } => {
                 self.resolve_expr(condition)?;
                 self.resolve_expr(then_branch)?;

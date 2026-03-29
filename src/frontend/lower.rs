@@ -1,48 +1,21 @@
 use crate::{lowering_log};
 use crate::frontend::ast::*;
+use std::collections::HashMap;
 
 // TODO: Rename to desugar
 
-impl Program {
-    pub fn lower(&self) -> Program {
-        lowering_log!("------ Lowering program ------");
-        // 1. Find all struct definitions and generate constructor functions
-        let mut constructor_functions = Vec::new();
-        for expr in &self.expressions {
-            if let Expression::StructDefinition { id, fields } = expr {
-                // Build parameter list from fields
-                let parameters: Vec<Parameter> = fields.iter().map(|f| Parameter {
-                    id: f.id.clone(),
-                    type_expr: Some(f.field_type.clone()),
-                }).collect();
-                // Build arguments for new(:StructName, ...fields...)
-                let mut new_args = vec![Expression::Symbol(id.name.clone())];
-                new_args.extend(fields.iter().map(|f| Expression::Identifier {
-                    id: f.id.clone(),
-                    type_expr: Some(f.field_type.clone()),
-                }));
-                let body = Box::new(Expression::Return(Some(Box::new(Expression::FunctionCall {
-                    id: Id { name: "new".to_string() },
-                    arguments: new_args,
-                }))));
-                let constructor = Expression::FunctionDefinition {
-                    id: id.clone(),
-                    parameters: parameters.clone(),
-                    body: body,
-                    return_type_expr: Some(TypeExpression::Struct(id.clone(), None)),
-                    foreign: false,
-                };
-                constructor_functions.push(constructor);
-            }
-        }
-        // 2. Lower the rest of the program
-        let lowered = Program {
-            expressions: constructor_functions.into_iter()
-                .chain(self.expressions.iter().map(|expr| self.lower_expression(expr.clone())))
-                .collect(),
-        };
-        lowering_log!("------ Program lowered ------");
-        lowered
+#[derive(Clone)]
+struct EnumVariantLoweringInfo {
+    payload_type: Option<TypeExpression>,
+}
+
+struct LoweringContext {
+    enum_variants_by_enum: HashMap<String, HashMap<String, EnumVariantLoweringInfo>>,
+}
+
+impl LoweringContext {
+    fn new(enum_variants_by_enum: HashMap<String, HashMap<String, EnumVariantLoweringInfo>>) -> Self {
+        Self { enum_variants_by_enum }
     }
 
     fn lower_expression(&self, expr: Expression) -> Expression {
@@ -52,7 +25,7 @@ impl Program {
                 let lowered_left = self.lower_expression(*left);
                 let lowered_right = self.lower_expression(*right);
                 match operator {
-                    BinaryOperator::Dot => lower_field_access(Box::new(lowered_left), Box::new(lowered_right)),
+                    BinaryOperator::Dot => self.lower_dot_access(Box::new(lowered_left), Box::new(lowered_right)),
                     _ => Expression::BinaryOp {
                         operator,
                         left: Box::new(lowered_left),
@@ -174,6 +147,168 @@ impl Program {
             _ => expr,
         }
     }
+
+    fn lower_dot_access(&self, left: Box<Expression>, right: Box<Expression>) -> Expression {
+        if let Expression::Identifier { id: enum_id, .. } = &*left {
+            if let Some(variant_map) = self.enum_variants_by_enum.get(&enum_id.name) {
+                return match *right {
+                    Expression::Identifier { id: variant_id, .. } => {
+                        let variant = variant_map.get(&variant_id.name).unwrap_or_else(|| {
+                            panic!("Unknown enum variant {}.{}", enum_id.name, variant_id.name)
+                        });
+                        if variant.payload_type.is_some() {
+                            panic!(
+                                "Enum variant {}.{} expects one payload argument",
+                                enum_id.name,
+                                variant_id.name
+                            );
+                        }
+                        Expression::FunctionCall {
+                            id: Id { name: enum_constructor_name(&enum_id.name, &variant_id.name) },
+                            arguments: vec![],
+                        }
+                    }
+                    Expression::FunctionCall { id: variant_id, arguments } => {
+                        let variant = variant_map.get(&variant_id.name).unwrap_or_else(|| {
+                            panic!("Unknown enum variant {}.{}", enum_id.name, variant_id.name)
+                        });
+                        if variant.payload_type.is_none() {
+                            panic!(
+                                "Enum variant {}.{} does not accept payload arguments",
+                                enum_id.name,
+                                variant_id.name
+                            );
+                        }
+                        if arguments.len() != 1 {
+                            panic!(
+                                "Enum payload constructor {}.{} expects exactly one argument",
+                                enum_id.name,
+                                variant_id.name
+                            );
+                        }
+                        Expression::FunctionCall {
+                            id: Id { name: enum_constructor_name(&enum_id.name, &variant_id.name) },
+                            arguments,
+                        }
+                    }
+                    other => panic!("Unsupported enum variant access syntax: {:?}", other),
+                };
+            }
+        }
+        lower_field_access(left, right)
+    }
+}
+
+impl Program {
+    pub fn lower(&self) -> Program {
+        lowering_log!("------ Lowering program ------");
+        // 1. Find all struct definitions and generate constructor functions
+        let mut constructor_functions = Vec::new();
+        let mut enum_runtime_structs = Vec::new();
+        let mut enum_constructor_functions = Vec::new();
+        let mut enum_variants_by_enum: HashMap<String, HashMap<String, EnumVariantLoweringInfo>> = HashMap::new();
+        for expr in &self.expressions {
+            if let Expression::StructDefinition { id, fields } = expr {
+                // Build parameter list from fields
+                let parameters: Vec<Parameter> = fields.iter().map(|f| Parameter {
+                    id: f.id.clone(),
+                    type_expr: Some(f.field_type.clone()),
+                }).collect();
+                // Build arguments for new(:StructName, ...fields...)
+                let mut new_args = vec![Expression::Symbol(id.name.clone())];
+                new_args.extend(fields.iter().map(|f| Expression::Identifier {
+                    id: f.id.clone(),
+                    type_expr: Some(f.field_type.clone()),
+                }));
+                let body = Box::new(Expression::Return(Some(Box::new(Expression::FunctionCall {
+                    id: Id { name: "new".to_string() },
+                    arguments: new_args,
+                }))));
+                let constructor = Expression::FunctionDefinition {
+                    id: id.clone(),
+                    parameters: parameters.clone(),
+                    body: body,
+                    return_type_expr: Some(TypeExpression::Struct(id.clone(), None)),
+                    foreign: false,
+                };
+                constructor_functions.push(constructor);
+            }
+            if let Expression::EnumDefinition { id, variants } = expr {
+                // Runtime representation for enum values.
+                enum_runtime_structs.push(Expression::StructDefinition {
+                    id: id.clone(),
+                    fields: vec![
+                        FieldDefinition {
+                            id: Id { name: "tag".to_string() },
+                            field_type: TypeExpression::Int,
+                        },
+                        FieldDefinition {
+                            id: Id { name: "payload".to_string() },
+                            field_type: TypeExpression::Int,
+                        },
+                    ],
+                });
+
+                let mut variant_map = HashMap::new();
+                for (idx, variant) in variants.iter().enumerate() {
+                    let tag = idx as i64;
+                    variant_map.insert(
+                        variant.id.name.clone(),
+                        EnumVariantLoweringInfo {
+                            payload_type: variant.payload_type.clone(),
+                        },
+                    );
+
+                    let constructor_name = enum_constructor_name(&id.name, &variant.id.name);
+                    let mut parameters = Vec::new();
+                    let payload_expr = if let Some(payload_type) = &variant.payload_type {
+                        let payload_id = Id { name: "payload".to_string() };
+                        parameters.push(Parameter {
+                            id: payload_id.clone(),
+                            type_expr: Some(payload_type.clone()),
+                        });
+                        Expression::Identifier {
+                            id: payload_id,
+                            type_expr: Some(payload_type.clone()),
+                        }
+                    } else {
+                        Expression::Int(0)
+                    };
+                    let constructor_body = Box::new(Expression::Return(Some(Box::new(Expression::FunctionCall {
+                        id: Id { name: "new".to_string() },
+                        arguments: vec![
+                            Expression::Symbol(id.name.clone()),
+                            Expression::Int(tag),
+                            payload_expr,
+                        ],
+                    }))));
+                    enum_constructor_functions.push(Expression::FunctionDefinition {
+                        id: Id { name: constructor_name },
+                        parameters,
+                        body: constructor_body,
+                        return_type_expr: Some(TypeExpression::Struct(id.clone(), None)),
+                        foreign: false,
+                    });
+                }
+                enum_variants_by_enum.insert(id.name.clone(), variant_map);
+            }
+        }
+        // 2. Lower the rest of the program
+        let ctx = LoweringContext::new(enum_variants_by_enum);
+        let lowered = Program {
+            expressions: constructor_functions.into_iter()
+                .chain(enum_runtime_structs)
+                .chain(enum_constructor_functions)
+                .chain(self.expressions.iter().map(|expr| ctx.lower_expression(expr.clone())))
+                .collect(),
+        };
+        lowering_log!("------ Program lowered ------");
+        lowered
+    }
+}
+
+fn enum_constructor_name(enum_name: &str, variant_name: &str) -> String {
+    format!("{}__{}", enum_name, variant_name)
 }
 
 fn lower_field_access(left: Box<Expression>, right: Box<Expression>) -> Expression {

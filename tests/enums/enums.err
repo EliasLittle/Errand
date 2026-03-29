@@ -1,0 +1,57 @@
+foreign fn printf(a::Int):: Int
+foreign fn free(a::Int):: Int
+foreign fn strlen(a::Int):: Int
+foreign fn malloc(a::Int):: Int
+foreign fn strcpy(a::Int, b::Int):: Int
+
+fn strlen(a::String)
+    return strlen(as_ptr(a))
+end
+
+fn strcpy(a::String, b::String)
+    return strcpy(as_ptr(a), as_ptr(b))
+end
+
+fn free(a::String)
+    return free(as_ptr(a))
+end
+
+struct CreditCard
+    number::Int
+end
+
+struct PayPal
+    email::Int
+end
+
+enum Suit
+    Heart
+    Club
+    Diamond
+    Spade
+end
+
+enum PaymentMethod
+    Card::CreditCard
+    Digital::PayPal
+    Cash
+end
+
+fn main()
+    cc = CreditCard(4242)
+    pp = PayPal(7)
+    pm_card::PaymentMethod = PaymentMethod.Card(cc)
+    pm_digital::PaymentMethod = PaymentMethod.Digital(pp)
+    pm_cash::PaymentMethod = PaymentMethod.Cash
+    suit::Suit = Suit.Heart
+
+    printf("pm_card tag: %d\n", pm_card.tag)
+    printf("pm_card payload: %d\n", pm_card.payload)
+    printf("pm_digital tag: %d\n", pm_digital.tag)
+    printf("pm_cash tag: %d\n", pm_cash.tag)
+    printf("suit tag: %d\n", suit.tag)
+
+    return pm_cash.tag + suit.tag
+end
+
+printf("%d\n", main())

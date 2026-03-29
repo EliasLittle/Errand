@@ -30,6 +30,7 @@ pub fn compile_preir(program: &Program) -> Result<PreIR, String> {
                 };
                 ctx.emit_instruction(Instr::StructDecl(strct));
             }
+            Expression::EnumDefinition { .. } => {}
             _ => {}
         }
     }
@@ -42,6 +43,7 @@ pub fn compile_preir(program: &Program) -> Result<PreIR, String> {
         match expr {
             Expression::FunctionDefinition { .. } => continue,
             Expression::StructDefinition { .. } => continue,
+            Expression::EnumDefinition { .. } => continue,
             _ => {         
                 let instr_idx = compile_expression(&mut ctx, expr)?;
                 main_instructions.push(instr_idx);
@@ -224,6 +226,9 @@ fn compile_expression(ctx: &mut PreIR, expr: &Expression) -> Result<instr_index,
             });
             
             Ok(ctx.emit_instruction(struct_data))
+        }
+        Expression::EnumDefinition { .. } => { // Defensive 
+            Ok(ctx.emit_instruction(Instr::Literal(LiteralPl::Unit)))
         }
         Expression::If { condition, then_branch, else_branch } => {
             let condition_idx = compile_expression(ctx, condition)?;
