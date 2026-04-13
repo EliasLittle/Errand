@@ -1,39 +1,36 @@
 use std::collections::HashMap;
 
+use crate::backend::analysis::Analyzer;
 use crate::backend::errand_builtins::type_expr_to_errand_type;
 use crate::backend::preir::{
-    BinOpPl, FnCallPl, ForLoopData, IfStatementData, Instr, LiteralPl, RegionData, ReturnData,
+    BinOpPl, FnCallPl, ForLoopData, IfStatementData, Instr, RegionData, ReturnData,
     UnOpPl, VarDeclData, FuncData, instr_index,
 };
 use crate::backend::sir::{SIR, SIRFunctionInfo, SIRInstr, SIRModule, SIRStructField, SIRStructLayout};
-use crate::backend::worklist::{ErrandInference, ErrandType};
+use crate::backend::worklist::ErrandType;
 use crate::frontend::ast::{Parameter, Program};
 use crate::backend::preir::PreIR;
 
 /// Generates SIR from PreIR in a single interleaved pass: each instruction is
-/// typed and emitted simultaneously, mirroring Zig's Sema analyzeBody.
+/// typed via `Analyzer` and emitted simultaneously.
 pub struct SirGen {
-    pub inference: ErrandInference,
-    /// Maps global PreIR instruction index -> local SIR index for the current
-    /// function being processed. Reset for each function / main.
+    pub analyzer: Analyzer,
+    /// Maps global PreIR instruction index -> local SIR index for the function
+    /// currently being processed.  Reset for each function / main.
     preir_to_sir: HashMap<instr_index, instr_index>,
 }
 
 impl SirGen {
-    fn new(inference: ErrandInference) -> Self {
-        SirGen {
-            inference,
-            preir_to_sir: HashMap::new(),
-        }
+    fn new(analyzer: Analyzer) -> Self {
+        SirGen { analyzer, preir_to_sir: HashMap::new() }
     }
 
-    /// Main entry point. Builds a complete `SIRModule` from a `PreIR` in a
-    /// single interleaved pass (typing + emission together).
+    /// Build a complete `SIRModule` from a `PreIR`.
     pub fn emit_sir_module(preir: PreIR, program: &Program) -> Result<SIRModule, String> {
-        let inference = ErrandInference::with_preir_and_program(preir, program);
-        let mut gen = SirGen::new(inference);
+        let analyzer = Analyzer::new(preir, program);
+        let mut gen = SirGen::new(analyzer);
 
-        // Collect FuncDecl and StructDecl metadata before any mutable borrows.
+        // Collect function and struct metadata before any mutable borrows.
         struct FuncMeta {
             name: String,
             body_index: instr_index,
@@ -41,8 +38,9 @@ impl SirGen {
             return_type: Option<crate::frontend::ast::TypeExpression>,
             is_foreign: bool,
         }
+
         let function_meta: Vec<FuncMeta> = gen
-            .inference
+            .analyzer
             .preir
             .instructions
             .iter()
@@ -63,7 +61,7 @@ impl SirGen {
 
         // Build struct layouts from StructDecl instructions.
         let struct_layouts: HashMap<String, SIRStructLayout> = gen
-            .inference
+            .analyzer
             .preir
             .instructions
             .iter()
@@ -76,11 +74,8 @@ impl SirGen {
                         .map(|f| {
                             let ty = type_expr_to_errand_type(&f.field_type);
                             let size = errand_type_size(&ty);
-                            let field = SIRStructField {
-                                name: f.id.name.clone(),
-                                ty,
-                                byte_offset: offset,
-                            };
+                            let field =
+                                SIRStructField { name: f.id.name.clone(), ty, byte_offset: offset };
                             offset += size;
                             field
                         })
@@ -92,47 +87,45 @@ impl SirGen {
             })
             .collect();
 
-        // Process main FIRST so module-level variables are in module_context
-        // before functions are analyzed.
-        gen.inference.setup_function_context(&[]);
-        let region_data = if let Instr::Region(rd) = &gen.inference.preir.main.clone() {
-            rd.clone()
-        } else {
-            return Err("Main is not a Region".to_string());
+        // Process main first so module-level variables enter module_context
+        // before any function body is analyzed.
+        gen.analyzer.setup_function_context(&[]);
+        let region_data = match gen.analyzer.preir.main.clone() {
+            Instr::Region(rd) => rd,
+            _ => return Err("main is not a Region".into()),
         };
         let main_sir = gen.emit_region_sir(&region_data)?;
-        gen.inference.promote_var_context_to_module();
+        gen.analyzer.promote_to_module();
 
         // Process each function as an independent entry point.
         let mut functions: HashMap<String, HashMap<Vec<String>, SIRFunctionInfo>> = HashMap::new();
+
         for meta in function_meta {
-            gen.inference.setup_function_context(&meta.parameters);
+            gen.analyzer.setup_function_context(&meta.parameters);
             let func_sir = gen.emit_body_sir(meta.body_index)?;
 
-            // Resolve parameter types from the inference var_context (populated by
-            // setup_function_context).
+            // Resolve parameter types directly from this overload's own FuncDecl.
+            // Using the meta.parameters directly (rather than searching by name) is
+            // critical for multiple dispatch: different overloads of the same function
+            // have different parameter types and must produce different type_keys.
             let params: Vec<(String, ErrandType)> = meta
                 .parameters
                 .iter()
                 .map(|p| {
-                    let ty = gen
-                        .inference
-                        .var_context
-                        .get(&p.id.name)
-                        .cloned()
-                        .unwrap_or_else(|| ErrandType::ETVar("?".to_string()));
+                    let ty = match &p.type_expr {
+                        Some(te) => type_expr_to_errand_type(te),
+                        None => ErrandType::ETVar(format!("param_{}", p.id.name)),
+                    };
                     (p.id.name.clone(), ty)
                 })
                 .collect();
 
-            // Return type: the type annotation on the return_loc instruction, falling
-            // back to the declared return type expression, then Void.
             let return_type = func_sir
                 .instructions
                 .get(func_sir.return_loc as usize)
                 .and_then(|i| i.ty.clone())
                 .or_else(|| meta.return_type.as_ref().map(type_expr_to_errand_type))
-                .unwrap_or_else(|| ErrandType::Con("Void".to_string()));
+                .unwrap_or_else(|| ErrandType::Con("Void".into()));
 
             let type_key: Vec<String> =
                 params.iter().map(|(_, ty)| errand_type_name(ty)).collect();
@@ -144,17 +137,16 @@ impl SirGen {
                 body: if meta.is_foreign { None } else { Some(func_sir) },
             };
 
-            functions
-                .entry(meta.name)
-                .or_default()
-                .insert(type_key, info);
+            functions.entry(meta.name).or_default().insert(type_key, info);
         }
 
         Ok(SIRModule { main: main_sir, functions, structs: struct_layouts })
     }
 
+    // ── Emission ──────────────────────────────────────────────────────────────
+
     /// Emit SIR for a function body rooted at `root_idx`.
-    /// Resets `preir_to_sir` so local indices start at 0.
+    /// Resets the index map so local indices start at 0.
     fn emit_body_sir(&mut self, root_idx: instr_index) -> Result<SIR, String> {
         self.preir_to_sir.clear();
         let mut sir = SIR { instructions: Vec::new(), return_loc: 0 };
@@ -163,101 +155,64 @@ impl SirGen {
         Ok(sir)
     }
 
-    /// Emit SIR for the main region. Walks `instr_start..instr_end` in forward
-    /// order (same ordering as `analyze_region` in worklist.rs).
+    /// Emit SIR for the main region: walk `instr_start..instr_end` in order,
+    /// skipping top-level declarations (they have their own entry points).
     fn emit_region_sir(&mut self, region_data: &RegionData) -> Result<SIR, String> {
         self.preir_to_sir.clear();
         let mut sir = SIR { instructions: Vec::new(), return_loc: 0 };
 
         for i in region_data.instr_start..region_data.instr_end {
-            // Skip top-level declarations — they get their own SIR entry points.
-            let instr = self.inference.preir.get_instruction(i).cloned();
-            match &instr {
+            match self.analyzer.preir.get_instruction(i) {
                 Some(Instr::FuncDecl(_)) | Some(Instr::StructDecl(_)) => continue,
                 _ => {}
             }
             self.analyze_and_emit(i, &mut sir)?;
         }
 
-        sir.return_loc = self
-            .preir_to_sir
-            .get(&region_data.return_loc)
-            .copied()
-            .unwrap_or(0);
+        sir.return_loc = self.preir_to_sir.get(&region_data.return_loc).copied().unwrap_or(0);
         Ok(sir)
     }
 
-    /// Core per-instruction handler: type the instruction at `global_idx`, then
-    /// emit a `SIRInstr` with remapped local operand indices into `sir`.
-    ///
-    /// Returns the local index assigned to this instruction.
+    /// Type the instruction at `global_idx` via `Analyzer`, emit a `SIRInstr`
+    /// with remapped local indices, and return the local index.
     fn analyze_and_emit(
         &mut self,
         global_idx: instr_index,
         sir: &mut SIR,
     ) -> Result<instr_index, String> {
-        // Already emitted — return cached local index (inst_map hit).
         if let Some(&local) = self.preir_to_sir.get(&global_idx) {
             return Ok(local);
         }
 
-        // Clone the instruction to avoid borrow conflicts with inference.
         let instr = self
-            .inference
+            .analyzer
             .preir
             .get_instruction(global_idx)
             .cloned()
-            .ok_or_else(|| format!("Invalid PreIR instruction index: {}", global_idx))?;
+            .ok_or_else(|| format!("invalid PreIR index: {global_idx}"))?;
 
-        // For Region instructions, emit the contained instructions first so
-        // their local indices are known before we emit the Region itself.
+        // Region instructions: emit contained body first, then the Region node.
         if let Instr::Region(ref rd) = instr {
             return self.emit_region_instr(global_idx, rd.clone(), sir);
         }
 
-        // For FuncDecl / StructDecl encountered inside a body (nested), skip
-        // emission — they are handled as top-level entry points.
+        // Declarations nested inside a body: analyze only, don't emit into
+        // this SIR (they are independent entry points at the module level).
         if matches!(instr, Instr::FuncDecl(_) | Instr::StructDecl(_)) {
-            // Still type-check them, but don't emit into the current SIR.
-            let _ = self
-                .inference
-                .analyze_instr_index(global_idx)
-                .map_err(|e| format!("{:?}", e))?;
-            // Return a sentinel; callers that walk regions skip these.
+            let _ = self.analyzer.analyze_instr(global_idx).map_err(|e| format!("{e:?}"));
             return Ok(-1);
         }
 
-        // Comptime fold: typeof(arg) → Literal(Symbol(type_name)) : Type
-        if let Instr::FnCall(ref call) = instr {
-            if call.name == "typeof" && call.arguments.len() == 1 {
-                let arg_global_idx = call.arguments[0];
-                self.analyze_and_emit(arg_global_idx, sir)?;
-                let resolved_ty = self.inference
-                    .analyze_instr_index(arg_global_idx)
-                    .unwrap_or(ErrandType::ETVar("?".to_string()));
-                let type_name = errand_type_name(&resolved_ty);
-                let local_idx = sir.instructions.len() as instr_index;
-                sir.instructions.push(SIRInstr {
-                    instr: Instr::Literal(LiteralPl::Symbol(type_name)),
-                    ty: Some(ErrandType::Con("Type".to_string())),
-                });
-                self.preir_to_sir.insert(global_idx, local_idx);
-                return Ok(local_idx);
-            }
-        }
-
-        // Recursively emit all operand dependencies first, collecting their
-        // local indices for remapping.
+        // Recursively emit operand instructions and remap their indices.
         let remapped = self.remap_operands(instr, sir)?;
 
-        // Type the instruction (caches result in analysis_cache).
+        // Type via the Analyzer (cached after the first call).
         let ty = self
-            .inference
-            .analyze_instr_index(global_idx)
-            .map_err(|e| format!("{:?}", e))
+            .analyzer
+            .analyze_instr(global_idx)
+            .map(|idx| self.analyzer.pool.to_errand_type(idx))
             .ok();
 
-        // Emit into SIR.
         let local_idx = sir.instructions.len() as instr_index;
         sir.instructions.push(SIRInstr { instr: remapped, ty });
         self.preir_to_sir.insert(global_idx, local_idx);
@@ -265,8 +220,8 @@ impl SirGen {
         Ok(local_idx)
     }
 
-    /// Special handling for `Region` instructions: emit contained instructions
-    /// in forward order, then emit the Region itself with remapped bounds.
+    /// Emit the instructions contained in a `Region`, then emit the Region
+    /// node itself with adjusted local bounds.
     fn emit_region_instr(
         &mut self,
         global_idx: instr_index,
@@ -276,11 +231,9 @@ impl SirGen {
         let new_start = sir.instructions.len() as instr_index;
 
         for i in rd.instr_start..rd.instr_end {
-            let instr = self.inference.preir.get_instruction(i).cloned();
-            match &instr {
+            match self.analyzer.preir.get_instruction(i) {
                 Some(Instr::FuncDecl(_)) | Some(Instr::StructDecl(_)) => {
-                    // Type them but don't emit into this Region's SIR.
-                    let _ = self.inference.analyze_instr_index(i);
+                    let _ = self.analyzer.analyze_instr(i);
                     continue;
                 }
                 _ => {}
@@ -289,7 +242,8 @@ impl SirGen {
         }
 
         let new_end = sir.instructions.len() as instr_index;
-        let new_return_loc = self.preir_to_sir.get(&rd.return_loc).copied().unwrap_or(new_start);
+        let new_return_loc =
+            self.preir_to_sir.get(&rd.return_loc).copied().unwrap_or(new_start);
 
         let remapped_region = Instr::Region(RegionData {
             instr_start: new_start,
@@ -297,11 +251,10 @@ impl SirGen {
             return_loc: new_return_loc,
         });
 
-        // Type the Region instruction itself.
         let ty = self
-            .inference
-            .analyze_instr_index(global_idx)
-            .map_err(|e| format!("{:?}", e))
+            .analyzer
+            .analyze_instr(global_idx)
+            .map(|idx| self.analyzer.pool.to_errand_type(idx))
             .ok();
 
         let local_idx = sir.instructions.len() as instr_index;
@@ -311,11 +264,10 @@ impl SirGen {
         Ok(local_idx)
     }
 
-    /// Recursively emit operand instructions and return a new `Instr` with all
-    /// operand indices remapped to local SIR indices.
+    /// Return a new `Instr` with all operand `instr_index` values remapped from
+    /// global PreIR space to local SIR space, emitting dependencies first.
     fn remap_operands(&mut self, instr: Instr, sir: &mut SIR) -> Result<Instr, String> {
         match instr {
-            // No operand indices — emit as-is.
             Instr::Literal(_) | Instr::VarRef(_) | Instr::StructDecl(_) => Ok(instr),
 
             Instr::VarDecl(data) => {
@@ -345,11 +297,9 @@ impl SirGen {
             Instr::IfStatement(data) => {
                 let condition = self.analyze_and_emit(data.condition, sir)?;
                 let then_branch = self.analyze_and_emit(data.then_branch, sir)?;
-                let else_branch = if let Some(e) = data.else_branch {
-                    Some(self.analyze_and_emit(e, sir)?)
-                } else {
-                    None
-                };
+                let else_branch = data.else_branch
+                    .map(|e| self.analyze_and_emit(e, sir))
+                    .transpose()?;
                 Ok(Instr::IfStatement(IfStatementData { condition, then_branch, else_branch }))
             }
 
@@ -366,11 +316,7 @@ impl SirGen {
             }
 
             Instr::Return(data) => {
-                let value = if let Some(v) = data.value {
-                    Some(self.analyze_and_emit(v, sir)?)
-                } else {
-                    None
-                };
+                let value = data.value.map(|v| self.analyze_and_emit(v, sir)).transpose()?;
                 Ok(Instr::Return(ReturnData { value }))
             }
 
@@ -385,29 +331,29 @@ impl SirGen {
                 }))
             }
 
-            // Region is handled separately in emit_region_instr.
-            Instr::Region(_) => unreachable!("Region should be handled before remap_operands"),
+            Instr::Region(_) => unreachable!("Region handled before remap_operands"),
         }
     }
 }
 
+// ─── Utilities ────────────────────────────────────────────────────────────────
+
 pub(crate) fn errand_type_name(ty: &ErrandType) -> String {
     match ty {
         ErrandType::Con(n) | ErrandType::Var(n) | ErrandType::ETVar(n) => n.clone(),
-        ErrandType::Arrow(_, _) => "Function".to_string(),
-        ErrandType::Forall(_, _) => "Forall".to_string(),
-        ErrandType::Product(_) => "Product".to_string(),
-        ErrandType::Sum(_) => "Sum".to_string(),
+        ErrandType::Arrow(_, _) => "Function".into(),
+        ErrandType::Forall(_, _) => "Forall".into(),
+        ErrandType::Product(_) => "Product".into(),
+        ErrandType::Sum(_) => "Sum".into(),
     }
 }
 
-/// Returns the byte size of an `ErrandType` for struct field layout computation.
 fn errand_type_size(ty: &ErrandType) -> usize {
     match ty {
         ErrandType::Con(n) => match n.as_str() {
             "Int32" => 4,
             "Bool" => 1,
-            _ => 8, // Int, Float, String, pointers, structs, etc.
+            _ => 8,
         },
         _ => 8,
     }

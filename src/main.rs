@@ -5,7 +5,7 @@ use Errand::frontend::typeof_eval::TypeofEvaluator;
 use Errand::frontend::ast::Program;
 use Errand::backend::ir_lowering::IRLoweringPass;
 use Errand::backend::preir_gen::compile_preir;
-use Errand::backend::worklist::ErrandInference;
+use Errand::backend::analysis::Analyzer;
 use Errand::backend::preir::Instr;
 use Errand::backend::sir_gen::SirGen;
 use Errand::logging::{init_logger, CompilerLogLevel};
@@ -165,14 +165,14 @@ fn type_check_preir(preir: Errand::backend::preir::PreIR, program: &Program) -> 
     compiler_info!("Running worklist type inference on PreIR...");
     compiler_info!("----------------------------------------");
     
-    // Create inference engine with PreIR and Program
-    let mut inference = ErrandInference::with_preir_and_program(preir, program);
+    // Create the analyzer with PreIR and Program.
+    let mut analyzer = Analyzer::new(preir, program);
     
     let mut type_errors = Vec::new();
     
-    // Collect function body indices and parameters first to avoid borrow conflicts
+    // Collect function body indices and parameters first to avoid borrow conflicts.
     let mut function_indices = Vec::new();
-    for (index, instruction) in inference.preir.instructions.iter().enumerate() {
+    for (index, instruction) in analyzer.preir.instructions.iter().enumerate() {
         if let Instr::FuncDecl(func_data) = instruction {
             function_indices.push((
                 index,
@@ -184,18 +184,17 @@ fn type_check_preir(preir: Errand::backend::preir::PreIR, program: &Program) -> 
     }
 
     // Analyze main region FIRST so module-level variables are discovered before functions.
-    // Functions may reference module-level variables, so they must exist in module_context.
-    compiler_debug!("Type checking main region: {}", inference.preir.format_main());
-    inference.setup_function_context(&[]);
-    let region_data = if let Instr::Region(rd) = &inference.preir.main {
+    compiler_debug!("Type checking main region: {}", analyzer.preir.format_main());
+    analyzer.setup_function_context(&[]);
+    let region_data = if let Instr::Region(rd) = &analyzer.preir.main {
         rd.clone()
     } else {
         return Err("Main is not a Region".to_string());
     };
 
-    match inference.analyze_region(&region_data) {
-        Ok(main_type) => {
-            compiler_info!("Main region type: {:?}", main_type);
+    match analyzer.analyze_body(&region_data) {
+        Ok(main_ty_idx) => {
+            compiler_info!("Main region type: {:?}", analyzer.pool.to_errand_type(main_ty_idx));
         }
         Err(e) => {
             let error_msg = format!("Type error in main region: {:?}", e);
@@ -204,16 +203,16 @@ fn type_check_preir(preir: Errand::backend::preir::PreIR, program: &Program) -> 
         }
     }
 
-    // Promote main region's var_context to module_context so functions can see module-level vars
-    inference.promote_var_context_to_module();
+    // Promote main region's var_context to module_context so functions can see module-level vars.
+    analyzer.promote_to_module();
 
-    // Type check each function declaration using Zig-style analysis
+    // Type check each function declaration.
     for (index, func_name, body_index, parameters) in function_indices {
-        compiler_info!("Type checking function {}: {}", func_name, inference.preir.format_instruction(index as i64));
+        compiler_info!("Type checking function {}: {}", func_name, analyzer.preir.format_instruction(index as i64));
 
-        inference.setup_function_context(&parameters);
-        match inference.analyze_instr_index(body_index) {
-            Ok(_inferred_type) => {
+        analyzer.setup_function_context(&parameters);
+        match analyzer.analyze_instr(body_index) {
+            Ok(_) => {
                 compiler_debug!("  ✓ Function {} type checked successfully", func_name);
             }
             Err(e) => {
@@ -224,8 +223,8 @@ fn type_check_preir(preir: Errand::backend::preir::PreIR, program: &Program) -> 
         }
     }
     
-    // Print inference trace if debug logging is enabled
-    let trace = inference.get_trace();
+    // Print inference trace if debug logging is enabled.
+    let trace = analyzer.get_trace();
     if !trace.is_empty() {
         compiler_debug!("Type inference trace:");
         for trace_item in trace {
