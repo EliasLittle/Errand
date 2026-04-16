@@ -339,6 +339,18 @@ impl TypeInferencer {
                         }
                     );
                 }
+                Expression::EnumDefinition { id, variants } => {
+                    // Register the enum as a named type in the environment.
+                    // Variants are compiled to integer tags during lowering, so the
+                    // type itself is represented as an empty struct-like nominal type.
+                    self.env.set_type(
+                        id.name.clone(),
+                        Type::Struct {
+                            name: id.name.clone(),
+                            fields: std::collections::HashMap::new(),
+                        },
+                    );
+                }
                 Expression::Identifier { id, type_expr } => {
                     if let Some(ty) = type_expr {
                         self.env.set_type(

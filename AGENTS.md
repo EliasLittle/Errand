@@ -21,3 +21,18 @@ When adding or refactoring any part of the compiler that deals with function
 lookup, parameter typing, or code generation, always verify that two overloads of
 the same function (e.g. `free(a: Int)` and `free(a: String)`) remain distinct
 entries throughout the pipeline.
+
+## Eliminating `lower.rs`
+
+The long-term goal is to **gradually eliminate `src/frontend/lower.rs`** by moving
+each transformation it performs into the appropriate later compiler phase:
+
+- Desugaring that only needs name information → PreIR generation (`preir_gen.rs`)
+- Transformations that require type information → analysis (`analysis.rs`) or SIR
+  generation (`sir_gen.rs`)
+- Recognition of syntactic patterns (e.g. enum variant access) → PreIR generation
+
+**Do not add new transformations to `lower.rs`.** Some desugaring (struct
+constructor synthesis, for-loop expansion) still lives there temporarily until it
+can be migrated. New features should place their lowering logic in the backend
+from the start.

@@ -47,6 +47,8 @@ pub struct SIRLoweringPass {
     func_overloads: HashMap<String, Vec<(Vec<String>, String)>>,
     string_counter: u32,
     struct_registry: HashMap<String, BackendStruct>,
+    /// enum_name → ordered variant names (index == integer tag).
+    enum_registry: HashMap<String, Vec<String>>,
     next_func_idx: u32,
 }
 
@@ -61,6 +63,7 @@ impl SIRLoweringPass {
             func_overloads: HashMap::new(),
             string_counter: 0,
             struct_registry: HashMap::new(),
+            enum_registry: HashMap::new(),
             next_func_idx: 0,
         }
     }
@@ -73,6 +76,7 @@ impl SIRLoweringPass {
 
     fn run(&mut self, sir_module: &SIRModule) -> Result<Vec<u8>, String> {
         self.build_struct_registry(sir_module);
+        self.build_enum_registry(sir_module);
         self.initialize_module()?;
         self.declare_builtins()?;
         self.declare_all_functions(sir_module)?;
@@ -128,6 +132,12 @@ impl SIRLoweringPass {
                 .collect();
             let s = BackendStruct::new(name, backend_fields, layout.total_size);
             self.struct_registry.insert(name.clone(), s);
+        }
+    }
+
+    fn build_enum_registry(&mut self, sir_module: &SIRModule) {
+        for (name, layout) in &sir_module.enums {
+            self.enum_registry.insert(name.clone(), layout.variants.clone());
         }
     }
 
@@ -720,8 +730,23 @@ impl SIRLoweringPass {
                     .unwrap_or_else(|| builder.ins().iconst(types::I64, 0))
             }
 
+            // ─── Enum variant access: resolve to integer tag ───────────────────
+            Instr::EnumVariantAccess(ref data) => {
+                let tag = self
+                    .enum_registry
+                    .get(&data.enum_name)
+                    .and_then(|variants| variants.iter().position(|v| v == &data.variant))
+                    .ok_or_else(|| {
+                        format!(
+                            "unknown enum variant `{}::{}` at codegen",
+                            data.enum_name, data.variant
+                        )
+                    })? as i64;
+                builder.ins().iconst(types::I64, tag)
+            }
+
             // ─── Declarations (handled in collection pass; skipped here) ────────
-            Instr::FuncDecl(_) | Instr::StructDecl(_) => builder.ins().iconst(types::I64, 0),
+            Instr::FuncDecl(_) | Instr::StructDecl(_) | Instr::EnumDecl(_) => builder.ins().iconst(types::I64, 0),
         };
 
         value_map[idx] = Some(val);
@@ -1227,16 +1252,30 @@ fn emit_binop(op: BinaryOperator, lhs: Value, rhs: Value, builder: &mut Function
         BinaryOperator::Subtract => builder.ins().isub(lhs, rhs),
         BinaryOperator::Multiply => builder.ins().imul(lhs, rhs),
         BinaryOperator::Divide => builder.ins().sdiv(lhs, rhs),
-        BinaryOperator::LessThan => builder.ins().icmp(IntCC::UnsignedLessThan, lhs, rhs),
+        BinaryOperator::LessThan => {
+            let r = builder.ins().icmp(IntCC::UnsignedLessThan, lhs, rhs);
+            builder.ins().uextend(types::I64, r)
+        }
         BinaryOperator::LessThanEqual => {
-            builder.ins().icmp(IntCC::UnsignedLessThanOrEqual, lhs, rhs)
+            let r = builder.ins().icmp(IntCC::UnsignedLessThanOrEqual, lhs, rhs);
+            builder.ins().uextend(types::I64, r)
         }
-        BinaryOperator::GreaterThan => builder.ins().icmp(IntCC::UnsignedGreaterThan, lhs, rhs),
+        BinaryOperator::GreaterThan => {
+            let r = builder.ins().icmp(IntCC::UnsignedGreaterThan, lhs, rhs);
+            builder.ins().uextend(types::I64, r)
+        }
         BinaryOperator::GreaterThanEqual => {
-            builder.ins().icmp(IntCC::UnsignedGreaterThanOrEqual, lhs, rhs)
+            let r = builder.ins().icmp(IntCC::UnsignedGreaterThanOrEqual, lhs, rhs);
+            builder.ins().uextend(types::I64, r)
         }
-        BinaryOperator::Equal => builder.ins().icmp(IntCC::Equal, lhs, rhs),
-        BinaryOperator::NotEqual => builder.ins().icmp(IntCC::NotEqual, lhs, rhs),
+        BinaryOperator::Equal => {
+            let r = builder.ins().icmp(IntCC::Equal, lhs, rhs);
+            builder.ins().uextend(types::I64, r)
+        }
+        BinaryOperator::NotEqual => {
+            let r = builder.ins().icmp(IntCC::NotEqual, lhs, rhs);
+            builder.ins().uextend(types::I64, r)
+        }
         _ => builder.ins().iconst(types::I64, 0),
     }
 }

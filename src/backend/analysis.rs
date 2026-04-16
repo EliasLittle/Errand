@@ -4,8 +4,9 @@ use crate::backend::errand_builtins::{
     add_builtin_data_constructors, add_builtin_functions, type_expr_to_errand_type,
 };
 use crate::backend::preir::{
-    BinOpPl, FnCallPl, FuncData, IfStatementData, Instr, LiteralPl, PreIR, RegionData,
-    ReturnData, StructData, UnOpPl, VarDeclData, VarRefData, WhileLoopData, instr_index,
+    BinOpPl, EnumData, EnumVariantData, FnCallPl, FuncData, IfStatementData, Instr, LiteralPl,
+    PreIR, RegionData, ReturnData, StructData, UnOpPl, VarDeclData, VarRefData, WhileLoopData,
+    instr_index,
 };
 use crate::backend::worklist::{
     ErrandType, ErrandTypeError, Judgment, TyVarKind, TypeResult, Worklist, WorklistEntry,
@@ -94,6 +95,9 @@ pub struct Analyzer {
     analysis_cache: HashMap<instr_index, TypeIndex>,
     /// Global symbol table: function / struct / builtin names → `TypeIndex`.
     global_defs: HashMap<String, TypeIndex>,
+    /// Enum variant lists: enum_name → ordered variant names.
+    /// Used to validate `EnumVariantAccess` instructions and assign enum types.
+    enum_variants: HashMap<String, Vec<String>>,
     worklist: Worklist,
     trace: Vec<String>,
 }
@@ -108,6 +112,19 @@ impl Analyzer {
         let mut worklist = Worklist::new();
         let global_defs = Self::collect_global_defs(&preir, &mut pool, &mut worklist);
 
+        // Build enum_variants from EnumDecl instructions.
+        let enum_variants: HashMap<String, Vec<String>> = preir
+            .instructions
+            .iter()
+            .filter_map(|instr| {
+                if let Instr::EnumDecl(EnumData { name, variants }) = instr {
+                    Some((name.clone(), variants.clone()))
+                } else {
+                    None
+                }
+            })
+            .collect();
+
         Analyzer {
             pool,
             preir,
@@ -115,6 +132,7 @@ impl Analyzer {
             module_context: HashMap::new(),
             analysis_cache: HashMap::new(),
             global_defs,
+            enum_variants,
             worklist,
             trace: Vec::new(),
         }
@@ -160,7 +178,7 @@ impl Analyzer {
         for i in region.instr_start..region.instr_end {
             if let Some(instr) = self.preir.get_instruction(i) {
                 match instr {
-                    Instr::FuncDecl(_) | Instr::StructDecl(_) => continue,
+                    Instr::FuncDecl(_) | Instr::StructDecl(_) | Instr::EnumDecl(_) => continue,
                     Instr::VarDecl(_) => {
                         self.analyze_instr(i)?;
                     }
@@ -215,6 +233,8 @@ impl Analyzer {
             Instr::VarDecl(data) => self.analyze_var_decl(data),
             Instr::FuncDecl(data) => self.analyze_func_decl(data),
             Instr::StructDecl(_) => Ok(self.pool.unit),
+            Instr::EnumDecl(_) => Ok(self.pool.unit),
+            Instr::EnumVariantAccess(data) => self.analyze_enum_variant_access(data),
             Instr::ForLoop(_) => {
                 Err(ErrandTypeError::UnsupportedOperation("ForLoop".into()))
             }
@@ -245,6 +265,28 @@ impl Analyzer {
             return Ok(ty);
         }
         Err(ErrandTypeError::UnboundVariable(data.name.clone()))
+    }
+
+    /// Type an enum variant access.
+    ///
+    /// Validates that the enum and variant both exist, then returns `Con(enum_name)`
+    /// so that the value carries the enum's own type rather than a bare `Int`.
+    /// The integer tag is resolved only at codegen time in `sir_lowering.rs`.
+    fn analyze_enum_variant_access(&mut self, data: &EnumVariantData) -> TypeResult<TypeIndex> {
+        let variants = self.enum_variants.get(&data.enum_name).cloned().ok_or_else(|| {
+            ErrandTypeError::UnboundVariable(format!(
+                "unknown enum `{}`",
+                data.enum_name
+            ))
+        })?;
+        if !variants.contains(&data.variant) {
+            return Err(ErrandTypeError::UnboundVariable(format!(
+                "unknown variant `{}` on enum `{}`",
+                data.variant, data.enum_name
+            )));
+        }
+        let ty = self.pool.intern(ErrandType::Con(data.enum_name.clone()));
+        Ok(ty)
     }
 
     fn analyze_binop(&mut self, data: &BinOpPl) -> TypeResult<TypeIndex> {
@@ -376,7 +418,7 @@ impl Analyzer {
         for i in data.instr_start..data.instr_end {
             if let Some(instr) = self.preir.get_instruction(i) {
                 match instr {
-                    Instr::FuncDecl(_) | Instr::StructDecl(_) => continue,
+                    Instr::FuncDecl(_) | Instr::StructDecl(_) | Instr::EnumDecl(_) => continue,
                     Instr::VarDecl(_) => {
                         self.analyze_instr(i)?;
                     }
@@ -603,7 +645,8 @@ impl Analyzer {
                 }
                 Ok(())
             }
-            Instr::IfStatement(_) | Instr::Region(_) | Instr::ForLoop(_) => Ok(()),
+            Instr::IfStatement(_) | Instr::Region(_) | Instr::ForLoop(_)
+            | Instr::EnumDecl(_) | Instr::EnumVariantAccess(_) => Ok(()),
         }
     }
 
@@ -760,6 +803,17 @@ impl Analyzer {
             }
         }
 
+        // Enum types: register each enum name as a Con type.
+        // Variants are compiled away to integer literals during lowering,
+        // so we only need the type name here for parameter type annotations.
+        for instr in &preir.instructions {
+            if let Instr::EnumDecl(EnumData { name, .. }) = instr {
+                let ty = ErrandType::Con(name.clone());
+                let idx = pool.intern(ty);
+                defs.insert(name.clone(), idx);
+            }
+        }
+
         // Struct constructors: field1 -> field2 -> ... -> StructName
         for instr in &preir.instructions {
             if let Instr::StructDecl(StructData { name, fields }) = instr {
@@ -810,5 +864,7 @@ fn fmt_instr(instr: &Instr) -> &'static str {
         Instr::VarDecl(_) => "var_decl",
         Instr::FuncDecl(_) => "func_decl",
         Instr::StructDecl(_) => "struct_decl",
+        Instr::EnumDecl(_) => "enum_decl",
+        Instr::EnumVariantAccess(_) => "enum_variant",
     }
 }

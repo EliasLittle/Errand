@@ -47,6 +47,13 @@ pub struct SIRStructLayout {
     pub total_size: usize,
 }
 
+/// Layout of an enum type: ordered variant names whose index is their integer tag.
+#[derive(Debug, Clone)]
+pub struct SIREnumLayout {
+    /// Variant names in declaration order.  `variants[i]` has integer tag `i`.
+    pub variants: Vec<String>,
+}
+
 /// All SIR for a program: one for the top-level main body, one per function.
 ///
 /// `functions` uses a nested map: `plain_name → param_type_keys → SIRFunctionInfo`.
@@ -57,6 +64,7 @@ pub struct SIRModule {
     pub main: SIR,
     pub functions: HashMap<String, HashMap<Vec<String>, SIRFunctionInfo>>,
     pub structs: HashMap<String, SIRStructLayout>,
+    pub enums: HashMap<String, SIREnumLayout>,
 }
 
 // ─── Formatting ──────────────────────────────────────────────────────────────
@@ -100,6 +108,18 @@ impl SIRModule {
         let mut out = String::new();
         out.push_str("=== SIR: main ===\n");
         out.push_str(&self.main.format_all());
+
+        if !self.enums.is_empty() {
+            let mut enum_names: Vec<&String> = self.enums.keys().collect();
+            enum_names.sort();
+            for name in enum_names {
+                let layout = &self.enums[name];
+                let variants_str: Vec<String> = layout.variants.iter().enumerate()
+                    .map(|(i, v)| format!("{} = {}", v, i))
+                    .collect();
+                out.push_str(&format!("\n=== SIR: enum {} {{ {} }} ===\n", name, variants_str.join(", ")));
+            }
+        }
 
         let mut names: Vec<&String> = self.functions.keys().collect();
         names.sort();

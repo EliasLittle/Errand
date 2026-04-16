@@ -1,0 +1,46 @@
+foreign fn printf(a::Int):: Int
+foreign fn malloc(a::Int):: Int
+foreign fn free(a::Int):: Int
+foreign fn strlen(a::Int):: Int
+foreign fn strcpy(a::Int, b::Int):: Int
+foreign fn strcmp(a::Int, b::Int):: Int32
++-- Enum support test
+
++-- A simple unit-variant enum (Zig-style: variants compile to integer tags)
+enum Direction
+    North
+    South
+    East
+    West
+end
+
++-- Another enum
+enum Color
+    Red
+    Green
+    Blue
+end
+
++-- Variant access: Direction::North compiles to 0, Direction::South to 1, etc.
+d = Direction::North
+s = Direction::South
+
++-- Use enum values in comparisons and arithmetic
+is_north = d == Direction::North
+is_north_bad = d == 0
+next = d + 1
+
++-- Color variants
+c = Color::Green
+
++-- printf("Direction::North: %d\n", Direction::North)
++-- printf("Direction::South: %d\n", Direction::South)
++-- printf("Direction 1: %d\n", d)
+printf("Direction 2: %d\n", s)
+printf("Color: %d\n", c)
+printf("Is north: %d\n", is_north)
+printf("Is north: %d\n", d == Direction::North)
++-- printf("Is north bad: %d\n", is_north_bad)
++-- printf("Sanity check: %d\n", Direction::North == 0)
++-- printf("Sanity check 2: %d\n", 0 == Direction::North)
+printf("Next: %d\n", next)

@@ -37,6 +37,16 @@ pub enum Expression {
         id: Id,
         fields: Vec<FieldDefinition>,
     },
+    EnumDefinition {
+        id: Id,
+        variants: Vec<EnumVariant>,
+    },
+    /// A reference to a specific variant of an enum, e.g. `Direction::North`.
+    /// Carries only symbolic names; the integer tag is resolved at codegen time.
+    EnumVariantAccess {
+        enum_name: String,
+        variant: String,
+    },
     If {
         condition: Box<Expression>,
         then_branch: Box<Expression>,
@@ -123,6 +133,12 @@ pub struct FieldDefinition {
     pub field_type: TypeExpression,
 }
 
+/// A single variant of an enum (unit variant — no associated data yet)
+#[derive(Debug, Clone, PartialEq)]
+pub struct EnumVariant {
+    pub name: String,
+}
+
 /*
 #[derive(Debug, Clone)]
 pub struct MatchCase {
@@ -189,6 +205,13 @@ impl fmt::Display for Expression {
             Expression::StructDefinition { id, fields } => {
                 let fields_str: Vec<String> = fields.iter().map(|field| format!("{}", field.id.name)).collect();
                 write!(f, "struct {} {{ {} }}", id.name, fields_str.join(", "))
+            },
+            Expression::EnumDefinition { id, variants } => {
+                let variants_str: Vec<String> = variants.iter().map(|v| v.name.clone()).collect();
+                write!(f, "enum {} {{ {} }}", id.name, variants_str.join(", "))
+            },
+            Expression::EnumVariantAccess { enum_name, variant } => {
+                write!(f, "{}::{}", enum_name, variant)
             },
             Expression::If { condition, then_branch, else_branch } => {
                 let else_str = if let Some(else_branch) = else_branch {

@@ -1,5 +1,5 @@
 use crate::frontend::ast::{Program, Expression, BinaryOperator};
-use crate::backend::preir::{PreIR, Instr, LiteralPl, UnOpPl, BinOpPl, FnCallPl, IfStatementData, WhileLoopData, ForLoopData, RegionData, ReturnData, FuncData, StructData, VarDeclData, VarRefData, instr_index};
+use crate::backend::preir::{PreIR, Instr, LiteralPl, UnOpPl, BinOpPl, FnCallPl, IfStatementData, WhileLoopData, ForLoopData, RegionData, ReturnData, FuncData, StructData, EnumData, EnumVariantData, VarDeclData, VarRefData, instr_index};
 use crate::backend::worklist::ErrandType;
 use crate::backend::errand_builtins::{add_builtin_data_constructors, add_builtin_functions, type_expr_to_errand_type};
 use std::collections::HashMap;
@@ -24,11 +24,18 @@ pub fn compile_preir(program: &Program) -> Result<PreIR, String> {
                 ctx.emit_instruction(Instr::FuncDecl(func));
             }
             Expression::StructDefinition { id, fields, .. } => {
-               let strct= StructData {
+               let strct = StructData {
                     name: id.name.clone(),
                     fields: fields.clone(),
                 };
                 ctx.emit_instruction(Instr::StructDecl(strct));
+            }
+            Expression::EnumDefinition { id, variants } => {
+                let enum_data = EnumData {
+                    name: id.name.clone(),
+                    variants: variants.iter().map(|v| v.name.clone()).collect(),
+                };
+                ctx.emit_instruction(Instr::EnumDecl(enum_data));
             }
             _ => {}
         }
@@ -38,10 +45,11 @@ pub fn compile_preir(program: &Program) -> Result<PreIR, String> {
     let mut main_instructions = Vec::new();
 
     let instr_start = ctx.instructions.len() as instr_index;
-    for expr in &program.expressions {
-        match expr {
-            Expression::FunctionDefinition { .. } => continue,
-            Expression::StructDefinition { .. } => continue,
+        for expr in &program.expressions {
+            match expr {
+                Expression::FunctionDefinition { .. } => continue,
+                Expression::StructDefinition { .. } => continue,
+                Expression::EnumDefinition { .. } => continue,
             _ => {         
                 let instr_idx = compile_expression(&mut ctx, expr)?;
                 main_instructions.push(instr_idx);
@@ -222,8 +230,20 @@ fn compile_expression(ctx: &mut PreIR, expr: &Expression) -> Result<instr_index,
                 name: id.name.clone(),
                 fields: fields.clone(),
             });
-            
             Ok(ctx.emit_instruction(struct_data))
+        }
+        Expression::EnumDefinition { id, variants } => {
+            let enum_data = Instr::EnumDecl(EnumData {
+                name: id.name.clone(),
+                variants: variants.iter().map(|v| v.name.clone()).collect(),
+            });
+            Ok(ctx.emit_instruction(enum_data))
+        }
+        Expression::EnumVariantAccess { enum_name, variant } => {
+            Ok(ctx.emit_instruction(Instr::EnumVariantAccess(EnumVariantData {
+                enum_name: enum_name.clone(),
+                variant: variant.clone(),
+            })))
         }
         Expression::If { condition, then_branch, else_branch } => {
             let condition_idx = compile_expression(ctx, condition)?;

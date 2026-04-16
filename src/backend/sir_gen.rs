@@ -6,7 +6,7 @@ use crate::backend::preir::{
     BinOpPl, FnCallPl, ForLoopData, IfStatementData, Instr, RegionData, ReturnData,
     UnOpPl, VarDeclData, FuncData, instr_index,
 };
-use crate::backend::sir::{SIR, SIRFunctionInfo, SIRInstr, SIRModule, SIRStructField, SIRStructLayout};
+use crate::backend::sir::{SIR, SIREnumLayout, SIRFunctionInfo, SIRInstr, SIRModule, SIRStructField, SIRStructLayout};
 use crate::backend::worklist::ErrandType;
 use crate::frontend::ast::{Parameter, Program};
 use crate::backend::preir::PreIR;
@@ -140,7 +140,22 @@ impl SirGen {
             functions.entry(meta.name).or_default().insert(type_key, info);
         }
 
-        Ok(SIRModule { main: main_sir, functions, structs: struct_layouts })
+        // Collect enum layouts from EnumDecl instructions.
+        let enum_layouts: HashMap<String, SIREnumLayout> = gen
+            .analyzer
+            .preir
+            .instructions
+            .iter()
+            .filter_map(|instr| {
+                if let Instr::EnumDecl(ed) = instr {
+                    Some((ed.name.clone(), SIREnumLayout { variants: ed.variants.clone() }))
+                } else {
+                    None
+                }
+            })
+            .collect();
+
+        Ok(SIRModule { main: main_sir, functions, structs: struct_layouts, enums: enum_layouts })
     }
 
     // ── Emission ──────────────────────────────────────────────────────────────
@@ -163,7 +178,7 @@ impl SirGen {
 
         for i in region_data.instr_start..region_data.instr_end {
             match self.analyzer.preir.get_instruction(i) {
-                Some(Instr::FuncDecl(_)) | Some(Instr::StructDecl(_)) => continue,
+                Some(Instr::FuncDecl(_)) | Some(Instr::StructDecl(_)) | Some(Instr::EnumDecl(_)) => continue,
                 _ => {}
             }
             self.analyze_and_emit(i, &mut sir)?;
@@ -198,7 +213,7 @@ impl SirGen {
 
         // Declarations nested inside a body: analyze only, don't emit into
         // this SIR (they are independent entry points at the module level).
-        if matches!(instr, Instr::FuncDecl(_) | Instr::StructDecl(_)) {
+        if matches!(instr, Instr::FuncDecl(_) | Instr::StructDecl(_) | Instr::EnumDecl(_)) {
             let _ = self.analyzer.analyze_instr(global_idx).map_err(|e| format!("{e:?}"));
             return Ok(-1);
         }
@@ -232,7 +247,7 @@ impl SirGen {
 
         for i in rd.instr_start..rd.instr_end {
             match self.analyzer.preir.get_instruction(i) {
-                Some(Instr::FuncDecl(_)) | Some(Instr::StructDecl(_)) => {
+                Some(Instr::FuncDecl(_)) | Some(Instr::StructDecl(_)) | Some(Instr::EnumDecl(_)) => {
                     let _ = self.analyzer.analyze_instr(i);
                     continue;
                 }
@@ -268,7 +283,11 @@ impl SirGen {
     /// global PreIR space to local SIR space, emitting dependencies first.
     fn remap_operands(&mut self, instr: Instr, sir: &mut SIR) -> Result<Instr, String> {
         match instr {
-            Instr::Literal(_) | Instr::VarRef(_) | Instr::StructDecl(_) => Ok(instr),
+            Instr::Literal(_)
+            | Instr::VarRef(_)
+            | Instr::StructDecl(_)
+            | Instr::EnumDecl(_)
+            | Instr::EnumVariantAccess(_) => Ok(instr),
 
             Instr::VarDecl(data) => {
                 let value = self.analyze_and_emit(data.value, sir)?;

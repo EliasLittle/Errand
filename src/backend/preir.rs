@@ -47,6 +47,7 @@ impl PreIR {
                     Instr::VarDecl(data) => format!("    {}", self.format_instr_with_context(instr)),
                     Instr::FuncDecl(data) => format!("    {}", self.format_instr_with_context(instr)),
                     Instr::StructDecl(data) => format!("    {}", self.format_instr_with_context(instr)),
+                    Instr::EnumDecl(data) => format!("    {}", self.format_instr_with_context(instr)),
                     _ => format!("%{} = {}", index, self.format_instr_with_context(instr)),
                 } 
             },
@@ -158,6 +159,12 @@ impl PreIR {
             Instr::StructDecl(data) => {
                 format!("struct {} {{}}", data.name)
             },
+            Instr::EnumDecl(data) => {
+                format!("enum {} {{ {} }}", data.name, data.variants.join(", "))
+            },
+            Instr::EnumVariantAccess(data) => {
+                format!("{}::{}", data.enum_name, data.variant)
+            },
             Instr::FuncDecl(data) => {
                 let params: Vec<String> = data.parameters.iter().map(|p| p.id.name.clone()).collect();
                 let body = self.format_instr_with_context(&self.get_instruction(data.body_index).unwrap());
@@ -217,6 +224,8 @@ pub enum Instr {
     Return(ReturnData),
     Region(RegionData),
     StructDecl(StructData),
+    EnumDecl(EnumData),
+    EnumVariantAccess(EnumVariantData),
     FuncDecl(FuncData),
     VarDecl(VarDeclData),
 }
@@ -245,6 +254,23 @@ pub struct FuncData {
 pub struct StructData {
     pub name: String,
     pub fields: Vec<FieldDefinition>,
+}
+
+/// Metadata for an enum declaration.
+/// Variants are ordered; their index is their integer tag value.
+#[derive(Debug, Clone, PartialEq)]
+pub struct EnumData {
+    pub name: String,
+    pub variants: Vec<String>,
+}
+
+/// A symbolic reference to one variant of a named enum.
+/// The integer tag is not stored here — it is resolved at codegen time from
+/// the `SIRModule.enums` layout so that type information survives through analysis.
+#[derive(Debug, Clone, PartialEq)]
+pub struct EnumVariantData {
+    pub enum_name: String,
+    pub variant: String,
 }
 
 //
@@ -368,6 +394,12 @@ impl Display for Instr {
             Instr::StructDecl(data) => {
                 let fields: Vec<String> = data.fields.iter().map(|field| field.id.name.clone()).collect();
                 write!(f, "struct {} {{ {} }}", data.name, fields.join(", "))
+            },
+            Instr::EnumDecl(data) => {
+                write!(f, "enum {} {{ {} }}", data.name, data.variants.join(", "))
+            },
+            Instr::EnumVariantAccess(data) => {
+                write!(f, "enum_variant {}::{}", data.enum_name, data.variant)
             },
             Instr::FuncDecl(data) => {
                 let params: Vec<String> = data.parameters.iter().map(|p| p.id.name.clone()).collect();

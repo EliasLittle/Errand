@@ -1,12 +1,29 @@
 use crate::{lowering_log};
 use crate::frontend::ast::*;
+use std::collections::HashMap;
 
 // TODO: Rename to desugar
 
 impl Program {
     pub fn lower(&self) -> Program {
         lowering_log!("------ Lowering program ------");
-        // 1. Find all struct definitions and generate constructor functions
+
+        // 1. Collect enum names and their ordered variant lists.
+        //    Only names are needed here — no integer tags.  The tags are
+        //    resolved later in analysis/codegen so type information is preserved.
+        //
+        // TODO: Move this recognition step into preir_gen.rs once lower.rs is
+        //       being eliminated (per AGENTS.md).
+        let mut enum_names: HashMap<String, Vec<String>> = HashMap::new();
+        for expr in &self.expressions {
+            if let Expression::EnumDefinition { id, variants } = expr {
+                let variant_list: Vec<String> =
+                    variants.iter().map(|v| v.name.clone()).collect();
+                enum_names.insert(id.name.clone(), variant_list);
+            }
+        }
+
+        // 2. Find all struct definitions and generate constructor functions
         let mut constructor_functions = Vec::new();
         for expr in &self.expressions {
             if let Expression::StructDefinition { id, fields } = expr {
@@ -35,10 +52,16 @@ impl Program {
                 constructor_functions.push(constructor);
             }
         }
-        // 2. Lower the rest of the program
+
+        // 3. Lower expressions and recognise enum variant accesses symbolically.
+        //    `Direction::North` becomes `EnumVariantAccess { enum_name: "Direction",
+        //    variant: "North" }` — no integer substitution here.
         let lowered = Program {
             expressions: constructor_functions.into_iter()
-                .chain(self.expressions.iter().map(|expr| self.lower_expression(expr.clone())))
+                .chain(self.expressions.iter().map(|expr| {
+                    let lowered = self.lower_expression(expr.clone());
+                    recognize_enum_variants(lowered, &enum_names)
+                }))
                 .collect(),
         };
         lowering_log!("------ Program lowered ------");
@@ -171,6 +194,8 @@ impl Program {
                 let lowered_expr = Box::new(self.lower_expression(*expr));
                 Expression::Print(lowered_expr)
             },
+            Expression::EnumDefinition { .. } => expr,
+            Expression::EnumVariantAccess { .. } => expr,
             _ => expr,
         }
     }
@@ -248,6 +273,76 @@ fn has_return_statement(expr: &Expression) -> bool {
             has_return_statement(body)
         },
         _ => false,
+    }
+}
+
+/// Recognise enum variant accesses and convert them to `EnumVariantAccess` nodes.
+///
+/// `Direction::North` is parsed as `Identifier { id: "Direction",
+/// type_expr: Some(TypeExpression::Struct(Id{name:"North"}, None)) }`.
+/// When "Direction" is a known enum name and "North" is one of its variants,
+/// we replace the node with `EnumVariantAccess { enum_name: "Direction",
+/// variant: "North" }`.  No integer tag is computed here — that happens in
+/// `sir_lowering.rs` so the symbolic information survives through analysis.
+fn recognize_enum_variants(
+    expr: Expression,
+    enum_names: &HashMap<String, Vec<String>>,
+) -> Expression {
+    match expr {
+        Expression::Identifier {
+            ref id,
+            type_expr: Some(TypeExpression::Struct(ref variant_id, None)),
+        } if enum_names.contains_key(&id.name) => {
+            let variants = &enum_names[&id.name];
+            if variants.contains(&variant_id.name) {
+                return Expression::EnumVariantAccess {
+                    enum_name: id.name.clone(),
+                    variant: variant_id.name.clone(),
+                };
+            }
+            expr
+        }
+        Expression::BinaryOp { operator, left, right } => Expression::BinaryOp {
+            operator,
+            left: Box::new(recognize_enum_variants(*left, enum_names)),
+            right: Box::new(recognize_enum_variants(*right, enum_names)),
+        },
+        Expression::UnaryOp { operator, operand } => Expression::UnaryOp {
+            operator,
+            operand: Box::new(recognize_enum_variants(*operand, enum_names)),
+        },
+        Expression::FunctionCall { id, arguments } => Expression::FunctionCall {
+            id,
+            arguments: arguments.into_iter().map(|a| recognize_enum_variants(a, enum_names)).collect(),
+        },
+        Expression::FunctionDefinition { id, parameters, body, return_type_expr, foreign } => {
+            Expression::FunctionDefinition {
+                id,
+                parameters,
+                body: Box::new(recognize_enum_variants(*body, enum_names)),
+                return_type_expr,
+                foreign,
+            }
+        }
+        Expression::Block(exprs) => Expression::Block(
+            exprs.into_iter().map(|e| Box::new(recognize_enum_variants(*e, enum_names))).collect(),
+        ),
+        Expression::If { condition, then_branch, else_branch } => Expression::If {
+            condition: Box::new(recognize_enum_variants(*condition, enum_names)),
+            then_branch: Box::new(recognize_enum_variants(*then_branch, enum_names)),
+            else_branch: else_branch.map(|e| Box::new(recognize_enum_variants(*e, enum_names))),
+        },
+        Expression::While { condition, body } => Expression::While {
+            condition: Box::new(recognize_enum_variants(*condition, enum_names)),
+            body: Box::new(recognize_enum_variants(*body, enum_names)),
+        },
+        Expression::Return(expr) => {
+            Expression::Return(expr.map(|e| Box::new(recognize_enum_variants(*e, enum_names))))
+        }
+        Expression::Print(expr) => {
+            Expression::Print(Box::new(recognize_enum_variants(*expr, enum_names)))
+        }
+        other => other,
     }
 }
 

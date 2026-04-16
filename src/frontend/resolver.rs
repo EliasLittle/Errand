@@ -145,6 +145,8 @@ impl Resolver {
                 Ok(())
             },
             Expression::Print(expr) => self.resolve_expr(expr),
+            Expression::EnumDefinition { .. } => Ok(()),
+            Expression::EnumVariantAccess { .. } => Ok(()),
             // Expression::VariableAssignment { id, value } => {
             //     compiler_debug!("Res.resolve_expr.var_assign| Variable assignment: {:?}, value: {:?}", id.name, value);
             //     // Check if the variable is already declared

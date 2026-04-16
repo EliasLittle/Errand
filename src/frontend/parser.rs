@@ -1,6 +1,6 @@
 use crate::{parser_log};
 use super::lexer::{Token, TokenType, token_type};
-use super::ast::{Expression, Program, UnaryOperator, BinaryOperator, Parameter, FieldDefinition, Id, TypeExpression}; //, TypeExpression, MatchCase};
+use super::ast::{Expression, Program, UnaryOperator, BinaryOperator, Parameter, FieldDefinition, Id, TypeExpression, EnumVariant}; //, TypeExpression, MatchCase};
 use std::iter::Peekable;
 use std::vec::IntoIter;
 
@@ -123,6 +123,7 @@ impl Parser {
             Some(TokenType::Foreign) => self.function(),
             Some(TokenType::Function) => self.function(),
             Some(TokenType::Struct) => self.structure(),
+            Some(TokenType::Enum) => self.enum_def(),
             Some(TokenType::If) => self.if_statement(), // TODO: Move to parse_expression_1
             Some(TokenType::While) => self.while_statement(),
             Some(TokenType::For) => self.for_statement(),
@@ -413,13 +414,12 @@ impl Parser {
         }
     }
 
-    // TODO: Support variant structs
     // struct <identifier>
     //     <field>
     //     <field>
     //     ...
     // end
-    /// Parse struct definitions (enums not supported yet)
+    /// Parse struct definitions
     fn structure(&mut self) -> Result<Expression, String> {
         parser_log!("Parsing structure| current:{:?}", self.current_type());
         self.expect(&TokenType::Struct)?;
@@ -428,6 +428,36 @@ impl Parser {
         let fields = self.field_parameters()?;
         self.expect(&TokenType::End)?;
         Ok(Expression::StructDefinition { id, fields })
+    }
+
+    // enum <identifier>
+    //     <Variant>
+    //     <Variant>
+    //     ...
+    // end
+    /// Parse enum definitions.
+    /// Each variant is a bare identifier on its own line.
+    fn enum_def(&mut self) -> Result<Expression, String> {
+        parser_log!("Parsing enum| current:{:?}", self.current_type());
+        self.expect(&TokenType::Enum)?;
+        let id = self.id()?;
+        self.expect(&TokenType::Newline)?;
+        let variants = self.enum_variants()?;
+        self.expect(&TokenType::End)?;
+        Ok(Expression::EnumDefinition { id, variants })
+    }
+
+    /// Parse enum variant names until `end`.
+    /// Each variant is an identifier followed by a newline.
+    fn enum_variants(&mut self) -> Result<Vec<EnumVariant>, String> {
+        parser_log!("Parsing enum variants| current:{:?}", self.current_type());
+        let mut variants = Vec::new();
+        while self.at(&token_type("Identifier")?) {
+            let id = self.id()?;
+            self.expect(&TokenType::Newline)?;
+            variants.push(EnumVariant { name: id.name });
+        }
+        Ok(variants)
     }
 
     /// Parse expressions until 'END' token
