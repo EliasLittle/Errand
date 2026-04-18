@@ -20,7 +20,7 @@ use crate::backend::built_in_methods::{
     emit_ffi, emit_getfield, emit_mem_load, emit_mem_store, emit_new, emit_printf,
 };
 use crate::backend::preir::{instr_index, Instr, LiteralPl};
-use crate::backend::sir::{SIRFunctionInfo, SIRModule, SIR};
+use crate::backend::sir::{SIREnumLayout, SIRFunctionInfo, SIRModule, SIR};
 use crate::backend::sir_gen::errand_type_name;
 use crate::backend::structs::{Field as BackendField, Struct as BackendStruct, Type as BackendType};
 use crate::backend::worklist::ErrandType;
@@ -47,8 +47,8 @@ pub struct SIRLoweringPass {
     func_overloads: HashMap<String, Vec<(Vec<String>, String)>>,
     string_counter: u32,
     struct_registry: HashMap<String, BackendStruct>,
-    /// enum_name → ordered variant names (index == integer tag).
-    enum_registry: HashMap<String, Vec<String>>,
+    /// enum_name → full enum layout (includes variant field offsets and total size).
+    enum_registry: HashMap<String, SIREnumLayout>,
     next_func_idx: u32,
 }
 
@@ -137,8 +137,18 @@ impl SIRLoweringPass {
 
     fn build_enum_registry(&mut self, sir_module: &SIRModule) {
         for (name, layout) in &sir_module.enums {
-            self.enum_registry.insert(name.clone(), layout.variants.clone());
+            self.enum_registry.insert(name.clone(), layout.clone());
         }
+    }
+
+    /// Allocate `size` bytes on the stack and return a pointer (i64) to the slot.
+    fn alloca_bytes(&self, size: i64, builder: &mut FunctionBuilder) -> cranelift_codegen::ir::Value {
+        let slot = builder.create_sized_stack_slot(StackSlotData::new(
+            StackSlotKind::ExplicitSlot,
+            size as u32,
+            0,
+        ));
+        builder.ins().stack_addr(types::I64, slot, 0)
     }
 
     // ─── Phase 2: initialise Cranelift ObjectModule ───────────────────────────
@@ -730,19 +740,171 @@ impl SIRLoweringPass {
                     .unwrap_or_else(|| builder.ins().iconst(types::I64, 0))
             }
 
-            // ─── Enum variant access: resolve to integer tag ───────────────────
+            // ─── Enum variant access (unit variant) ───────────────────────────
             Instr::EnumVariantAccess(ref data) => {
-                let tag = self
+                let layout = self
                     .enum_registry
                     .get(&data.enum_name)
-                    .and_then(|variants| variants.iter().position(|v| v == &data.variant))
+                    .ok_or_else(|| format!("unknown enum `{}` at codegen", data.enum_name))?
+                    .clone();
+                let tag = layout
+                    .variants
+                    .iter()
+                    .position(|v| v.name == data.variant)
                     .ok_or_else(|| {
                         format!(
                             "unknown enum variant `{}::{}` at codegen",
                             data.enum_name, data.variant
                         )
                     })? as i64;
-                builder.ins().iconst(types::I64, tag)
+
+                if layout.is_simple {
+                    // Pure unit-tag enum — bare integer is sufficient.
+                    builder.ins().iconst(types::I64, tag)
+                } else {
+                    // Mixed enum — allocate tagged union; unit variant has empty payload.
+                    let total = layout.total_size as i64;
+                    let enum_ptr = self.alloca_bytes(total, builder);
+                    let tag_val = builder.ins().iconst(types::I64, tag);
+                    builder.ins().store(MemFlags::new(), tag_val, enum_ptr, 0);
+                    enum_ptr
+                }
+            }
+
+            // ─── Enum variant construction (data-carrying variant) ─────────────
+            Instr::EnumVariantConstruct(ref data) => {
+                let layout = self
+                    .enum_registry
+                    .get(&data.enum_name)
+                    .ok_or_else(|| format!("unknown enum `{}` at codegen", data.enum_name))?
+                    .clone();
+                let (tag_idx, variant_layout) = layout
+                    .variants
+                    .iter()
+                    .enumerate()
+                    .find(|(_, v)| v.name == data.variant)
+                    .ok_or_else(|| {
+                        format!(
+                            "unknown enum variant `{}::{}` at codegen",
+                            data.enum_name, data.variant
+                        )
+                    })?;
+
+                let total = layout.total_size as i64;
+                let enum_ptr = self.alloca_bytes(total, builder);
+
+                // Write the tag at byte 0.
+                let tag_val = builder.ins().iconst(types::I64, tag_idx as i64);
+                builder.ins().store(MemFlags::new(), tag_val, enum_ptr, 0);
+
+                // Write each field value at offset 8 + field.byte_offset.
+                let field_layouts = variant_layout.fields.clone();
+                for (i, field) in field_layouts.iter().enumerate() {
+                    let arg_idx = data.arg_indices[i] as usize;
+                    let field_val = self.emit_instr(arg_idx, sir, builder, value_map, var_map, var_counter)?;
+                    let offset = 8 + field.byte_offset as i32;
+                    builder.ins().store(MemFlags::new(), field_val, enum_ptr, offset);
+                }
+
+                enum_ptr
+            }
+
+            // ─── Match expression ─────────────────────────────────────────────
+            Instr::Match(ref data) => {
+                let enum_layout = self
+                    .enum_registry
+                    .get(&data.enum_name)
+                    .ok_or_else(|| format!("match: unknown enum `{}` at codegen", data.enum_name))?
+                    .clone();
+
+                // Obtain the tag value from the scrutinee.
+                // For simple (unit-only) enums the scrutinee IS the i64 tag.
+                // For mixed enums it is a pointer; load the tag from byte 0.
+                let scrutinee_val = self.emit_instr(
+                    data.scrutinee as usize, sir, builder, value_map, var_map, var_counter,
+                )?;
+                let tag_val = if enum_layout.is_simple {
+                    scrutinee_val
+                } else {
+                    builder.ins().load(types::I64, MemFlags::new(), scrutinee_val, 0)
+                };
+
+                // Create one Cranelift block per arm, one check block per arm, a
+                // no-match block (fallthrough when no arm matches), and a merge block.
+                let merge_block = builder.create_block();
+                builder.append_block_param(merge_block, types::I64);
+                let no_match_block = builder.create_block();
+
+                let arm_blocks: Vec<_> = data.arms.iter().map(|_| builder.create_block()).collect();
+                let check_blocks: Vec<_> = (0..data.arms.len()).map(|_| builder.create_block()).collect();
+
+                // Jump from current block to the first check block.
+                builder.ins().jump(check_blocks[0], &[]);
+
+                for (i, arm) in data.arms.iter().enumerate() {
+                    let arm_block = arm_blocks[i];
+                    let next = if i + 1 < data.arms.len() { check_blocks[i + 1] } else { no_match_block };
+
+                    // ── Check block ───────────────────────────────────────────
+                    builder.switch_to_block(check_blocks[i]);
+                    if let Some(tag) = arm.tag {
+                        let expected = builder.ins().iconst(types::I64, tag);
+                        let cmp = builder.ins().icmp(IntCC::Equal, tag_val, expected);
+                        builder.ins().brif(cmp, arm_block, &[], next, &[]);
+                    } else {
+                        // Wildcard: always branch to arm, no fallthrough.
+                        builder.ins().jump(arm_block, &[]);
+                    }
+                    builder.seal_block(check_blocks[i]);
+
+                    // ── Arm body block ────────────────────────────────────────
+                    builder.switch_to_block(arm_block);
+
+                    // Bind extracted fields as Cranelift variables so that VarRef
+                    // instructions in the body resolve correctly.
+                    if !arm.bindings.is_empty() {
+                        if let Some(tag) = arm.tag {
+                            if let Some(variant_layout) = enum_layout.variants.get(tag as usize) {
+                                for (field_idx, binding_name) in arm.bindings.iter().enumerate() {
+                                    if let Some(field) = variant_layout.fields.get(field_idx) {
+                                        let byte_off = 8 + field.byte_offset as i32;
+                                        let field_val = builder.ins().load(
+                                            types::I64, MemFlags::new(), scrutinee_val, byte_off,
+                                        );
+                                        let var = if let Some(&existing) = var_map.get(binding_name) {
+                                            existing
+                                        } else {
+                                            let v = Variable::new(*var_counter);
+                                            *var_counter += 1;
+                                            builder.declare_var(v, types::I64);
+                                            var_map.insert(binding_name.clone(), v);
+                                            v
+                                        };
+                                        builder.def_var(var, field_val);
+                                    }
+                                }
+                            }
+                        }
+                    }
+
+                    let arm_val = self.emit_region_body(
+                        arm.body as usize, sir, builder, value_map, var_map, var_counter,
+                    )?;
+                    if !block_is_terminated(builder) {
+                        builder.ins().jump(merge_block, &[BlockArg::Value(arm_val)]);
+                    }
+                    builder.seal_block(arm_block);
+                }
+
+                // No-match block: no arm was taken (missing wildcard).
+                builder.switch_to_block(no_match_block);
+                builder.seal_block(no_match_block);
+                let zero = builder.ins().iconst(types::I64, 0);
+                builder.ins().jump(merge_block, &[BlockArg::Value(zero)]);
+
+                builder.switch_to_block(merge_block);
+                builder.seal_block(merge_block);
+                builder.block_params(merge_block)[0]
             }
 
             // ─── Declarations (handled in collection pass; skipped here) ────────
@@ -1072,6 +1234,11 @@ fn compute_nested_for_range(sir: &SIR, start: usize, end: usize) -> HashSet<usiz
             Instr::ForLoop(data) => {
                 mark_nested_region(sir, data.body as usize, &mut nested);
             }
+            Instr::Match(data) => {
+                for arm in &data.arms {
+                    mark_nested_region(sir, arm.body as usize, &mut nested);
+                }
+            }
             _ => {}
         }
     }
@@ -1096,6 +1263,14 @@ fn mark_nested_region(sir: &SIR, region_idx: usize, nested: &mut HashSet<usize>)
         let return_loc = data.return_loc as usize;
 
         // Mark every instruction explicitly listed in the range.
+        //
+        // Calling `mark_nested_deps_children` for every instruction is required
+        // for correctness: SirGen may emit a dependency (e.g. a VarRef that is a
+        // match-arm binding variable) earlier in the flat SIR list, *before* the
+        // Region is emitted. That instruction's SIR index is therefore outside
+        // `instr_start..instr_end`, but it still logically belongs to this Region
+        // and must be marked as nested so the top-level loop doesn't try to
+        // evaluate it before the binding is established.
         for i in start..end {
             if i >= sir.instructions.len() {
                 break;
@@ -1114,8 +1289,16 @@ fn mark_nested_region(sir: &SIR, region_idx: usize, nested: &mut HashSet<usize>)
                 Instr::ForLoop(d) => {
                     mark_nested_region(sir, d.body as usize, nested);
                 }
+                Instr::Match(d) => {
+                    for arm in &d.arms {
+                        mark_nested_region(sir, arm.body as usize, nested);
+                    }
+                }
                 _ => {}
             }
+            // Transitively mark operand dependencies that may have been
+            // pre-cached at SIR indices outside this range.
+            mark_nested_deps_children(sir, i, nested);
         }
 
         // Additionally, transitively mark the return_loc and all its SIR-level
@@ -1123,6 +1306,13 @@ fn mark_nested_region(sir: &SIR, region_idx: usize, nested: &mut HashSet<usize>)
         // Region range is empty (instructions were pre-cached) but return_loc refers
         // to an instruction outside the range that still belongs to this branch.
         mark_nested_deps(sir, return_loc, nested);
+    } else {
+        // Non-Region arm body (e.g. a bare FnCall or BinOp expression).
+        // `region_idx` is already in `nested`; mark its operand dependencies so
+        // that binding variables (e.g. `x`, `y` from `Message::Move(x, y)`) are
+        // not processed by the top-level region loop before the match arm has had
+        // a chance to introduce them into `var_map`.
+        mark_nested_deps_children(sir, region_idx, nested);
     }
 }
 
@@ -1137,6 +1327,14 @@ fn mark_nested_deps(sir: &SIR, idx: usize, nested: &mut HashSet<usize>) {
         return;
     }
     nested.insert(idx);
+    mark_nested_deps_children(sir, idx, nested);
+}
+
+/// Mark the transitive operand dependencies of the instruction at `idx` as
+/// nested. Unlike `mark_nested_deps`, this does NOT guard on `idx` itself —
+/// it is intended for use when `idx` is already in `nested` (e.g. a non-Region
+/// match arm body that was inserted by `mark_nested_region`).
+fn mark_nested_deps_children(sir: &SIR, idx: usize, nested: &mut HashSet<usize>) {
     match &sir.instructions[idx].instr.clone() {
         Instr::BinOp(d) => {
             mark_nested_deps(sir, d.left as usize, nested);
@@ -1209,6 +1407,13 @@ fn sir_contains_calls(sir: &SIR) -> bool {
                     }
                     if contains_calls_in_range(sir, d.body as usize, d.body as usize + 1, seen) {
                         return true;
+                    }
+                }
+                Instr::Match(d) => {
+                    for arm in &d.arms {
+                        if contains_calls_in_range(sir, arm.body as usize, arm.body as usize + 1, seen) {
+                            return true;
+                        }
                     }
                 }
                 _ => {}

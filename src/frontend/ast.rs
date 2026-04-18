@@ -41,11 +41,18 @@ pub enum Expression {
         id: Id,
         variants: Vec<EnumVariant>,
     },
-    /// A reference to a specific variant of an enum, e.g. `Direction::North`.
+    /// A reference to a unit variant of an enum, e.g. `Direction::North`.
     /// Carries only symbolic names; the integer tag is resolved at codegen time.
     EnumVariantAccess {
         enum_name: String,
         variant: String,
+    },
+    /// Construction of a data-carrying enum variant, e.g. `Message::Move(1, 2)`.
+    /// Args are positional, matching the variant's field declarations in order.
+    EnumVariantConstruct {
+        enum_name: String,
+        variant: String,
+        args: Vec<Expression>,
     },
     If {
         condition: Box<Expression>,
@@ -65,10 +72,10 @@ pub enum Expression {
     Block(Vec<Box<Expression>>),
     Return(Option<Box<Expression>>),
     Print(Box<Expression>),
-    /*Match {
+    Match {
         value: Box<Expression>,
         cases: Vec<MatchCase>,
-    },*/
+    },
     /* This should just be a binary operation
     VariableAssignment {
         id: Id,
@@ -133,20 +140,52 @@ pub struct FieldDefinition {
     pub field_type: TypeExpression,
 }
 
-/// A single variant of an enum (unit variant — no associated data yet)
+/// A single variant of an enum.
+///
+/// - Unit variant:  `fields` is empty, `is_tuple` is false.
+/// - Tuple variant: `fields` are auto-named `_0`, `_1`, …; `is_tuple` is true.
+/// - Struct variant: `fields` have user-provided names; `is_tuple` is false.
+///
+/// NOTE: `is_tuple` is a special-case flag that exists only because the language
+/// does not yet have a first-class tuple type.  When generic tuple (and array)
+/// types are added to `TypeExpression`, tuple variants should be represented as
+/// an ordinary single-field variant whose `field_type` is a `TypeExpression::Tuple`
+/// (or similar), and `is_tuple` should be removed.
 #[derive(Debug, Clone, PartialEq)]
 pub struct EnumVariant {
     pub name: String,
+    pub fields: Vec<FieldDefinition>,
+    /// SPECIAL-CASE: true when the variant was written with `(T, U, …)` syntax.
+    /// Remove once first-class tuple types exist — see note on `EnumVariant`.
+    pub is_tuple: bool,
 }
 
-/*
+/// A pattern in a match arm.
+#[derive(Debug, Clone)]
+pub enum MatchPattern {
+    /// `EnumName::Variant` or `EnumName::Variant(x, y)`.
+    EnumVariant {
+        enum_name: String,
+        variant: String,
+        /// Positional binding variable names; empty for unit variants.
+        bindings: Vec<String>,
+    },
+    /// `_` — matches anything.
+    Wildcard,
+}
+
 #[derive(Debug, Clone)]
 pub struct MatchCase {
-    pub pattern: Box<Expression>,
+    pub pattern: MatchPattern,
     pub body: Box<Expression>,
-}*/
+}
 
 
+/// TODO: Add `Tuple(Vec<TypeExpression>)` and `Array(Box<TypeExpression>)` variants
+/// when those types are introduced to the language.  Once that is done, the
+/// `is_tuple` special-case on `EnumVariant` and the ad-hoc `(T, U)` parsing
+/// inside `Parser::enum_variants` can be removed in favour of ordinary type
+/// expressions.
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub enum TypeExpression {
     Int,
@@ -207,11 +246,25 @@ impl fmt::Display for Expression {
                 write!(f, "struct {} {{ {} }}", id.name, fields_str.join(", "))
             },
             Expression::EnumDefinition { id, variants } => {
-                let variants_str: Vec<String> = variants.iter().map(|v| v.name.clone()).collect();
+                let variants_str: Vec<String> = variants.iter().map(|v| {
+                    if v.fields.is_empty() {
+                        v.name.clone()
+                    } else if v.is_tuple {
+                        let types: Vec<String> = v.fields.iter().map(|f| f.field_type.name()).collect();
+                        format!("{}::({})", v.name, types.join(", "))
+                    } else {
+                        let fields: Vec<String> = v.fields.iter().map(|f| format!("{}::{}", f.id.name, f.field_type.name())).collect();
+                        format!("{}::{{ {} }}", v.name, fields.join(", "))
+                    }
+                }).collect();
                 write!(f, "enum {} {{ {} }}", id.name, variants_str.join(", "))
             },
             Expression::EnumVariantAccess { enum_name, variant } => {
                 write!(f, "{}::{}", enum_name, variant)
+            },
+            Expression::EnumVariantConstruct { enum_name, variant, args } => {
+                let args_str: Vec<String> = args.iter().map(|a| format!("{}", a)).collect();
+                write!(f, "{}::{}({})", enum_name, variant, args_str.join(", "))
             },
             Expression::If { condition, then_branch, else_branch } => {
                 let else_str = if let Some(else_branch) = else_branch {
@@ -230,10 +283,22 @@ impl fmt::Display for Expression {
             },
             Expression::Return(expr) => write!(f, "return {}", expr.as_ref().map_or("".to_string(), |e| format!("{}", e))),
             Expression::Print(expr) => write!(f, "print({})", expr),
-            /*Expression::Match { value, cases } => {
-                let cases_str: Vec<String> = cases.iter().map(|case| format!("{}", case)).collect();
-                write!(f, "match {} {{ {} }}", value, cases_str.join(", "))
-            },*/
+            Expression::Match { value, cases } => {
+                let cases_str: Vec<String> = cases.iter().map(|case| {
+                    let pat = match &case.pattern {
+                        MatchPattern::Wildcard => "_".to_string(),
+                        MatchPattern::EnumVariant { enum_name, variant, bindings } => {
+                            if bindings.is_empty() {
+                                format!("{}::{}", enum_name, variant)
+                            } else {
+                                format!("{}::{}({})", enum_name, variant, bindings.join(", "))
+                            }
+                        }
+                    };
+                    format!("{} => {}", pat, case.body)
+                }).collect();
+                write!(f, "match {} {{ {} }}", value, cases_str.join("; "))
+            },
             //Expression::VariableAssignment { id, value } => write!(f, "{} = {}", id.name, value),
         }
     }
@@ -262,11 +327,6 @@ impl fmt::Display for FieldDefinition {
     }
 }
 
-/*impl fmt::Display for MatchCase {
-    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
-        write!(f, "{} => {}", self.pattern, self.body)
-    }
-}*/
 
 impl fmt::Display for TypeExpression {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {

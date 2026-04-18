@@ -1,5 +1,6 @@
 use crate::frontend::ast::{Program, Expression, BinaryOperator};
-use crate::backend::preir::{PreIR, Instr, LiteralPl, UnOpPl, BinOpPl, FnCallPl, IfStatementData, WhileLoopData, ForLoopData, RegionData, ReturnData, FuncData, StructData, EnumData, EnumVariantData, VarDeclData, VarRefData, instr_index};
+use crate::backend::preir::{PreIR, Instr, LiteralPl, UnOpPl, BinOpPl, FnCallPl, IfStatementData, WhileLoopData, ForLoopData, RegionData, ReturnData, FuncData, StructData, EnumData, EnumVariantInfo, EnumVariantData, EnumVariantConstructData, MatchArmData, MatchData, VarDeclData, VarRefData, instr_index};
+use crate::frontend::ast::MatchPattern;
 use crate::backend::worklist::ErrandType;
 use crate::backend::errand_builtins::{add_builtin_data_constructors, add_builtin_functions, type_expr_to_errand_type};
 use std::collections::HashMap;
@@ -33,7 +34,10 @@ pub fn compile_preir(program: &Program) -> Result<PreIR, String> {
             Expression::EnumDefinition { id, variants } => {
                 let enum_data = EnumData {
                     name: id.name.clone(),
-                    variants: variants.iter().map(|v| v.name.clone()).collect(),
+                    variants: variants.iter().map(|v| EnumVariantInfo {
+                        name: v.name.clone(),
+                        fields: v.fields.iter().map(|f| (f.id.name.clone(), f.field_type.clone())).collect(),
+                    }).collect(),
                 };
                 ctx.emit_instruction(Instr::EnumDecl(enum_data));
             }
@@ -235,7 +239,10 @@ fn compile_expression(ctx: &mut PreIR, expr: &Expression) -> Result<instr_index,
         Expression::EnumDefinition { id, variants } => {
             let enum_data = Instr::EnumDecl(EnumData {
                 name: id.name.clone(),
-                variants: variants.iter().map(|v| v.name.clone()).collect(),
+                variants: variants.iter().map(|v| EnumVariantInfo {
+                    name: v.name.clone(),
+                    fields: v.fields.iter().map(|f| (f.id.name.clone(), f.field_type.clone())).collect(),
+                }).collect(),
             });
             Ok(ctx.emit_instruction(enum_data))
         }
@@ -243,6 +250,61 @@ fn compile_expression(ctx: &mut PreIR, expr: &Expression) -> Result<instr_index,
             Ok(ctx.emit_instruction(Instr::EnumVariantAccess(EnumVariantData {
                 enum_name: enum_name.clone(),
                 variant: variant.clone(),
+            })))
+        }
+        Expression::EnumVariantConstruct { enum_name, variant, args } => {
+            let arg_indices: Vec<instr_index> = args
+                .iter()
+                .map(|a| compile_expression(ctx, a))
+                .collect::<Result<Vec<_>, _>>()?;
+            Ok(ctx.emit_instruction(Instr::EnumVariantConstruct(EnumVariantConstructData {
+                enum_name: enum_name.clone(),
+                variant: variant.clone(),
+                arg_indices,
+            })))
+        }
+        Expression::Match { value, cases } => {
+            let scrutinee_idx = compile_expression(ctx, value)?;
+
+            // Resolve enum_name from the first non-wildcard pattern.
+            let enum_name = cases.iter().find_map(|c| {
+                if let MatchPattern::EnumVariant { enum_name, .. } = &c.pattern {
+                    Some(enum_name.clone())
+                } else {
+                    None
+                }
+            }).ok_or_else(|| "match expression has only wildcard arms — cannot determine enum type".to_string())?;
+
+            // Build tag lookup: variant_name → tag index.
+            let tag_map: std::collections::HashMap<String, i64> = ctx.instructions.iter()
+                .find_map(|instr| {
+                    if let Instr::EnumDecl(d) = instr {
+                        if d.name == enum_name {
+                            Some(d.variants.iter().enumerate()
+                                .map(|(i, v)| (v.name.clone(), i as i64))
+                                .collect())
+                        } else { None }
+                    } else { None }
+                })
+                .ok_or_else(|| format!("match: unknown enum `{}`", enum_name))?;
+
+            // Compile each arm body and resolve tag.
+            let arms: Vec<MatchArmData> = cases.iter().map(|c| {
+                let (tag, bindings) = match &c.pattern {
+                    MatchPattern::Wildcard => (None, vec![]),
+                    MatchPattern::EnumVariant { variant, bindings, .. } => {
+                        let tag = tag_map.get(variant).copied();
+                        (tag, bindings.clone())
+                    }
+                };
+                let body = compile_expression(ctx, &c.body)?;
+                Ok(MatchArmData { tag, bindings, body })
+            }).collect::<Result<Vec<_>, String>>()?;
+
+            Ok(ctx.emit_instruction(Instr::Match(MatchData {
+                scrutinee: scrutinee_idx,
+                enum_name,
+                arms,
             })))
         }
         Expression::If { condition, then_branch, else_branch } => {

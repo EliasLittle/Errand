@@ -47,11 +47,30 @@ pub struct SIRStructLayout {
     pub total_size: usize,
 }
 
-/// Layout of an enum type: ordered variant names whose index is their integer tag.
+/// Layout of a single enum variant at the SIR level.
+#[derive(Debug, Clone)]
+pub struct SIREnumVariantLayout {
+    pub name: String,
+    /// Fields, with byte offsets relative to the START of the payload region
+    /// (i.e. offset 8 from the base of the tagged-union allocation).
+    pub fields: Vec<SIRStructField>,
+    /// Total bytes consumed by this variant's payload.
+    pub payload_size: usize,
+}
+
+/// Full tagged-union layout of an enum computed at SIR generation time.
+///
+/// `is_simple` is true when ALL variants are unit (no payload) — in that case
+/// the enum is stored as a bare `i64` tag rather than a heap/stack allocation,
+/// and `total_size` is 0 (irrelevant).
 #[derive(Debug, Clone)]
 pub struct SIREnumLayout {
-    /// Variant names in declaration order.  `variants[i]` has integer tag `i`.
-    pub variants: Vec<String>,
+    /// Variants in declaration order; `variants[i]` has integer tag `i`.
+    pub variants: Vec<SIREnumVariantLayout>,
+    /// `8 (tag) + max(payload_size across all variants)`.  0 when `is_simple`.
+    pub total_size: usize,
+    /// `true` iff every variant has zero fields (pure unit-tag enum).
+    pub is_simple: bool,
 }
 
 /// All SIR for a program: one for the top-level main body, one per function.
@@ -115,7 +134,14 @@ impl SIRModule {
             for name in enum_names {
                 let layout = &self.enums[name];
                 let variants_str: Vec<String> = layout.variants.iter().enumerate()
-                    .map(|(i, v)| format!("{} = {}", v, i))
+                    .map(|(i, v)| {
+                        if v.fields.is_empty() {
+                            format!("{} = {}", v.name, i)
+                        } else {
+                            let fields_str: Vec<String> = v.fields.iter().map(|f| format!("{}@{}", f.name, f.byte_offset)).collect();
+                            format!("{} = {} ({})", v.name, i, fields_str.join(", "))
+                        }
+                    })
                     .collect();
                 out.push_str(&format!("\n=== SIR: enum {} {{ {} }} ===\n", name, variants_str.join(", ")));
             }

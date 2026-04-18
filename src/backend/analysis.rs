@@ -4,9 +4,9 @@ use crate::backend::errand_builtins::{
     add_builtin_data_constructors, add_builtin_functions, type_expr_to_errand_type,
 };
 use crate::backend::preir::{
-    BinOpPl, EnumData, EnumVariantData, FnCallPl, FuncData, IfStatementData, Instr, LiteralPl,
-    PreIR, RegionData, ReturnData, StructData, UnOpPl, VarDeclData, VarRefData, WhileLoopData,
-    instr_index,
+    BinOpPl, EnumData, EnumVariantData, EnumVariantConstructData, EnumVariantInfo, FnCallPl,
+    FuncData, IfStatementData, Instr, LiteralPl, MatchData, PreIR, RegionData, ReturnData,
+    StructData, UnOpPl, VarDeclData, VarRefData, WhileLoopData, instr_index,
 };
 use crate::backend::worklist::{
     ErrandType, ErrandTypeError, Judgment, TyVarKind, TypeResult, Worklist, WorklistEntry,
@@ -94,10 +94,10 @@ pub struct Analyzer {
     /// Cache: PreIR `instr_index` → resolved `TypeIndex`.
     analysis_cache: HashMap<instr_index, TypeIndex>,
     /// Global symbol table: function / struct / builtin names → `TypeIndex`.
-    global_defs: HashMap<String, TypeIndex>,
-    /// Enum variant lists: enum_name → ordered variant names.
-    /// Used to validate `EnumVariantAccess` instructions and assign enum types.
-    enum_variants: HashMap<String, Vec<String>>,
+    pub global_defs: HashMap<String, TypeIndex>,
+    /// Enum variant info: enum_name → ordered variant descriptors.
+    /// Used to validate `EnumVariantAccess` and `EnumVariantConstruct` instructions.
+    pub enum_variants: HashMap<String, Vec<EnumVariantInfo>>,
     worklist: Worklist,
     trace: Vec<String>,
 }
@@ -113,7 +113,7 @@ impl Analyzer {
         let global_defs = Self::collect_global_defs(&preir, &mut pool, &mut worklist);
 
         // Build enum_variants from EnumDecl instructions.
-        let enum_variants: HashMap<String, Vec<String>> = preir
+        let enum_variants: HashMap<String, Vec<EnumVariantInfo>> = preir
             .instructions
             .iter()
             .filter_map(|instr| {
@@ -235,6 +235,8 @@ impl Analyzer {
             Instr::StructDecl(_) => Ok(self.pool.unit),
             Instr::EnumDecl(_) => Ok(self.pool.unit),
             Instr::EnumVariantAccess(data) => self.analyze_enum_variant_access(data),
+            Instr::EnumVariantConstruct(data) => self.analyze_enum_variant_construct(data),
+            Instr::Match(data) => self.analyze_match(data),
             Instr::ForLoop(_) => {
                 Err(ErrandTypeError::UnsupportedOperation("ForLoop".into()))
             }
@@ -267,19 +269,14 @@ impl Analyzer {
         Err(ErrandTypeError::UnboundVariable(data.name.clone()))
     }
 
-    /// Type an enum variant access.
+    /// Type a unit enum variant access, e.g. `Direction::North`.
     ///
-    /// Validates that the enum and variant both exist, then returns `Con(enum_name)`
-    /// so that the value carries the enum's own type rather than a bare `Int`.
-    /// The integer tag is resolved only at codegen time in `sir_lowering.rs`.
+    /// Validates that the enum and variant both exist, then returns `Con(enum_name)`.
     fn analyze_enum_variant_access(&mut self, data: &EnumVariantData) -> TypeResult<TypeIndex> {
         let variants = self.enum_variants.get(&data.enum_name).cloned().ok_or_else(|| {
-            ErrandTypeError::UnboundVariable(format!(
-                "unknown enum `{}`",
-                data.enum_name
-            ))
+            ErrandTypeError::UnboundVariable(format!("unknown enum `{}`", data.enum_name))
         })?;
-        if !variants.contains(&data.variant) {
+        if !variants.iter().any(|v| v.name == data.variant) {
             return Err(ErrandTypeError::UnboundVariable(format!(
                 "unknown variant `{}` on enum `{}`",
                 data.variant, data.enum_name
@@ -287,6 +284,81 @@ impl Analyzer {
         }
         let ty = self.pool.intern(ErrandType::Con(data.enum_name.clone()));
         Ok(ty)
+    }
+
+    /// Type a data-carrying enum variant construction, e.g. `Message::Move(1, 2)`.
+    ///
+    /// Validates enum name, variant name, and argument count.
+    /// Returns `Con(enum_name)` — the enum's own type.
+    fn analyze_enum_variant_construct(
+        &mut self,
+        data: &EnumVariantConstructData,
+    ) -> TypeResult<TypeIndex> {
+        let variants = self.enum_variants.get(&data.enum_name).cloned().ok_or_else(|| {
+            ErrandTypeError::UnboundVariable(format!("unknown enum `{}`", data.enum_name))
+        })?;
+        let variant_info = variants
+            .iter()
+            .find(|v| v.name == data.variant)
+            .cloned()
+            .ok_or_else(|| {
+                ErrandTypeError::UnboundVariable(format!(
+                    "unknown variant `{}` on enum `{}`",
+                    data.variant, data.enum_name
+                ))
+            })?;
+
+        if data.arg_indices.len() != variant_info.fields.len() {
+            return Err(ErrandTypeError::UnboundVariable(format!(
+                "enum variant `{}::{}` expects {} argument(s), got {}",
+                data.enum_name,
+                data.variant,
+                variant_info.fields.len(),
+                data.arg_indices.len()
+            )));
+        }
+
+        // Type-check each argument — just analyze them (types will be inferred).
+        for &idx in &data.arg_indices {
+            self.analyze_instr(idx)?;
+        }
+
+        let ty = self.pool.intern(ErrandType::Con(data.enum_name.clone()));
+        Ok(ty)
+    }
+
+    /// Type a `match` expression.
+    ///
+    /// For each arm that has binding variables, temporarily registers the binding
+    /// names with the corresponding field types from `enum_variants` so that
+    /// `VarRef` instructions in the arm body can resolve correctly.
+    fn analyze_match(&mut self, data: &MatchData) -> TypeResult<TypeIndex> {
+        self.analyze_instr(data.scrutinee)?;
+
+        let variants = self.enum_variants.get(&data.enum_name).cloned().unwrap_or_default();
+
+        let mut last_ty = self.pool.unit;
+        for arm in &data.arms {
+            // Register binding variables for this arm.
+            if !arm.bindings.is_empty() {
+                if let Some(tag) = arm.tag {
+                    if let Some(variant_info) = variants.get(tag as usize) {
+                        for (i, binding_name) in arm.bindings.iter().enumerate() {
+                            if let Some((_, field_type)) = variant_info.fields.get(i) {
+                                let ty = type_expr_to_errand_type(field_type);
+                                let ty_idx = self.pool.intern(ty);
+                                // Register the binding as a global def so VarRef can find it.
+                                self.global_defs.insert(binding_name.clone(), ty_idx);
+                            }
+                        }
+                    }
+                }
+            }
+            let body_ty = self.analyze_instr(arm.body)?;
+            last_ty = body_ty;
+        }
+
+        Ok(last_ty)
     }
 
     fn analyze_binop(&mut self, data: &BinOpPl) -> TypeResult<TypeIndex> {
@@ -646,7 +718,8 @@ impl Analyzer {
                 Ok(())
             }
             Instr::IfStatement(_) | Instr::Region(_) | Instr::ForLoop(_)
-            | Instr::EnumDecl(_) | Instr::EnumVariantAccess(_) => Ok(()),
+            | Instr::EnumDecl(_) | Instr::EnumVariantAccess(_)
+            | Instr::EnumVariantConstruct(_) | Instr::Match(_) => Ok(()),
         }
     }
 
@@ -866,5 +939,7 @@ fn fmt_instr(instr: &Instr) -> &'static str {
         Instr::StructDecl(_) => "struct_decl",
         Instr::EnumDecl(_) => "enum_decl",
         Instr::EnumVariantAccess(_) => "enum_variant",
+        Instr::EnumVariantConstruct(_) => "enum_construct",
+        Instr::Match(_) => "match",
     }
 }

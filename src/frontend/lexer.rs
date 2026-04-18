@@ -54,6 +54,8 @@ pub enum TokenType {
     While,
     For,
     In,
+    Match,
+    FatArrow,
     Comment(String),
     BlockComment(String, String, String),
     StringLiteral(String),
@@ -455,6 +457,7 @@ impl Lexer {
             "while" => TokenType::While,
             "for" => TokenType::For,
             "in" => TokenType::In,
+            "match" => TokenType::Match,
             "return" => TokenType::Return,
             _ => TokenType::Identifier(identifier),
         };
@@ -528,6 +531,9 @@ impl Lexer {
             '=' => if self.peek() == '=' {
                 self.advance();
                 Ok(Token { token_type: TokenType::Equal, line: self.line, column: self.column })
+            } else if self.peek() == '>' {
+                self.advance();
+                Ok(Token { token_type: TokenType::FatArrow, line: self.line, column: self.column })
             } else {
                 Ok(Token { token_type: TokenType::Assignment, line: self.line, column: self.column })
             },

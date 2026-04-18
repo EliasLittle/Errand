@@ -1,6 +1,6 @@
 use crate::{parser_log};
 use super::lexer::{Token, TokenType, token_type};
-use super::ast::{Expression, Program, UnaryOperator, BinaryOperator, Parameter, FieldDefinition, Id, TypeExpression, EnumVariant}; //, TypeExpression, MatchCase};
+use super::ast::{Expression, Program, UnaryOperator, BinaryOperator, Parameter, FieldDefinition, Id, TypeExpression, EnumVariant, MatchCase, MatchPattern};
 use std::iter::Peekable;
 use std::vec::IntoIter;
 
@@ -128,6 +128,7 @@ impl Parser {
             Some(TokenType::While) => self.while_statement(),
             Some(TokenType::For) => self.for_statement(),
             Some(TokenType::Return) => self.return_statement(),
+            Some(TokenType::Match) => self.match_expr(),
             Some(TokenType::Newline) => {
                 self.bump(); 
                 self.parse_expression()
@@ -258,6 +259,7 @@ impl Parser {
             Some(TokenType::StringLiteral(s)) => self.literal(&TokenType::StringLiteral(s.to_string())),
             Some(TokenType::True) => self.literal(&TokenType::True),
             Some(TokenType::False) => self.literal(&TokenType::False),
+            Some(TokenType::Match) => self.match_expr(),
             Some(TokenType::Identifier(_)) => self.identifier(),
             _ => Err(format!("Unexpected token: {:?}", self.current_type())),
         }
@@ -291,23 +293,41 @@ impl Parser {
     }
 
     /// identifier ::= IDENTIFIER(::Type) | IDENTIFIER '(' parameters ')' (call) | IDENTIFIER.IDENTIFIER (field access)
+    /// Also handles enum variant construction: `EnumName::Variant(args)`
     fn identifier(&mut self) -> Result<Expression, String> {
         parser_log!("Parsing identifier| current:{:?}", self.current_type());
         let id = self.id()?;
-        let type_expr = if self.eat(&TokenType::TypeDef) {
-            Some(self.type_expr()?)
-        } else {
-            None
-        };
 
-        if self.eat(&TokenType::LParen) {
+        if self.eat(&TokenType::TypeDef) {
+            // After `::`, the next token must be an identifier (variant name or type name).
+            let next_id = self.id()?;
+
+            if self.eat(&TokenType::LParen) {
+                // `Name::Variant(args)` — enum variant construction with positional args.
+                parser_log!("Enum variant construction");
+                let args = self.arguments()?;
+                self.expect(&TokenType::RParen)?;
+                Ok(Expression::EnumVariantConstruct {
+                    enum_name: id.name,
+                    variant: next_id.name,
+                    args,
+                })
+            } else {
+                // `Name::Variant` — unit variant access or plain type annotation.
+                parser_log!("Identifier with type annotation");
+                Ok(Expression::Identifier {
+                    id,
+                    type_expr: Some(TypeExpression::Struct(next_id, None)),
+                })
+            }
+        } else if self.eat(&TokenType::LParen) {
             parser_log!("Function call");
             let parameters = self.arguments()?;
             self.expect(&TokenType::RParen)?;
             Ok(Expression::FunctionCall { id, arguments: parameters })
         } else {
             parser_log!("Identifier");
-            Ok(Expression::Identifier { id, type_expr })
+            Ok(Expression::Identifier { id, type_expr: None })
         }
     }
 
@@ -448,16 +468,90 @@ impl Parser {
     }
 
     /// Parse enum variant names until `end`.
-    /// Each variant is an identifier followed by a newline.
+    ///
+    /// Supported forms (using `::` type-annotation notation):
+    ///   `Quit`                    → unit variant
+    ///   `Move::(Int, Int)`        → tuple variant; fields auto-named _0, _1, …
+    ///   `Write::String`           → single-type variant; field auto-named _0
+    ///   `Point::{x::Int, y::Int}` → struct variant with named fields
     fn enum_variants(&mut self) -> Result<Vec<EnumVariant>, String> {
         parser_log!("Parsing enum variants| current:{:?}", self.current_type());
         let mut variants = Vec::new();
         while self.at(&token_type("Identifier")?) {
             let id = self.id()?;
+
+            let (fields, is_tuple) = if self.eat(&TokenType::TypeDef) {
+                if self.eat(&TokenType::LParen) {
+                    // Tuple variant: Move::(Int, Int)
+                    // SPECIAL-CASE: `(T, U, …)` is parsed here as an ad-hoc
+                    // comma-separated type list because the language has no
+                    // first-class tuple type yet.  When `TypeExpression::Tuple`
+                    // is added, this branch should be replaced by a normal
+                    // `type_expr()` call and `is_tuple` should be removed.
+                    let types = self.type_list()?;
+                    self.expect(&TokenType::RParen)?;
+                    let fields = types
+                        .into_iter()
+                        .enumerate()
+                        .map(|(i, t)| FieldDefinition {
+                            id: Id { name: format!("_{}", i) },
+                            field_type: t,
+                        })
+                        .collect();
+                    (fields, true)
+                } else if self.eat(&TokenType::LBrace) {
+                    // Struct variant: Point::{x::Int, y::Int}
+                    // Reuse existing field_parameters but without the newline terminator.
+                    let fields = self.inline_field_list()?;
+                    self.expect(&TokenType::RBrace)?;
+                    (fields, false)
+                } else {
+                    // Single-type variant: Write::String
+                    let t = self.type_expr()?;
+                    let fields = vec![FieldDefinition {
+                        id: Id { name: "_0".to_string() },
+                        field_type: t,
+                    }];
+                    (fields, true)
+                }
+            } else {
+                // Unit variant
+                (vec![], false)
+            };
+
             self.expect(&TokenType::Newline)?;
-            variants.push(EnumVariant { name: id.name });
+            variants.push(EnumVariant { name: id.name, fields, is_tuple });
         }
         Ok(variants)
+    }
+
+    /// Parse a comma-separated list of `TypeExpression`s up to `)`.
+    fn type_list(&mut self) -> Result<Vec<TypeExpression>, String> {
+        let mut types = Vec::new();
+        while !self.at(&TokenType::RParen) {
+            types.push(self.type_expr()?);
+            if !(self.eat(&TokenType::Comma) ^ self.at(&TokenType::RParen)) {
+                return Err("Expected comma or right parenthesis in type list".to_string());
+            }
+        }
+        Ok(types)
+    }
+
+    /// Parse comma-separated `name::Type` field pairs inside `{ … }`.
+    /// Does NOT consume the closing `}`.
+    fn inline_field_list(&mut self) -> Result<Vec<FieldDefinition>, String> {
+        let mut fields = Vec::new();
+        while self.at(&token_type("Identifier")?) {
+            let id = self.id()?;
+            self.expect(&TokenType::TypeDef)?;
+            let field_type = self.type_expr()?;
+            let field = FieldDefinition { id, field_type };
+            fields.push(field);
+            if !(self.eat(&TokenType::Comma) ^ self.at(&TokenType::RBrace)) {
+                return Err("Expected comma or right brace in struct variant field list".to_string());
+            }
+        }
+        Ok(fields)
     }
 
     /// Parse expressions until 'END' token
@@ -560,6 +654,69 @@ impl Parser {
         })
     }
 
+
+    /// Parse a `match` expression:
+    /// ```text
+    /// match <expr>
+    ///     Pattern => <expr>
+    ///     ...
+    /// end
+    /// ```
+    fn match_expr(&mut self) -> Result<Expression, String> {
+        parser_log!("Parsing match expression| current:{:?}", self.current_type());
+        self.expect(&TokenType::Match)?;
+        let value = self.parse_expression()?;
+        // parse_expression already consumes a newline; eat it if still present
+        self.eat(&TokenType::Newline);
+        let mut cases = Vec::new();
+        while !self.at(&TokenType::End) && !self.at_end() {
+            let pattern = self.match_pattern()?;
+            self.expect(&TokenType::Arrow)?;
+            let body = Box::new(self.parse_expression()?);
+            self.eat(&TokenType::Newline);
+            cases.push(MatchCase { pattern, body });
+        }
+        self.expect(&TokenType::End)?;
+        Ok(Expression::Match { value: Box::new(value), cases })
+    }
+
+    /// Parse a single match arm pattern:
+    /// - `_`                          → Wildcard
+    /// - `EnumName::Variant`          → EnumVariant with no bindings
+    /// - `EnumName::Variant(x, y)`    → EnumVariant with positional bindings
+    fn match_pattern(&mut self) -> Result<MatchPattern, String> {
+        parser_log!("Parsing match pattern| current:{:?}", self.current_type());
+        // Wildcard
+        if let Some(TokenType::Identifier(name)) = self.current_type() {
+            if name == "_" {
+                self.bump();
+                return Ok(MatchPattern::Wildcard);
+            }
+        }
+        // EnumName::Variant or EnumName::Variant(bindings)
+        let enum_id = self.id()?;
+        self.expect(&TokenType::TypeDef)?;  // ::
+        let variant_id = self.id()?;
+        let bindings = if self.eat(&TokenType::LParen) {
+            let mut names = Vec::new();
+            while !self.at(&TokenType::RParen) {
+                let binding = self.id()?;
+                names.push(binding.name);
+                if !(self.eat(&TokenType::Comma) ^ self.at(&TokenType::RParen)) {
+                    return Err("Expected comma or ')' in match pattern bindings".to_string());
+                }
+            }
+            self.expect(&TokenType::RParen)?;
+            names
+        } else {
+            vec![]
+        };
+        Ok(MatchPattern::EnumVariant {
+            enum_name: enum_id.name,
+            variant: variant_id.name,
+            bindings,
+        })
+    }
 
     fn while_statement(&mut self) -> Result<Expression, String> {
         parser_log!("Parsing while statement| current:{:?}", self.current_type());

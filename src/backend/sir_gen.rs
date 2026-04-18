@@ -1,12 +1,12 @@
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 
 use crate::backend::analysis::Analyzer;
 use crate::backend::errand_builtins::type_expr_to_errand_type;
 use crate::backend::preir::{
-    BinOpPl, FnCallPl, ForLoopData, IfStatementData, Instr, RegionData, ReturnData,
-    UnOpPl, VarDeclData, FuncData, instr_index,
+    BinOpPl, FnCallPl, ForLoopData, IfStatementData, Instr, MatchArmData, MatchData,
+    RegionData, ReturnData, UnOpPl, VarDeclData, FuncData, instr_index,
 };
-use crate::backend::sir::{SIR, SIREnumLayout, SIRFunctionInfo, SIRInstr, SIRModule, SIRStructField, SIRStructLayout};
+use crate::backend::sir::{SIR, SIREnumLayout, SIREnumVariantLayout, SIRFunctionInfo, SIRInstr, SIRModule, SIRStructField, SIRStructLayout};
 use crate::backend::worklist::ErrandType;
 use crate::frontend::ast::{Parameter, Program};
 use crate::backend::preir::PreIR;
@@ -140,7 +140,7 @@ impl SirGen {
             functions.entry(meta.name).or_default().insert(type_key, info);
         }
 
-        // Collect enum layouts from EnumDecl instructions.
+        // Collect enum layouts from EnumDecl instructions, computing tagged-union sizes.
         let enum_layouts: HashMap<String, SIREnumLayout> = gen
             .analyzer
             .preir
@@ -148,7 +148,25 @@ impl SirGen {
             .iter()
             .filter_map(|instr| {
                 if let Instr::EnumDecl(ed) = instr {
-                    Some((ed.name.clone(), SIREnumLayout { variants: ed.variants.clone() }))
+                    let mut max_payload = 0usize;
+                    let variant_layouts: Vec<SIREnumVariantLayout> = ed.variants.iter().map(|v| {
+                        let mut payload_offset = 0usize;
+                        let fields: Vec<SIRStructField> = v.fields.iter().map(|(field_name, field_type)| {
+                            let ty = type_expr_to_errand_type(field_type);
+                            let size = errand_type_size(&ty);
+                            let f = SIRStructField { name: field_name.clone(), ty, byte_offset: payload_offset };
+                            payload_offset += size;
+                            f
+                        }).collect();
+                        let payload_size = payload_offset;
+                        if payload_size > max_payload { max_payload = payload_size; }
+                        SIREnumVariantLayout { name: v.name.clone(), fields, payload_size }
+                    }).collect();
+
+                    let is_simple = variant_layouts.iter().all(|v| v.fields.is_empty());
+                    // total_size = 8 bytes for tag + max payload; 0 when is_simple (bare int).
+                    let total_size = if is_simple { 0 } else { 8 + max_payload };
+                    Some((ed.name.clone(), SIREnumLayout { variants: variant_layouts, total_size, is_simple }))
                 } else {
                     None
                 }
@@ -176,16 +194,72 @@ impl SirGen {
         self.preir_to_sir.clear();
         let mut sir = SIR { instructions: Vec::new(), return_loc: 0 };
 
+        // Instructions that belong to match arm body Regions are deferred so
+        // they are emitted lazily inside their Region's SIR range. This ensures
+        // that binding variables (e.g. `x`, `y` from `Message::Move(x, y)`)
+        // have SIR indices that fall inside the arm body Region's range, which
+        // is required for the lowering pass to correctly mark them as nested.
+        let arm_owned = self.collect_arm_owned_preir(
+            region_data.instr_start, region_data.instr_end,
+        );
+
         for i in region_data.instr_start..region_data.instr_end {
             match self.analyzer.preir.get_instruction(i) {
                 Some(Instr::FuncDecl(_)) | Some(Instr::StructDecl(_)) | Some(Instr::EnumDecl(_)) => continue,
                 _ => {}
+            }
+            if arm_owned.contains(&i) {
+                continue;
             }
             self.analyze_and_emit(i, &mut sir)?;
         }
 
         sir.return_loc = self.preir_to_sir.get(&region_data.return_loc).copied().unwrap_or(0);
         Ok(sir)
+    }
+
+    /// Collect all PreIR instruction indices that are "owned" by match arm body
+    /// Regions within the given PreIR range. These must not be pre-emitted in
+    /// a sequential scan; instead they must be emitted lazily inside the arm
+    /// body's `emit_region_instr` call so that their SIR indices fall within
+    /// the Region's `instr_start..instr_end` range.
+    fn collect_arm_owned_preir(
+        &self,
+        start: instr_index,
+        end: instr_index,
+    ) -> HashSet<instr_index> {
+        let mut owned = HashSet::new();
+        for i in start..end {
+            if let Some(Instr::Match(data)) = self.analyzer.preir.get_instruction(i) {
+                for arm in &data.arms {
+                    self.mark_arm_owned_preir(arm.body, &mut owned);
+                }
+            }
+        }
+        owned
+    }
+
+    /// Recursively mark `idx` and all PreIR instructions inside it as arm-owned.
+    fn mark_arm_owned_preir(&self, idx: instr_index, owned: &mut HashSet<instr_index>) {
+        if owned.contains(&idx) {
+            return;
+        }
+        owned.insert(idx);
+        match self.analyzer.preir.get_instruction(idx) {
+            Some(Instr::Region(data)) => {
+                let start = data.instr_start;
+                let end = data.instr_end;
+                for i in start..end {
+                    self.mark_arm_owned_preir(i, owned);
+                }
+            }
+            Some(Instr::Match(data)) => {
+                for arm in &data.arms {
+                    self.mark_arm_owned_preir(arm.body, owned);
+                }
+            }
+            _ => {}
+        }
     }
 
     /// Type the instruction at `global_idx` via `Analyzer`, emit a `SIRInstr`
@@ -245,6 +319,11 @@ impl SirGen {
     ) -> Result<instr_index, String> {
         let new_start = sir.instructions.len() as instr_index;
 
+        // Same deferral as `emit_region_sir`: skip instructions owned by any
+        // match arm body within this Region so they are emitted lazily at SIR
+        // indices inside the arm body Region's range.
+        let arm_owned = self.collect_arm_owned_preir(rd.instr_start, rd.instr_end);
+
         for i in rd.instr_start..rd.instr_end {
             match self.analyzer.preir.get_instruction(i) {
                 Some(Instr::FuncDecl(_)) | Some(Instr::StructDecl(_)) | Some(Instr::EnumDecl(_)) => {
@@ -252,6 +331,9 @@ impl SirGen {
                     continue;
                 }
                 _ => {}
+            }
+            if arm_owned.contains(&i) {
+                continue;
             }
             self.analyze_and_emit(i, sir)?;
         }
@@ -288,6 +370,59 @@ impl SirGen {
             | Instr::StructDecl(_)
             | Instr::EnumDecl(_)
             | Instr::EnumVariantAccess(_) => Ok(instr),
+
+            Instr::EnumVariantConstruct(data) => {
+                let mut arg_indices = Vec::new();
+                for idx in data.arg_indices {
+                    arg_indices.push(self.analyze_and_emit(idx, sir)?);
+                }
+                Ok(Instr::EnumVariantConstruct(crate::backend::preir::EnumVariantConstructData {
+                    enum_name: data.enum_name,
+                    variant: data.variant,
+                    arg_indices,
+                }))
+            }
+
+            Instr::Match(data) => {
+                let scrutinee = self.analyze_and_emit(data.scrutinee, sir)?;
+
+                // Obtain variant info so we can register binding variable types
+                // into global_defs before emitting each arm body.
+                let variants: Vec<_> = self.analyzer.enum_variants
+                    .get(&data.enum_name)
+                    .cloned()
+                    .unwrap_or_default();
+
+                let mut arms = Vec::new();
+                for arm in &data.arms {
+                    // Register binding names as typed globals so that VarRef
+                    // instructions in the arm body resolve during analysis.
+                    if !arm.bindings.is_empty() {
+                        if let Some(tag) = arm.tag {
+                            if let Some(variant_info) = variants.get(tag as usize) {
+                                for (i, binding_name) in arm.bindings.iter().enumerate() {
+                                    if let Some((_, field_type)) = variant_info.fields.get(i) {
+                                        let ty = type_expr_to_errand_type(field_type);
+                                        let ty_idx = self.analyzer.pool.intern(ty);
+                                        self.analyzer.global_defs.insert(binding_name.clone(), ty_idx);
+                                    }
+                                }
+                            }
+                        }
+                    }
+                    let body = self.analyze_and_emit(arm.body, sir)?;
+                    arms.push(MatchArmData {
+                        tag: arm.tag,
+                        bindings: arm.bindings.clone(),
+                        body,
+                    });
+                }
+                Ok(Instr::Match(MatchData {
+                    scrutinee,
+                    enum_name: data.enum_name.clone(),
+                    arms,
+                }))
+            }
 
             Instr::VarDecl(data) => {
                 let value = self.analyze_and_emit(data.value, sir)?;

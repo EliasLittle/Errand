@@ -160,10 +160,29 @@ impl PreIR {
                 format!("struct {} {{}}", data.name)
             },
             Instr::EnumDecl(data) => {
-                format!("enum {} {{ {} }}", data.name, data.variants.join(", "))
+                let variants_str: Vec<String> = data.variants.iter().map(|v| {
+                    if v.fields.is_empty() {
+                        v.name.clone()
+                    } else {
+                        let fields_str: Vec<String> = v.fields.iter().map(|(n, t)| format!("{}::{}", n, t.name())).collect();
+                        format!("{}({})", v.name, fields_str.join(", "))
+                    }
+                }).collect();
+                format!("enum {} {{ {} }}", data.name, variants_str.join(", "))
             },
             Instr::EnumVariantAccess(data) => {
                 format!("{}::{}", data.enum_name, data.variant)
+            },
+            Instr::EnumVariantConstruct(data) => {
+                let args_str: Vec<String> = data.arg_indices.iter().map(|i| format!("%{}", i)).collect();
+                format!("{}::{}({})", data.enum_name, data.variant, args_str.join(", "))
+            },
+            Instr::Match(data) => {
+                let arms_str: Vec<String> = data.arms.iter().map(|arm| {
+                    let tag_s = arm.tag.map_or("_".to_string(), |t| t.to_string());
+                    format!("{} [{}] => %{}", tag_s, arm.bindings.join(","), arm.body)
+                }).collect();
+                format!("match %{} {{ {} }}", data.scrutinee, arms_str.join("; "))
             },
             Instr::FuncDecl(data) => {
                 let params: Vec<String> = data.parameters.iter().map(|p| p.id.name.clone()).collect();
@@ -226,6 +245,8 @@ pub enum Instr {
     StructDecl(StructData),
     EnumDecl(EnumData),
     EnumVariantAccess(EnumVariantData),
+    EnumVariantConstruct(EnumVariantConstructData),
+    Match(MatchData),
     FuncDecl(FuncData),
     VarDecl(VarDeclData),
 }
@@ -256,21 +277,66 @@ pub struct StructData {
     pub fields: Vec<FieldDefinition>,
 }
 
+/// Metadata for a single enum variant, including optional associated field types.
+///
+/// NOTE: Tuple variants are lowered into ordinary fields auto-named `_0`, `_1`, …
+/// because the language has no first-class tuple type yet.  When
+/// `TypeExpression::Tuple` is added, consider whether this struct should instead
+/// carry a dedicated tuple-type field rather than the current auto-name convention.
+#[derive(Debug, Clone, PartialEq)]
+pub struct EnumVariantInfo {
+    pub name: String,
+    /// Associated fields in declaration order.  Empty for unit variants.
+    /// Tuple variants use auto-names `_0`, `_1`, …; struct variants use user names.
+    /// (Auto-names are a stand-in until first-class tuple types exist.)
+    pub fields: Vec<(String, TypeExpression)>,
+}
+
 /// Metadata for an enum declaration.
 /// Variants are ordered; their index is their integer tag value.
 #[derive(Debug, Clone, PartialEq)]
 pub struct EnumData {
     pub name: String,
-    pub variants: Vec<String>,
+    pub variants: Vec<EnumVariantInfo>,
 }
 
-/// A symbolic reference to one variant of a named enum.
+/// A symbolic reference to a unit variant of a named enum.
 /// The integer tag is not stored here — it is resolved at codegen time from
 /// the `SIRModule.enums` layout so that type information survives through analysis.
 #[derive(Debug, Clone, PartialEq)]
 pub struct EnumVariantData {
     pub enum_name: String,
     pub variant: String,
+}
+
+/// Construction of a data-carrying enum variant, e.g. `Message::Move(1, 2)`.
+/// `arg_indices` are the PreIR indices of the compiled argument values, in
+/// declaration order.
+#[derive(Debug, Clone, PartialEq)]
+pub struct EnumVariantConstructData {
+    pub enum_name: String,
+    pub variant: String,
+    pub arg_indices: Vec<instr_index>,
+}
+
+/// A single arm of a `match` expression.
+#[derive(Debug, Clone, PartialEq)]
+pub struct MatchArmData {
+    /// Integer tag for the variant, or `None` for a wildcard arm.
+    pub tag: Option<i64>,
+    /// Positional variable names bound to extracted fields; empty for unit variants.
+    pub bindings: Vec<String>,
+    /// PreIR index of the compiled arm body.
+    pub body: instr_index,
+}
+
+/// A `match` expression over an enum value.
+#[derive(Debug, Clone, PartialEq)]
+pub struct MatchData {
+    pub scrutinee: instr_index,
+    /// Name of the enum being matched, used for layout lookup at codegen time.
+    pub enum_name: String,
+    pub arms: Vec<MatchArmData>,
 }
 
 //
@@ -396,10 +462,18 @@ impl Display for Instr {
                 write!(f, "struct {} {{ {} }}", data.name, fields.join(", "))
             },
             Instr::EnumDecl(data) => {
-                write!(f, "enum {} {{ {} }}", data.name, data.variants.join(", "))
+                let variants_str: Vec<String> = data.variants.iter().map(|v| v.name.clone()).collect();
+                write!(f, "enum {} {{ {} }}", data.name, variants_str.join(", "))
             },
             Instr::EnumVariantAccess(data) => {
                 write!(f, "enum_variant {}::{}", data.enum_name, data.variant)
+            },
+            Instr::EnumVariantConstruct(data) => {
+                let args_str: Vec<String> = data.arg_indices.iter().map(|i| format!("%{}", i)).collect();
+                write!(f, "enum_construct {}::{}({})", data.enum_name, data.variant, args_str.join(", "))
+            },
+            Instr::Match(data) => {
+                write!(f, "match %{} [{}]", data.scrutinee, data.arms.len())
             },
             Instr::FuncDecl(data) => {
                 let params: Vec<String> = data.parameters.iter().map(|p| p.id.name.clone()).collect();

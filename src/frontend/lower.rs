@@ -196,6 +196,21 @@ impl Program {
             },
             Expression::EnumDefinition { .. } => expr,
             Expression::EnumVariantAccess { .. } => expr,
+            Expression::EnumVariantConstruct { enum_name, variant, args } => {
+                let lowered_args = args.into_iter().map(|a| self.lower_expression(a)).collect();
+                Expression::EnumVariantConstruct { enum_name, variant, args: lowered_args }
+            },
+            Expression::Match { value, cases } => {
+                let lowered_value = Box::new(self.lower_expression(*value));
+                let lowered_cases = cases.into_iter().map(|c| {
+                    use crate::frontend::ast::MatchCase;
+                    MatchCase {
+                        pattern: c.pattern,
+                        body: Box::new(self.lower_expression(*c.body)),
+                    }
+                }).collect();
+                Expression::Match { value: lowered_value, cases: lowered_cases }
+            },
             _ => expr,
         }
     }
@@ -341,6 +356,26 @@ fn recognize_enum_variants(
         }
         Expression::Print(expr) => {
             Expression::Print(Box::new(recognize_enum_variants(*expr, enum_names)))
+        }
+        // EnumVariantConstruct args may themselves contain enum variant accesses.
+        Expression::EnumVariantConstruct { enum_name, variant, args } => {
+            Expression::EnumVariantConstruct {
+                enum_name,
+                variant,
+                args: args.into_iter().map(|a| recognize_enum_variants(a, enum_names)).collect(),
+            }
+        }
+        Expression::Match { value, cases } => {
+            Expression::Match {
+                value: Box::new(recognize_enum_variants(*value, enum_names)),
+                cases: cases.into_iter().map(|c| {
+                    use crate::frontend::ast::MatchCase;
+                    MatchCase {
+                        pattern: c.pattern,
+                        body: Box::new(recognize_enum_variants(*c.body, enum_names)),
+                    }
+                }).collect(),
+            }
         }
         other => other,
     }

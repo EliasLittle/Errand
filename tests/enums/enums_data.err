@@ -1,0 +1,53 @@
+foreign fn printf(a::Int):: Int
+foreign fn malloc(a::Int):: Int
+foreign fn free(a::Int):: Int
+foreign fn strlen(a::Int):: Int
+foreign fn strcpy(a::Int, b::Int):: Int
+foreign fn strcmp(a::Int, b::Int):: Int32
+
++-- Unit-only enum: compiles to bare i64 tags (is_simple = true)
+enum Direction
+    North
+    South
+    East
+    West
+end
+
++-- Mixed enum: unit + tuple + single-type + struct variants
+enum Message
+    Quit
+    Move::(Int, Int)
+    Write::Int
+    Point::{x::Int, y::Int}
+end
+
++-- Unit variants still work as bare integers
+d = Direction::North
+printf("Direction North tag: %d\n", d)
+printf("Direction South tag: %d\n", Direction::South)
+
++-- Construct data-carrying variants; they return a tagged-union pointer.
++-- We store the pointer as a variable (just testing that it compiles and runs).
+move_val = Message::Move(10, 20)
+write_val = Message::Write(42)
+point_val = Message::Point(100, 200)
+quit_val = Message::Quit
+
+printf("Constructed move (ptr non-null): %d\n", move_val != 0)
+printf("Constructed write (ptr non-null): %d\n", write_val != 0)
+printf("Constructed point (ptr non-null): %d\n", point_val != 0)
+
++-- Match on unit-only enum (bare i64 tags)
+match d
+    Direction::North -> printf("Direction is North\n")
+    Direction::South -> printf("Direction is South\n")
+    _ -> printf("Direction is other\n")
+end
+
++-- Match on mixed enum, extracting data from variants
+match move_val
+    Message::Move(x, y) -> printf("Move: %d %d\n", x, y)
+    Message::Write(v) -> printf("Write: %d\n", v)
+    Message::Quit -> printf("Quit\n")
+    _ -> printf("Other message\n")
+end

@@ -278,9 +278,15 @@ impl Interpreter {
             //Expression::VariableAssignment { id, value } => self.eval_variable_assignment(id, value),
             Expression::For { iterator, range, body } => Err(ControlFlow::Err("For loops not implemented in interpreter, please desugar".to_string())),
             Expression::EnumDefinition { .. } => Ok(Value::Unit),
-            Expression::EnumVariantAccess { .. } => Err(ControlFlow::Err(
-                "EnumVariantAccess not supported in interpreter; use the compiler".to_string(),
-            )),
+    Expression::EnumVariantAccess { .. } => Err(ControlFlow::Err(
+        "EnumVariantAccess not supported in interpreter; use the compiler".to_string(),
+    )),
+    Expression::EnumVariantConstruct { .. } => Err(ControlFlow::Err(
+        "EnumVariantConstruct not supported in interpreter; use the compiler".to_string(),
+    )),
+    Expression::Match { .. } => Err(ControlFlow::Err(
+        "Match not supported in interpreter; use the compiler".to_string(),
+    )),
         };
         compiler_debug!("Int.eval.expr| Result: {:?}", result);
         result
