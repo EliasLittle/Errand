@@ -50,7 +50,7 @@ impl CraneliftCompiler {
     pub fn compile_program(&mut self, program: &Program) -> Result<Vec<u8>, String> {
         // --- Populate struct registry for all struct definitions ---
         for expr in &program.expressions {
-            if let Expression::StructDefinition { id, fields } = expr {
+            if let Expression::StructDefinition { id, fields, .. } = expr {
                 // --- Populate struct registry ---
                 let mut offset = 0;
                 let backend_fields: Vec<BackendField> = fields.iter().map(|f| {
@@ -60,7 +60,7 @@ impl CraneliftCompiler {
                         TypeExpression::Float => BackendType::Float,
                         TypeExpression::Bool => BackendType::Bool,
                         TypeExpression::String => BackendType::String,
-                        TypeExpression::Struct(id, _) => BackendType::Struct(BackendStruct::new(&id.name, vec![], 0)),
+                        TypeExpression::Struct(id, _, _) => BackendType::Struct(BackendStruct::new(&id.name, vec![], 0)),
                         TypeExpression::Void => BackendType::Int, // treat void as int for now
                     };
                     let field_size = match field_type {
@@ -187,7 +187,7 @@ impl CraneliftCompiler {
     fn declare_function_in_module(&mut self, id: &Id, parameters: &[Parameter], return_type_expr: &Option<TypeExpression>) -> Result<(), String> {
         let param_types: Vec<TypeExpression> = parameters.iter().map(|p| {
             match &p.type_expr {
-                Some(TypeExpression::Struct(id, _)) if id.name == "String" => TypeExpression::String,
+                Some(TypeExpression::Struct(id, _, _)) if id.name == "String" => TypeExpression::String,
                 Some(t) => t.clone(),
                 None => TypeExpression::Int,
             }
@@ -216,7 +216,7 @@ impl CraneliftCompiler {
     fn declare_foreign_function_in_module(&mut self, id: &Id, parameters: &[Parameter], return_type_expr: &Option<TypeExpression>) -> Result<(), String> {
         let param_types: Vec<TypeExpression> = parameters.iter().map(|p| {
             match &p.type_expr {
-                Some(TypeExpression::Struct(id, _)) if id.name == "String" => TypeExpression::String,
+                Some(TypeExpression::Struct(id, _, _)) if id.name == "String" => TypeExpression::String,
                 Some(t) => t.clone(),
                 None => TypeExpression::Int,
             }
@@ -243,7 +243,7 @@ impl CraneliftCompiler {
     fn define_function_in_module(&mut self, name: &str, func: &mut Function, parameters: &[Parameter]) -> Result<(), String> {
         let param_types: Vec<TypeExpression> = parameters.iter().map(|p| {
             match &p.type_expr {
-                Some(TypeExpression::Struct(id, _)) if id.name == "String" => TypeExpression::String,
+                Some(TypeExpression::Struct(id, _, _)) if id.name == "String" => TypeExpression::String,
                 Some(t) => t.clone(),
                 None => TypeExpression::Int,
             }
@@ -462,7 +462,7 @@ impl CraneliftCompiler {
             Some(TypeExpression::Bool) => Ok(types::I8),
             Some(TypeExpression::String) => Ok(types::I64), // Simplified: string as pointer
             Some(TypeExpression::Void) => Ok(types::I64), // Void as I64 for now
-            Some(TypeExpression::Struct(_, _)) => Ok(types::I64), // Simplified: struct as pointer
+            Some(TypeExpression::Struct(_, _, _)) => Ok(types::I64), // Simplified: struct as pointer
             Some(TypeExpression::Int32) => Ok(types::I32),
             None => Ok(types::I64), // Default type
         }
@@ -522,7 +522,7 @@ impl CraneliftCompiler {
         // TODO: Should we even have a default here?
         let param_types: Vec<TypeExpression> = parameters.iter().map(|p| {
             match &p.type_expr {
-                Some(TypeExpression::Struct(id, _)) if id.name == "String" => TypeExpression::String,
+                Some(TypeExpression::Struct(id, _, _)) if id.name == "String" => TypeExpression::String,
                 Some(t) => t.clone(),
                 None => TypeExpression::Int,
             }
@@ -1085,7 +1085,7 @@ impl CraneliftCompiler {
                 builder.ins().return_(&[value]);
                 Ok(value)
             }
-            Expression::StructDefinition { id, fields } => {
+            Expression::StructDefinition { id, fields, .. } => {
                 // TODO: Implement struct definition
                 Ok(builder.ins().iconst(types::I64, 0))
             }

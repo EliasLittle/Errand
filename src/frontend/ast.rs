@@ -36,13 +36,17 @@ pub enum Expression {
     StructDefinition {
         id: Id,
         fields: Vec<FieldDefinition>,
+        /// Type parameter names declared on the struct, e.g. `struct Foo<T>` → `["T"]`.
+        type_params: Vec<Id>,
     },
     EnumDefinition {
         id: Id,
         variants: Vec<EnumVariant>,
+        type_params: Vec<Id>,
     },
     /// A reference to a unit variant of an enum, e.g. `Direction::North`.
     /// Carries only symbolic names; the integer tag is resolved at codegen time.
+    // TODO: Remove this, we should add all variants to the main symbol table
     EnumVariantAccess {
         enum_name: String,
         variant: String,
@@ -181,6 +185,31 @@ pub struct MatchCase {
 }
 
 
+/// A single generic argument. Const generics are not implemented yet (parser rejects them).
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub enum GenericArg {
+    Type(TypeExpression),
+}
+
+/// `Base` plus type arguments as `Base<Arg1, Arg2, …>` (each argument uses `TypeExpression::name`).
+pub fn mangle_type_name(base: &str, args: &[GenericArg]) -> String {
+    if args.is_empty() {
+        return base.to_string();
+    }
+    let mut s = base.to_string();
+    s.push('<');
+    for (i, arg) in args.iter().enumerate() {
+        if i > 0 {
+            s.push_str(", ");
+        }
+        match arg {
+            GenericArg::Type(te) => s.push_str(&te.name()),
+        }
+    }
+    s.push('>');
+    s
+}
+
 /// TODO: Add `Tuple(Vec<TypeExpression>)` and `Array(Box<TypeExpression>)` variants
 /// when those types are introduced to the language.  Once that is done, the
 /// `is_tuple` special-case on `EnumVariant` and the ad-hoc `(T, U)` parsing
@@ -194,7 +223,8 @@ pub enum TypeExpression {
     Bool,
     String,
     Void,
-    Struct(Id, Option<Vec<TypeExpression>>),
+    /// User-defined type: `id`, optional inner composite type list `{A,B}`, optional generic args `<Int>`.
+    Struct(Id, Option<Vec<TypeExpression>>, Option<Vec<GenericArg>>),
 }
 
 impl TypeExpression {
@@ -206,7 +236,10 @@ impl TypeExpression {
             TypeExpression::Bool => "Bool".to_string(),
             TypeExpression::String => "String".to_string(),
             TypeExpression::Void => "Void".to_string(),
-            TypeExpression::Struct(id, _) => id.name.clone().to_string(),
+            TypeExpression::Struct(id, _, generic_args) => match generic_args {
+                Some(args) if !args.is_empty() => mangle_type_name(&id.name, args),
+                _ => id.name.clone(),
+            },
         }
     }
 }
@@ -241,11 +274,16 @@ impl fmt::Display for Expression {
                     None => write!(f, "{} {}({}) {{ {} }}", fn_kw, id.name, params.join(", "), body_str),
                 }
             },
-            Expression::StructDefinition { id, fields } => {
+            Expression::StructDefinition { id, fields, type_params } => {
                 let fields_str: Vec<String> = fields.iter().map(|field| format!("{}", field.id.name)).collect();
-                write!(f, "struct {} {{ {} }}", id.name, fields_str.join(", "))
+                let tp = if type_params.is_empty() {
+                    String::new()
+                } else {
+                    format!("<{}>", type_params.iter().map(|p| p.name.clone()).collect::<Vec<String>>().join(", "))
+                };
+                write!(f, "struct {}{} {{ {} }}", id.name, tp, fields_str.join(", "))
             },
-            Expression::EnumDefinition { id, variants } => {
+            Expression::EnumDefinition { id, variants, type_params } => {
                 let variants_str: Vec<String> = variants.iter().map(|v| {
                     if v.fields.is_empty() {
                         v.name.clone()
@@ -257,7 +295,12 @@ impl fmt::Display for Expression {
                         format!("{}::{{ {} }}", v.name, fields.join(", "))
                     }
                 }).collect();
-                write!(f, "enum {} {{ {} }}", id.name, variants_str.join(", "))
+                let tp = if type_params.is_empty() {
+                    String::new()
+                } else {
+                    format!("<{}>", type_params.iter().map(|p| p.name.clone()).collect::<Vec<String>>().join(", "))
+                };
+                write!(f, "enum {}{} {{ {} }}", id.name, tp, variants_str.join(", "))
             },
             Expression::EnumVariantAccess { enum_name, variant } => {
                 write!(f, "{}::{}", enum_name, variant)
@@ -337,7 +380,11 @@ impl fmt::Display for TypeExpression {
             TypeExpression::Bool => write!(f, "Bool"),
             TypeExpression::String => write!(f, "String"),
             TypeExpression::Void => write!(f, "Void"),
-            TypeExpression::Struct(id, _) => write!(f, "{}", id.name),
+            TypeExpression::Struct(id, _, args) => write!(
+                f,
+                "{}",
+                mangle_type_name(&id.name, args.as_deref().unwrap_or(&[]))
+            ),
         }
     }
 } 

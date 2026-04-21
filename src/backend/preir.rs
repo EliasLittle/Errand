@@ -1,7 +1,7 @@
 
 
 
-use crate::{backend::interpreter, frontend::ast::{BinaryOperator, FieldDefinition, Parameter, TypeExpression, UnaryOperator}};
+use crate::{frontend::ast::{BinaryOperator, FieldDefinition, Id, Parameter, TypeExpression, UnaryOperator}};
 use std::fmt::{Display, Formatter, Result as FmtResult};
 
 
@@ -204,6 +204,13 @@ impl PreIR {
             Instr::VarDecl(data) => {
                 format!("var {} = %{}", data.name, data.value)
             },
+            Instr::Typeof(operand) => {
+                let operand_str = match self.get_instruction(*operand) {
+                    Some(op_instr) => format!("({})", self.format_instr_with_context(op_instr)),
+                    None => format!("%{}", operand),
+                };
+                format!("typeof {}", operand_str)
+            },
         }
     }
 
@@ -249,6 +256,12 @@ pub enum Instr {
     Match(MatchData),
     FuncDecl(FuncData),
     VarDecl(VarDeclData),
+    /// Built-in `typeof(operand)` instruction. The operand is type-checked
+    /// during analysis; the instruction itself yields a `String` whose value
+    /// is the resolved (possibly mangled) type name of the operand.
+    /// SIR generation rewrites this into a `Literal(Symbol(_))` once the
+    /// operand's type is known.
+    Typeof(instr_index),
 }
 
 
@@ -260,6 +273,8 @@ pub enum Instr {
 pub struct VarDeclData {
     pub name: String,
     pub value: instr_index,
+    /// LHS type annotation from the source assignment, if any.
+    pub declared_type: Option<crate::frontend::ast::TypeExpression>,
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -275,6 +290,7 @@ pub struct FuncData {
 pub struct StructData {
     pub name: String,
     pub fields: Vec<FieldDefinition>,
+    pub type_params: Vec<Id>,
 }
 
 /// Metadata for a single enum variant, including optional associated field types.
@@ -298,6 +314,7 @@ pub struct EnumVariantInfo {
 pub struct EnumData {
     pub name: String,
     pub variants: Vec<EnumVariantInfo>,
+    pub type_params: Vec<Id>,
 }
 
 /// A symbolic reference to a unit variant of a named enum.
@@ -482,6 +499,7 @@ impl Display for Instr {
             Instr::VarDecl(data) => {
                 write!(f, "var {} = {}", data.name, data.value)
             },
+            Instr::Typeof(operand) => write!(f, "typeof {}", operand),
         }
     }
 }

@@ -41,12 +41,12 @@ impl From<TypeExpression> for Type {
             TypeExpression::Bool => Type::Bool,
             TypeExpression::String => Type::String,
             TypeExpression::Void => Type::Unit,
-            TypeExpression::Struct(id, fields) => match fields {
-                Some(fields) => Type::Struct {
+            TypeExpression::Struct(id, fields, generic_args) => match (fields, generic_args) {
+                (Some(fields), None) => Type::Struct {
                     name: id.name.clone(),
                     fields: fields.iter().map(|field| (field.name().to_string(), Type::from(field.clone()))).collect(),
                 },
-                None => Type::Struct {
+                _ => Type::Struct {
                     name: id.name.clone(),
                     fields: HashMap::new(),
                 },
@@ -66,7 +66,7 @@ impl From<Type> for TypeExpression {
             Type::Unit => TypeExpression::Void,
             Type::Function { .. } => TypeExpression::Void, // TODO: Handle function types
             Type::Overloaded(ref overloads) => overloads.first().map(|t| TypeExpression::from(t.clone())).unwrap_or(TypeExpression::Void),
-            Type::Struct { name, .. } => TypeExpression::Struct(Id { name }, None),
+            Type::Struct { name, .. } => TypeExpression::Struct(Id { name }, None, None),
             Type::Union(_) => TypeExpression::Int, // TODO: Handle union types
             Type::Unknown(_) => TypeExpression::Int, // TODO: Handle type variables
             Type::Any => TypeExpression::Int, // TODO: Handle any type
@@ -321,7 +321,7 @@ impl TypeInferencer {
                         }
                     );
                 }
-                Expression::StructDefinition { id, fields } => {
+                Expression::StructDefinition { id, fields, .. } => {
                     let mut field_types = HashMap::new();
                     for field in fields {
                         let field_type = Type::from(field.field_type.clone());
@@ -339,7 +339,7 @@ impl TypeInferencer {
                         }
                     );
                 }
-                Expression::EnumDefinition { id, variants } => {
+                Expression::EnumDefinition { id, variants, .. } => {
                     // Register the enum as a named type in the environment.
                     // Variants are compiled to integer tags during lowering, so the
                     // type itself is represented as an empty struct-like nominal type.

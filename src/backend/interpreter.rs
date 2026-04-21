@@ -155,7 +155,8 @@ impl Value {
             Value::Function(f) =>  f.return_type_expr.clone().unwrap_or(TypeExpression::Void),
             Value::Type(t) => TypeExpression::Struct(
                 Id { name: t.name.clone() }, 
-                Some(t.fields.iter().map(|(k, v)| Value::Type(*v.clone()).to_type_expr()).collect())
+                Some(t.fields.iter().map(|(k, v)| Value::Type(*v.clone()).to_type_expr()).collect()),
+                None,
             ),
             Value::Instance(i) => Value::Type(i.of_type.clone()).to_type_expr(),
             Value::Unit => TypeExpression::Void,
@@ -213,6 +214,7 @@ impl From<Value> for Expression {
             },
             Value::Type(t) => Expression::StructDefinition {
                 id: Id { name: t.name },
+                type_params: vec![],
                 fields: t.fields.iter().map(|(k, v)| FieldDefinition { 
                     id: Id { name: k.clone() }, 
                     field_type: Value::Type(*v.clone()).to_type_expr() // Recursively convert Value to Expression
@@ -265,7 +267,7 @@ impl Interpreter {
             Expression::BinaryOp { operator, left, right } => self.eval_binary_op(operator, left, right),
             Expression::FunctionCall { id, arguments } => self.eval_call(id, arguments),
             Expression::FunctionDefinition { id, parameters, body, return_type_expr, foreign: _ } => self.eval_function_definition(id, parameters, body, return_type_expr),
-            Expression::StructDefinition { id, fields } => self.eval_struct_definition(id, fields),
+            Expression::StructDefinition { id, fields, .. } => self.eval_struct_definition(id, fields),
             Expression::If { condition, then_branch, else_branch } => self.eval_if(condition, then_branch, else_branch),
             Expression::While { condition, body } => self.eval_while(condition, body),
             Expression::Block(expressions) => {

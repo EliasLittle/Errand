@@ -1,14 +1,16 @@
+use std::collections::hash_map::Entry;
 use std::collections::{HashMap, HashSet};
 
 use crate::backend::analysis::Analyzer;
-use crate::backend::errand_builtins::type_expr_to_errand_type;
+use crate::backend::errand_builtins::{type_expr_to_errand_type, type_expr_to_errand_type_with_params};
 use crate::backend::preir::{
-    BinOpPl, FnCallPl, ForLoopData, IfStatementData, Instr, MatchArmData, MatchData,
-    RegionData, ReturnData, UnOpPl, VarDeclData, FuncData, instr_index,
+    BinOpPl, EnumData, EnumVariantConstructData, FnCallPl, ForLoopData, IfStatementData, Instr,
+    LiteralPl, MatchArmData, MatchData, RegionData, ReturnData, StructData, UnOpPl, VarDeclData,
+    FuncData, instr_index,
 };
 use crate::backend::sir::{SIR, SIREnumLayout, SIREnumVariantLayout, SIRFunctionInfo, SIRInstr, SIRModule, SIRStructField, SIRStructLayout};
 use crate::backend::worklist::ErrandType;
-use crate::frontend::ast::{Parameter, Program};
+use crate::frontend::ast::{GenericArg, Id, Parameter, Program, TypeExpression};
 use crate::backend::preir::PreIR;
 
 /// Generates SIR from PreIR in a single interleaved pass: each instruction is
@@ -67,6 +69,9 @@ impl SirGen {
             .iter()
             .filter_map(|instr| {
                 if let Instr::StructDecl(sd) = instr {
+                    if !sd.type_params.is_empty() {
+                        return None;
+                    }
                     let mut offset = 0usize;
                     let fields = sd
                         .fields
@@ -148,6 +153,9 @@ impl SirGen {
             .iter()
             .filter_map(|instr| {
                 if let Instr::EnumDecl(ed) = instr {
+                    if !ed.type_params.is_empty() {
+                        return None;
+                    }
                     let mut max_payload = 0usize;
                     let variant_layouts: Vec<SIREnumVariantLayout> = ed.variants.iter().map(|v| {
                         let mut payload_offset = 0usize;
@@ -173,7 +181,509 @@ impl SirGen {
             })
             .collect();
 
-        Ok(SIRModule { main: main_sir, functions, structs: struct_layouts, enums: enum_layouts })
+        let mut module = SIRModule {
+            main: main_sir,
+            functions,
+            structs: struct_layouts,
+            enums: enum_layouts,
+        };
+        gen.finalize_generics(&mut module)?;
+        Ok(module)
+    }
+
+    /// Collapse `App` types, patch `new`/enum names, and add mangled struct/enum layouts.
+    fn finalize_generics(&mut self, module: &mut SIRModule) -> Result<(), String> {
+        Self::collapse_sir_types(&mut module.main, &self.analyzer);
+        for overloads in module.functions.values_mut() {
+            for info in overloads.values_mut() {
+                if let Some(ref mut body) = info.body {
+                    Self::collapse_sir_types(body, &self.analyzer);
+                }
+            }
+        }
+        Self::patch_mangled_names(&mut module.main);
+        for overloads in module.functions.values_mut() {
+            for info in overloads.values_mut() {
+                if let Some(ref mut body) = info.body {
+                    Self::patch_mangled_names(body);
+                }
+            }
+        }
+        self.monomorph_generic_struct_constructors(module)?;
+        Self::collapse_sir_types(&mut module.main, &self.analyzer);
+        for overloads in module.functions.values_mut() {
+            for info in overloads.values_mut() {
+                if let Some(ref mut body) = info.body {
+                    Self::collapse_sir_types(body, &self.analyzer);
+                }
+            }
+        }
+        Self::patch_mangled_names(&mut module.main);
+        for overloads in module.functions.values_mut() {
+            for info in overloads.values_mut() {
+                if let Some(ref mut body) = info.body {
+                    Self::patch_mangled_names(body);
+                }
+            }
+        }
+        Self::ensure_mangled_layouts(module, &self.analyzer.preir)?;
+        Ok(())
+    }
+
+    fn collapse_sir_types(sir: &mut SIR, analyzer: &Analyzer) {
+        for si in &mut sir.instructions {
+            if let Some(ty) = si.ty.take() {
+                si.ty = Some(analyzer.collapse_apps_in_type(ty));
+            }
+        }
+    }
+
+    fn patch_mangled_names(sir: &mut SIR) {
+        let mut new_symbol_patches: Vec<(usize, String)> = Vec::new();
+        for (_i, si) in sir.instructions.iter_mut().enumerate() {
+            if let Some(ErrandType::Con(m)) = &si.ty {
+                if !m.contains("__") {
+                    continue;
+                }
+                match &mut si.instr {
+                    Instr::EnumVariantConstruct(EnumVariantConstructData {
+                        ref mut enum_name,
+                        ..
+                    }) => {
+                        *enum_name = m.clone();
+                    }
+                    Instr::Match(MatchData {
+                        ref mut enum_name, ..
+                    }) => {
+                        *enum_name = m.clone();
+                    }
+                    Instr::FnCall(fc) if fc.name == "new" && !fc.arguments.is_empty() => {
+                        new_symbol_patches.push((fc.arguments[0] as usize, m.clone()));
+                    }
+                    _ => {}
+                }
+            }
+        }
+        for (arg_idx, m) in new_symbol_patches {
+            if let Some(arg_si) = sir.instructions.get_mut(arg_idx) {
+                if let Instr::Literal(LiteralPl::Symbol(ref mut s)) = arg_si.instr {
+                    if m == s.as_str() || m.starts_with(&format!("{}__", s)) {
+                        *s = m;
+                    }
+                }
+            }
+        }
+    }
+
+    /// Same key scheme as [`crate::backend::sir_lowering`] overload resolution.
+    fn sir_type_key_for_dispatch(ty: Option<&ErrandType>) -> String {
+        match ty {
+            Some(ErrandType::Con(n)) => n.clone(),
+            Some(ErrandType::Var(n)) | Some(ErrandType::ETVar(n)) => n.clone(),
+            _ => "Any".to_string(),
+        }
+    }
+
+    fn subst_errand_type(ty: &ErrandType, subst: &HashMap<String, ErrandType>) -> ErrandType {
+        match ty {
+            ErrandType::Var(n) => subst.get(n).cloned().unwrap_or_else(|| ty.clone()),
+            ErrandType::Arrow(a, b) => ErrandType::Arrow(
+                Box::new(Self::subst_errand_type(a, subst)),
+                Box::new(Self::subst_errand_type(b, subst)),
+            ),
+            ErrandType::App(h, args) => ErrandType::App(
+                Box::new(Self::subst_errand_type(h, subst)),
+                args.iter().map(|a| Self::subst_errand_type(a, subst)).collect(),
+            ),
+            ErrandType::Forall(v, b) => {
+                if subst.contains_key(v) {
+                    Self::subst_errand_type(b, subst)
+                } else {
+                    ErrandType::Forall(v.clone(), Box::new(Self::subst_errand_type(b, subst)))
+                }
+            }
+            ErrandType::Product(ts) => ErrandType::Product(
+                ts.iter().map(|t| Self::subst_errand_type(t, subst)).collect(),
+            ),
+            _ => ty.clone(),
+        }
+    }
+
+    fn unify_field_type_with_arg_ty(
+        te: &TypeExpression,
+        arg: &ErrandType,
+        type_params: &[String],
+        subst: &mut HashMap<String, ErrandType>,
+    ) -> Option<()> {
+        match te {
+            TypeExpression::Int => match arg {
+                ErrandType::Con(n) if n == "Int" => Some(()),
+                _ => None,
+            },
+            TypeExpression::Int32 => match arg {
+                ErrandType::Con(n) if n == "Int32" => Some(()),
+                _ => None,
+            },
+            TypeExpression::Float => match arg {
+                ErrandType::Con(n) if n == "Float" => Some(()),
+                _ => None,
+            },
+            TypeExpression::Bool => match arg {
+                ErrandType::Con(n) if n == "Bool" => Some(()),
+                _ => None,
+            },
+            TypeExpression::String => match arg {
+                ErrandType::Con(n) if n == "String" => Some(()),
+                _ => None,
+            },
+            TypeExpression::Void => match arg {
+                ErrandType::Con(n) if n == "Unit" || n == "Void" => Some(()),
+                _ => None,
+            },
+            TypeExpression::Struct(id, _, generic_args) => {
+                if type_params.iter().any(|p| p == &id.name) {
+                    match subst.entry(id.name.clone()) {
+                        Entry::Vacant(e) => {
+                            e.insert(arg.clone());
+                            Some(())
+                        }
+                        Entry::Occupied(e) => (e.get() == arg).then_some(()),
+                    }
+                } else if let Some(args) = generic_args {
+                    let ErrandType::App(h, inner) = arg else {
+                        return None;
+                    };
+                    let ErrandType::Con(hn) = h.as_ref() else {
+                        return None;
+                    };
+                    if hn != &id.name || args.len() != inner.len() {
+                        return None;
+                    }
+                    for (ga, it) in args.iter().zip(inner.iter()) {
+                        let GenericArg::Type(t) = ga;
+                        Self::unify_field_type_with_arg_ty(t, it, type_params, subst)?;
+                    }
+                    Some(())
+                } else {
+                    match arg {
+                        ErrandType::Con(c) if c == &id.name => Some(()),
+                        ErrandType::App(h, _) => {
+                            let ErrandType::Con(hn) = h.as_ref() else {
+                                return None;
+                            };
+                            (hn == &id.name).then_some(())
+                        }
+                        _ => None,
+                    }
+                }
+            }
+        }
+    }
+
+    fn infer_subst_from_generic_ctor_call(
+        sd: &StructData,
+        arg_tys: &[ErrandType],
+    ) -> Option<HashMap<String, ErrandType>> {
+        if sd.fields.len() != arg_tys.len() {
+            return None;
+        }
+        let mut subst = HashMap::new();
+        for (field, arg) in sd.fields.iter().zip(arg_tys.iter()) {
+            Self::unify_field_type_with_arg_ty(&field.field_type, arg, &sd.type_params.iter().map(|p| p.name.clone()).collect::<Vec<String>>(), &mut subst)?;
+        }
+        if subst.len() != sd.type_params.len() {
+            return None;
+        }
+        for tp in &sd.type_params {
+            if !subst.contains_key(&tp.name) {
+                return None;
+            }
+        }
+        Some(subst)
+    }
+
+    fn mangle_generic_struct_name(sd: &StructData, subst: &HashMap<String, ErrandType>) -> String {
+        let mut s = sd.name.clone();
+        for tp in &sd.type_params {
+            if let Some(ty) = subst.get(&tp.name) {
+                s.push_str("__");
+                s.push_str(&errand_type_name(ty));
+            }
+        }
+        s
+    }
+
+    fn apply_subst_to_sir_body(sir: &mut SIR, subst: &HashMap<String, ErrandType>, analyzer: &Analyzer) {
+        for si in &mut sir.instructions {
+            if let Some(ty) = si.ty.take() {
+                let expanded = analyzer.expand_type(&ty);
+                let sub = Self::subst_errand_type(&expanded, subst);
+                si.ty = Some(analyzer.collapse_apps_in_type(sub));
+            }
+        }
+    }
+
+    fn patch_new_symbol_in_body(sir: &mut SIR, base: &str, mangled: &str) {
+        let mut patches: Vec<(usize, String)> = Vec::new();
+        for si in &sir.instructions {
+            if let Instr::FnCall(fc) = &si.instr {
+                if fc.name == "new" && !fc.arguments.is_empty() {
+                    if let Some(arg0) = sir.instructions.get(fc.arguments[0] as usize) {
+                        if let Instr::Literal(LiteralPl::Symbol(s)) = &arg0.instr {
+                            if s == base {
+                                patches.push((fc.arguments[0] as usize, mangled.to_string()));
+                            }
+                        }
+                    }
+                }
+            }
+        }
+        for (idx, m) in patches {
+            if let Some(arg_si) = sir.instructions.get_mut(idx) {
+                if let Instr::Literal(LiteralPl::Symbol(ref mut s)) = arg_si.instr {
+                    *s = m;
+                }
+            }
+        }
+    }
+
+    fn collect_generic_ctor_call_shapes(
+        sir: &SIR,
+        ctor_name: &str,
+        expand: impl Fn(&ErrandType) -> ErrandType,
+        out: &mut HashMap<Vec<String>, Vec<ErrandType>>,
+    ) {
+        for si in &sir.instructions {
+            let Instr::FnCall(fc) = &si.instr else {
+                continue;
+            };
+            if fc.name != ctor_name {
+                continue;
+            }
+            let mut keys = Vec::new();
+            let mut tys = Vec::new();
+            let mut ok = true;
+            for &idx in &fc.arguments {
+                let Some(op) = sir.instructions.get(idx as usize) else {
+                    ok = false;
+                    break;
+                };
+                let Some(ty) = op.ty.as_ref() else {
+                    ok = false;
+                    break;
+                };
+                let et = expand(ty);
+                keys.push(Self::sir_type_key_for_dispatch(Some(&et)));
+                tys.push(et);
+            }
+            if !ok || tys.is_empty() {
+                continue;
+            }
+            if keys.iter().any(|k| k == "Any") {
+                continue;
+            }
+            out.entry(keys).or_insert(tys);
+        }
+    }
+
+    fn gather_all_generic_ctor_call_shapes(
+        module: &SIRModule,
+        ctor_name: &str,
+        expand: impl Fn(&ErrandType) -> ErrandType + Copy,
+        out: &mut HashMap<Vec<String>, Vec<ErrandType>>,
+    ) {
+        Self::collect_generic_ctor_call_shapes(&module.main, ctor_name, expand, out);
+        for overloads in module.functions.values() {
+            for info in overloads.values() {
+                if let Some(body) = &info.body {
+                    Self::collect_generic_ctor_call_shapes(body, ctor_name, expand, out);
+                }
+            }
+        }
+    }
+
+    fn monomorph_generic_struct_constructors(&self, module: &mut SIRModule) -> Result<(), String> {
+        let generic_structs: Vec<StructData> = self
+            .analyzer
+            .preir
+            .instructions
+            .iter()
+            .filter_map(|i| {
+                if let Instr::StructDecl(sd) = i {
+                    if sd.type_params.is_empty() {
+                        None
+                    } else {
+                        Some(sd.clone())
+                    }
+                } else {
+                    None
+                }
+            })
+            .collect();
+        for sd in generic_structs {
+            let fname = sd.name.clone();
+            let Some(overloads) = module.functions.get(&fname) else {
+                continue;
+            };
+            // Must match `emit_sir_module` type keys: `type_expr_to_errand_type` with **no**
+            // struct type-parameter scope (parameters are plain `T` nominal until monomorph).
+            let template_key: Vec<String> = sd
+                .fields
+                .iter()
+                .map(|f| errand_type_name(&type_expr_to_errand_type(&f.field_type)))
+                .collect();
+            let (actual_template_key, template_info) =
+                if let Some(ti) = overloads.get(&template_key).cloned() {
+                    (template_key.clone(), ti)
+                } else if overloads.len() == 1 {
+                    let (k, v) = overloads.iter().next().expect("len==1");
+                    (k.clone(), v.clone())
+                } else {
+                    continue;
+                };
+            let Some(template_body_src) = template_info.body.as_ref() else {
+                continue;
+            };
+
+            let mut shapes: HashMap<Vec<String>, Vec<ErrandType>> = HashMap::new();
+            Self::gather_all_generic_ctor_call_shapes(module, &fname, |t| self.analyzer.expand_type(t), &mut shapes);
+
+            let mut new_overloads: Vec<(Vec<String>, SIRFunctionInfo)> = Vec::new();
+            for (arg_keys, arg_tys) in shapes {
+                if arg_keys == actual_template_key {
+                    continue;
+                }
+                let Some(subst) = Self::infer_subst_from_generic_ctor_call(&sd, &arg_tys) else {
+                    continue;
+                };
+                let mangled = Self::mangle_generic_struct_name(&sd, &subst);
+                let already = module
+                    .functions
+                    .get(&fname)
+                    .map(|o| o.contains_key(&arg_keys))
+                    .unwrap_or(false);
+                if already {
+                    continue;
+                }
+                let mut body = template_body_src.clone();
+                Self::apply_subst_to_sir_body(&mut body, &subst, &self.analyzer);
+                Self::patch_new_symbol_in_body(&mut body, &fname, &mangled);
+                Self::collapse_sir_types(&mut body, &self.analyzer);
+                Self::patch_mangled_names(&mut body);
+
+                let params: Vec<(String, ErrandType)> = template_info
+                    .params
+                    .iter()
+                    .zip(arg_tys.iter())
+                    .map(|((n, _), ty)| (n.clone(), ty.clone()))
+                    .collect();
+                let return_ty = body
+                    .instructions
+                    .get(body.return_loc as usize)
+                    .and_then(|i| i.ty.clone())
+                    .unwrap_or_else(|| ErrandType::Con("Void".into()));
+
+                let info = SIRFunctionInfo {
+                    params,
+                    return_type: return_ty,
+                    is_foreign: template_info.is_foreign,
+                    body: Some(body),
+                };
+                new_overloads.push((arg_keys, info));
+            }
+
+            if !new_overloads.is_empty() {
+                let ov = module.functions.entry(fname.clone()).or_default();
+                ov.remove(&actual_template_key);
+                for (k, info) in new_overloads {
+                    ov.insert(k, info);
+                }
+            }
+        }
+        Ok(())
+    }
+
+    fn collect_mangled_symbols_from_sir(sir: &SIR, mangled: &mut HashSet<String>) {
+        for si in &sir.instructions {
+            if let Instr::Literal(LiteralPl::Symbol(s)) = &si.instr {
+                if s.contains("__") {
+                    mangled.insert(s.clone());
+                }
+            }
+        }
+    }
+
+    fn ensure_mangled_layouts(module: &mut SIRModule, preir: &PreIR) -> Result<(), String> {
+        let mut mangled: HashSet<String> = HashSet::new();
+        for si in &module.main.instructions {
+            if let Some(ErrandType::Con(m)) = &si.ty {
+                if m.contains("__") {
+                    mangled.insert(m.clone());
+                }
+            }
+        }
+        Self::collect_mangled_symbols_from_sir(&module.main, &mut mangled);
+        for overloads in module.functions.values() {
+            for info in overloads.values() {
+                if let Some(body) = &info.body {
+                    for si in &body.instructions {
+                        if let Some(ErrandType::Con(m)) = &si.ty {
+                            if m.contains("__") {
+                                mangled.insert(m.clone());
+                            }
+                        }
+                    }
+                    Self::collect_mangled_symbols_from_sir(body, &mut mangled);
+                }
+            }
+        }
+
+        let struct_defs: Vec<StructData> = preir
+            .instructions
+            .iter()
+            .filter_map(|i| {
+                if let Instr::StructDecl(sd) = i {
+                    if sd.type_params.is_empty() {
+                        None
+                    } else {
+                        Some(sd.clone())
+                    }
+                } else {
+                    None
+                }
+            })
+            .collect();
+        let enum_defs: Vec<EnumData> = preir
+            .instructions
+            .iter()
+            .filter_map(|i| {
+                if let Instr::EnumDecl(ed) = i {
+                    if ed.type_params.is_empty() {
+                        None
+                    } else {
+                        Some(ed.clone())
+                    }
+                } else {
+                    None
+                }
+            })
+            .collect();
+
+        for m in mangled {
+            if module.structs.contains_key(&m) || module.enums.contains_key(&m) {
+                continue;
+            }
+            if let Some((sd, subst)) = parse_mangled_struct(&m, &struct_defs) {
+                let layout = build_struct_layout_subst(&sd, &subst)?;
+                module.structs.insert(m, layout);
+                continue;
+            }
+            if let Some((ed, subst)) = parse_mangled_enum(&m, &enum_defs) {
+                let layout = build_enum_layout_subst(&ed, &subst)?;
+                module.enums.insert(m, layout);
+            }
+        }
+        Ok(())
     }
 
     // ── Emission ──────────────────────────────────────────────────────────────
@@ -292,14 +802,31 @@ impl SirGen {
             return Ok(-1);
         }
 
+        // Track up front whether this is a var declaration with an explicit
+        // type annotation; those have to surface type errors loudly so
+        // mismatches between the annotation and the initializer (e.g.
+        // `d::Pair<Int, Int> = Pair("hello", "world")`) actually fail
+        // compilation. Errors on other instructions are swallowed because
+        // the type system has known gaps (enums-as-int coercion, raw
+        // pointer arithmetic, untyped parameters) that legitimate programs
+        // rely on.
+        let is_annotated_var_decl = matches!(
+            &instr,
+            Instr::VarDecl(data) if data.declared_type.is_some()
+        );
+
         // Recursively emit operand instructions and remap their indices.
         let remapped = self.remap_operands(instr, sir)?;
 
-        // Type via the Analyzer (cached after the first call).
-        let ty = self
-            .analyzer
-            .analyze_instr(global_idx)
-            .map(|idx| self.analyzer.pool.to_errand_type(idx))
+        let analysis = self.analyzer.analyze_instr(global_idx);
+        if is_annotated_var_decl {
+            analysis.as_ref().map_err(|e| format!("{e:?}"))?;
+        }
+        let ty = analysis
+            .map(|idx| {
+                self.analyzer
+                    .collapse_apps_in_type(self.analyzer.expanded_pool_type(idx))
+            })
             .ok();
 
         let local_idx = sir.instructions.len() as instr_index;
@@ -351,7 +878,10 @@ impl SirGen {
         let ty = self
             .analyzer
             .analyze_instr(global_idx)
-            .map(|idx| self.analyzer.pool.to_errand_type(idx))
+            .map(|idx| {
+                self.analyzer
+                    .collapse_apps_in_type(self.analyzer.expanded_pool_type(idx))
+            })
             .ok();
 
         let local_idx = sir.instructions.len() as instr_index;
@@ -392,6 +922,26 @@ impl SirGen {
                     .get(&data.enum_name)
                     .cloned()
                     .unwrap_or_default();
+                let enum_tparams = self
+                    .analyzer
+                    .enum_type_params
+                    .get(&data.enum_name)
+                    .cloned()
+                    .unwrap_or_default();
+                let scrut_ty = self
+                    .analyzer
+                    .cached_type(data.scrutinee)
+                    .map(|idx| self.analyzer.expanded_pool_type(idx));
+                let mut scrut_subst: HashMap<String, ErrandType> = HashMap::new();
+                if let Some(ErrandType::App(head, args)) = &scrut_ty {
+                    if let ErrandType::Con(en) = head.as_ref() {
+                        if en == &data.enum_name && args.len() == enum_tparams.len() {
+                            for (p, a) in enum_tparams.iter().zip(args.iter()) {
+                                scrut_subst.insert(p.clone(), a.clone());
+                            }
+                        }
+                    }
+                }
 
                 let mut arms = Vec::new();
                 for arm in &data.arms {
@@ -402,7 +952,13 @@ impl SirGen {
                             if let Some(variant_info) = variants.get(tag as usize) {
                                 for (i, binding_name) in arm.bindings.iter().enumerate() {
                                     if let Some((_, field_type)) = variant_info.fields.get(i) {
-                                        let ty = type_expr_to_errand_type(field_type);
+                                        let mut ty = type_expr_to_errand_type_with_params(
+                                            field_type,
+                                            &enum_tparams,
+                                        );
+                                        ty = self
+                                            .analyzer
+                                            .apply_substs_to_type(&ty, &scrut_subst);
                                         let ty_idx = self.analyzer.pool.intern(ty);
                                         self.analyzer.global_defs.insert(binding_name.clone(), ty_idx);
                                     }
@@ -426,7 +982,11 @@ impl SirGen {
 
             Instr::VarDecl(data) => {
                 let value = self.analyze_and_emit(data.value, sir)?;
-                Ok(Instr::VarDecl(VarDeclData { name: data.name, value }))
+                Ok(Instr::VarDecl(VarDeclData {
+                    name: data.name,
+                    value,
+                    declared_type: data.declared_type.clone(),
+                }))
             }
 
             Instr::UnOp(data) => {
@@ -446,6 +1006,27 @@ impl SirGen {
                     arguments.push(self.analyze_and_emit(arg_idx, sir)?);
                 }
                 Ok(Instr::FnCall(FnCallPl { name: data.name, arguments }))
+            }
+
+            Instr::Typeof(operand) => {
+                // Emit the operand so its analysis cache is populated, then
+                // resolve its (mangled) type name and replace this instruction
+                // with a Symbol literal carrying that name.  The operand SIR
+                // instruction may end up dead but that's fine — `getfield`
+                // and friends only consume the resulting symbol.
+                self.analyze_and_emit(operand, sir)?;
+                let ty = self
+                    .analyzer
+                    .cached_type(operand)
+                    .map(|idx| {
+                        self.analyzer
+                            .collapse_apps_in_type(self.analyzer.expanded_pool_type(idx))
+                    })
+                    .ok_or_else(|| {
+                        format!("typeof: cannot resolve type of operand %{}", operand)
+                    })?;
+                let name = errand_type_name(&ty);
+                Ok(Instr::Literal(LiteralPl::Symbol(name)))
             }
 
             Instr::IfStatement(data) => {
@@ -490,6 +1071,154 @@ impl SirGen {
     }
 }
 
+fn primitive_name_to_type_expr(n: &str) -> Result<TypeExpression, String> {
+    Ok(match n {
+        "Int" => TypeExpression::Int,
+        "Int32" => TypeExpression::Int32,
+        "Bool" => TypeExpression::Bool,
+        "Float" => TypeExpression::Float,
+        "String" => TypeExpression::String,
+        "Void" => TypeExpression::Void,
+        other => TypeExpression::Struct(Id { name: other.to_string() }, None, None),
+    })
+}
+
+fn subst_type_expr(te: &TypeExpression, m: &HashMap<String, TypeExpression>) -> TypeExpression {
+    match te {
+        TypeExpression::Struct(id, None, None) if m.contains_key(&id.name) => m[&id.name].clone(),
+        TypeExpression::Struct(id, Some(inner), gen) => TypeExpression::Struct(
+            id.clone(),
+            Some(inner.iter().map(|x| subst_type_expr(x, m)).collect()),
+            gen.as_ref().map(|g| {
+                g.iter()
+                    .map(|ga| match ga {
+                        GenericArg::Type(t) => GenericArg::Type(subst_type_expr(t, m)),
+                    })
+                    .collect()
+            }),
+        ),
+        TypeExpression::Struct(id, None, Some(g)) => TypeExpression::Struct(
+            id.clone(),
+            None,
+            Some(
+                g.iter()
+                    .map(|ga| match ga {
+                        GenericArg::Type(t) => GenericArg::Type(subst_type_expr(t, m)),
+                    })
+                    .collect(),
+            ),
+        ),
+        _ => te.clone(),
+    }
+}
+
+fn parse_mangled_struct(m: &str, defs: &[StructData]) -> Option<(StructData, HashMap<String, TypeExpression>)> {
+    for sd in defs {
+        let prefix = format!("{}__", sd.name);
+        if !m.starts_with(&prefix) {
+            continue;
+        }
+        let rest = &m[sd.name.len() + 2..];
+        let arg_strs: Vec<&str> = rest.split("__").filter(|s| !s.is_empty()).collect();
+        if arg_strs.len() != sd.type_params.len() {
+            continue;
+        }
+        let mut subst = HashMap::new();
+        for (tp, an) in sd.type_params.iter().zip(arg_strs.iter()) {
+            subst.insert(tp.name.clone(), primitive_name_to_type_expr(an).ok()?);
+        }
+        return Some((sd.clone(), subst));
+    }
+    None
+}
+
+fn build_struct_layout_subst(sd: &StructData, subst: &HashMap<String, TypeExpression>) -> Result<SIRStructLayout, String> {
+    let mut offset = 0usize;
+    let mut fields = Vec::new();
+    for f in &sd.fields {
+        let ft = subst_type_expr(&f.field_type, subst);
+        let ty = type_expr_to_errand_type(&ft);
+        let size = errand_type_size(&ty);
+        fields.push(SIRStructField {
+            name: f.id.name.clone(),
+            ty,
+            byte_offset: offset,
+        });
+        offset += size;
+    }
+    Ok(SIRStructLayout {
+        fields,
+        total_size: offset,
+    })
+}
+
+fn parse_mangled_enum(m: &str, defs: &[EnumData]) -> Option<(EnumData, HashMap<String, TypeExpression>)> {
+    for ed in defs {
+        let prefix = format!("{}__", ed.name);
+        if !m.starts_with(&prefix) {
+            continue;
+        }
+        let rest = &m[ed.name.len() + 2..];
+        let arg_strs: Vec<&str> = rest.split("__").filter(|s| !s.is_empty()).collect();
+        if arg_strs.len() != ed.type_params.len() {
+            continue;
+        }
+        let mut subst = HashMap::new();
+        for (tp, an) in ed.type_params.iter().zip(arg_strs.iter()) {
+            subst.insert(tp.name.clone(), primitive_name_to_type_expr(an).ok()?);
+        }
+        return Some((ed.clone(), subst));
+    }
+    None
+}
+
+fn build_enum_layout_subst(ed: &EnumData, subst: &HashMap<String, TypeExpression>) -> Result<SIREnumLayout, String> {
+    let mut max_payload = 0usize;
+    let variant_layouts: Vec<SIREnumVariantLayout> = ed
+        .variants
+        .iter()
+        .map(|v| {
+            let mut payload_offset = 0usize;
+            let fields: Vec<SIRStructField> = v
+                .fields
+                .iter()
+                .map(|(field_name, field_type)| {
+                    let ft = subst_type_expr(field_type, subst);
+                    let ty = type_expr_to_errand_type(&ft);
+                    let size = errand_type_size(&ty);
+                    let f = SIRStructField {
+                        name: field_name.clone(),
+                        ty,
+                        byte_offset: payload_offset,
+                    };
+                    payload_offset += size;
+                    f
+                })
+                .collect();
+            let payload_size = payload_offset;
+            if payload_size > max_payload {
+                max_payload = payload_size;
+            }
+            SIREnumVariantLayout {
+                name: v.name.clone(),
+                fields,
+                payload_size,
+            }
+        })
+        .collect();
+    let is_simple = variant_layouts.iter().all(|v| v.fields.is_empty());
+    let total_size = if is_simple {
+        0
+    } else {
+        8 + max_payload
+    };
+    Ok(SIREnumLayout {
+        variants: variant_layouts,
+        total_size,
+        is_simple,
+    })
+}
+
 // ─── Utilities ────────────────────────────────────────────────────────────────
 
 pub(crate) fn errand_type_name(ty: &ErrandType) -> String {
@@ -498,7 +1227,18 @@ pub(crate) fn errand_type_name(ty: &ErrandType) -> String {
         ErrandType::Arrow(_, _) => "Function".into(),
         ErrandType::Forall(_, _) => "Forall".into(),
         ErrandType::Product(_) => "Product".into(),
-        ErrandType::Sum(_) => "Sum".into(),
+        ErrandType::App(head, args) => {
+            let h = match head.as_ref() {
+                ErrandType::Con(n) => n.as_str(),
+                _ => "App",
+            };
+            let mut s = h.to_string();
+            for a in args {
+                s.push_str("__");
+                s.push_str(&errand_type_name(a));
+            }
+            s
+        }
     }
 }
 

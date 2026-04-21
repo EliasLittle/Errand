@@ -1,6 +1,6 @@
 use crate::{parser_log};
 use super::lexer::{Token, TokenType, token_type};
-use super::ast::{Expression, Program, UnaryOperator, BinaryOperator, Parameter, FieldDefinition, Id, TypeExpression, EnumVariant, MatchCase, MatchPattern};
+use super::ast::{Expression, Program, UnaryOperator, BinaryOperator, Parameter, FieldDefinition, Id, TypeExpression, EnumVariant, MatchCase, MatchPattern, GenericArg};
 use std::iter::Peekable;
 use std::vec::IntoIter;
 
@@ -312,15 +312,22 @@ impl Parser {
                     variant: next_id.name,
                     args,
                 })
+
             } else {
-                // `Name::Variant` — unit variant access or plain type annotation.
+                // `Name::Type` or `Name::Foo<Int>` — type annotation.
                 parser_log!("Identifier with type annotation");
+                let gen = if self.eat(&TokenType::LessThan) {
+                    Some(self.generic_type_args()?)
+                } else {
+                    None
+                };
                 Ok(Expression::Identifier {
                     id,
-                    type_expr: Some(TypeExpression::Struct(next_id, None)),
+                    type_expr: Some(TypeExpression::Struct(next_id, None, gen)),
                 })
             }
         } else if self.eat(&TokenType::LParen) {
+            // `Name(args)` - function call with arguments
             parser_log!("Function call");
             let parameters = self.arguments()?;
             self.expect(&TokenType::RParen)?;
@@ -365,16 +372,50 @@ impl Parser {
                 }
             }
             self.expect(&TokenType::RBrace)?; // Expect the closing brace
-            Ok(TypeExpression::Struct(id, Some(types))) // Return struct type expression
+            Ok(TypeExpression::Struct(id, Some(types), None)) // Return struct type expression
         } else {
             match id.name.as_str() {
                 "Int" => Ok(TypeExpression::Int),
                 "Float" => Ok(TypeExpression::Float),
                 "Bool" => Ok(TypeExpression::Bool),
                 "Void" => Ok(TypeExpression::Void),
-                _ => Ok(TypeExpression::Struct(id, None)),
+                _ => {
+                    let gen = if self.eat(&TokenType::LessThan) {
+                        Some(self.generic_type_args()?)
+                    } else {
+                        None
+                    };
+                    Ok(TypeExpression::Struct(id, None, gen))
+                }
             }
         }
+    }
+
+    /// Comma-separated type arguments inside `< ... >` (closing `>` already consumed by caller for first `<`).
+    fn generic_type_args(&mut self) -> Result<Vec<GenericArg>, String> {
+        let mut args = Vec::new();
+        while !self.at(&TokenType::GreaterThan) {
+            let te = self.type_expr()?;
+            args.push(GenericArg::Type(te));
+            if !self.eat(&TokenType::Comma) && !self.at(&TokenType::GreaterThan) {
+                return Err("Expected comma or '>' in generic type argument list".to_string());
+            }
+        }
+        self.expect(&TokenType::GreaterThan)?;
+        Ok(args)
+    }
+
+    /// Type parameter names on `struct Foo<T, U>` / `enum Bar<T>`.
+    fn type_param_names(&mut self) -> Result<Vec<Id>, String> {
+        let mut names = Vec::new();
+        while !self.at(&TokenType::GreaterThan) {
+            names.push(self.id()?);
+            if !self.eat(&TokenType::Comma) && !self.at(&TokenType::GreaterThan) {
+                return Err("Expected comma or '>' in type parameter list".to_string());
+            }
+        }
+        self.expect(&TokenType::GreaterThan)?;
+        Ok(names)
     }
 
     /// Parse literals (String, int, float, boolean)
@@ -434,7 +475,7 @@ impl Parser {
         }
     }
 
-    // struct <identifier>
+    // struct <identifier>(<generic_params>)
     //     <field>
     //     <field>
     //     ...
@@ -444,10 +485,15 @@ impl Parser {
         parser_log!("Parsing structure| current:{:?}", self.current_type());
         self.expect(&TokenType::Struct)?;
         let id = self.id()?;
+        let type_params = if self.eat(&TokenType::LessThan) {
+            self.type_param_names()?
+        } else {
+            vec![]
+        };
         self.expect(&TokenType::Newline)?;
         let fields = self.field_parameters()?;
         self.expect(&TokenType::End)?;
-        Ok(Expression::StructDefinition { id, fields })
+        Ok(Expression::StructDefinition { id, fields, type_params })
     }
 
     // enum <identifier>
@@ -461,10 +507,15 @@ impl Parser {
         parser_log!("Parsing enum| current:{:?}", self.current_type());
         self.expect(&TokenType::Enum)?;
         let id = self.id()?;
+        let type_params = if self.eat(&TokenType::LessThan) {
+            self.type_param_names()?
+        } else {
+            vec![]
+        };
         self.expect(&TokenType::Newline)?;
         let variants = self.enum_variants()?;
         self.expect(&TokenType::End)?;
-        Ok(Expression::EnumDefinition { id, variants })
+        Ok(Expression::EnumDefinition { id, variants, type_params })
     }
 
     /// Parse enum variant names until `end`.

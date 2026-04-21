@@ -85,7 +85,7 @@ impl Resolver {
                 self.end_scope();
                 Ok(())
             },
-            Expression::StructDefinition { id, fields } => {
+            Expression::StructDefinition { id, fields, .. } => {
                 self.declare(id)?;
                 self.define(id);
                 

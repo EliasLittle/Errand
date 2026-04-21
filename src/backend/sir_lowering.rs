@@ -909,6 +909,12 @@ impl SIRLoweringPass {
 
             // ─── Declarations (handled in collection pass; skipped here) ────────
             Instr::FuncDecl(_) | Instr::StructDecl(_) | Instr::EnumDecl(_) => builder.ins().iconst(types::I64, 0),
+
+            // SIR generation rewrites every `Typeof` into a `Literal(Symbol)`
+            // before this point, so reaching here indicates a compiler bug.
+            Instr::Typeof(_) => {
+                return Err("internal: Instr::Typeof should have been lowered to Literal(Symbol) during SIR generation".to_string());
+            }
         };
 
         value_map[idx] = Some(val);

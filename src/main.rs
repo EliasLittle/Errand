@@ -1,12 +1,8 @@
 use Errand::frontend::lexer::Lexer;
 use Errand::frontend::parser::Parser as ErrandParser;
-use Errand::frontend::type_inference::TypeInferencer;
-use Errand::frontend::typeof_eval::TypeofEvaluator;
 use Errand::frontend::ast::Program;
 use Errand::backend::ir_lowering::IRLoweringPass;
 use Errand::backend::preir_gen::compile_preir;
-use Errand::backend::analysis::Analyzer;
-use Errand::backend::preir::Instr;
 use Errand::backend::sir_gen::SirGen;
 use Errand::logging::{init_logger, CompilerLogLevel};
 use Errand::{compiler_info, compiler_debug, compiler_error};
@@ -33,10 +29,6 @@ struct Cli {
     #[arg(long, value_enum)]
     arch: Option<Arch>,
     
-    /// Generate CLIF IR instead of machine code
-    #[arg(long)]
-    clif: bool,
-    
     /// Dump IR instructions to a file
     #[arg(long)]
     dump_ir: bool,
@@ -48,18 +40,10 @@ struct Cli {
     /// Enable specific logging modules (comma-separated)
     #[arg(long, value_enum)]
     log_modules: Vec<LogModule>,
-    
-    /// Run worklist type inference on PreIR
-    #[arg(long)]
-    type_check_preir: bool,
 
     /// Generate SIR (typed IR) from PreIR and dump to file
     #[arg(long)]
     dump_sir: bool,
-
-    /// Use the legacy AST-based Cranelift backend instead of the SIR-based one
-    #[arg(long)]
-    legacy_codegen: bool,
 }
 
 #[derive(Copy, Clone, PartialEq, Eq, PartialOrd, Ord, ValueEnum)]
@@ -161,89 +145,6 @@ fn print_ast(path: &str, extension: &str, ast: &Program) {
     }
 }
 
-fn type_check_preir(preir: Errand::backend::preir::PreIR, program: &Program) -> Result<(), String> {
-    compiler_info!("Running worklist type inference on PreIR...");
-    compiler_info!("----------------------------------------");
-    
-    // Create the analyzer with PreIR and Program.
-    let mut analyzer = Analyzer::new(preir, program);
-    
-    let mut type_errors = Vec::new();
-    
-    // Collect function body indices and parameters first to avoid borrow conflicts.
-    let mut function_indices = Vec::new();
-    for (index, instruction) in analyzer.preir.instructions.iter().enumerate() {
-        if let Instr::FuncDecl(func_data) = instruction {
-            function_indices.push((
-                index,
-                func_data.name.clone(),
-                func_data.body_index,
-                func_data.parameters.clone(),
-            ));
-        }
-    }
-
-    // Analyze main region FIRST so module-level variables are discovered before functions.
-    compiler_debug!("Type checking main region: {}", analyzer.preir.format_main());
-    analyzer.setup_function_context(&[]);
-    let region_data = if let Instr::Region(rd) = &analyzer.preir.main {
-        rd.clone()
-    } else {
-        return Err("Main is not a Region".to_string());
-    };
-
-    match analyzer.analyze_body(&region_data) {
-        Ok(main_ty_idx) => {
-            compiler_info!("Main region type: {:?}", analyzer.pool.to_errand_type(main_ty_idx));
-        }
-        Err(e) => {
-            let error_msg = format!("Type error in main region: {:?}", e);
-            compiler_error!("  ✗ {}", error_msg);
-            type_errors.push(error_msg);
-        }
-    }
-
-    // Promote main region's var_context to module_context so functions can see module-level vars.
-    analyzer.promote_to_module();
-
-    // Type check each function declaration.
-    for (index, func_name, body_index, parameters) in function_indices {
-        compiler_info!("Type checking function {}: {}", func_name, analyzer.preir.format_instruction(index as i64));
-
-        analyzer.setup_function_context(&parameters);
-        match analyzer.analyze_instr(body_index) {
-            Ok(_) => {
-                compiler_debug!("  ✓ Function {} type checked successfully", func_name);
-            }
-            Err(e) => {
-                let error_msg = format!("Type error in function {}: {:?}", func_name, e);
-                compiler_error!("  ✗ {}", error_msg);
-                type_errors.push(error_msg);
-            }
-        }
-    }
-    
-    // Print inference trace if debug logging is enabled.
-    let trace = analyzer.get_trace();
-    if !trace.is_empty() {
-        compiler_debug!("Type inference trace:");
-        for trace_item in trace {
-            compiler_debug!("  {}", trace_item);
-        }
-    }
-    
-    if type_errors.is_empty() {
-        compiler_info!("✓ All PreIR instructions type checked successfully!");
-        Ok(())
-    } else {
-        compiler_error!("✗ Found {} type error(s) in PreIR", type_errors.len());
-        for error in &type_errors {
-            compiler_error!("  {}", error);
-        }
-        Err(format!("Type checking failed with {} error(s)", type_errors.len()))
-    }
-}
-
 fn link_object_file(obj_file: &str, output_file: &str, arch: Option<Arch>) -> Result<(), String> {
     compiler_info!("Linking {}...", obj_file);
     
@@ -322,21 +223,11 @@ fn main() {
     let lowered = ast.lower();
     print_ast(file_path, "last", &lowered);
 
-    // Type inference
-    let mut type_inferencer = TypeInferencer::new();
-    let typed_program = type_inferencer.infer_program(&lowered).expect("Type inference failed");
-    print_ast(file_path, "tast", &typed_program);
-
-    // Evaluate `typeof` calls (temporary: keeps Cranelift backend working until
-    // the new SIR-based pipeline is complete).
-    let typeof_evaluator = TypeofEvaluator;
-    let typeof_evaluated_program = typeof_evaluator.eval_program(&typed_program);
-    print_ast(file_path, "typeof", &typeof_evaluated_program);
-
-    // Generate PreIR
+    // Generate PreIR directly from the lowered AST. All type inference and
+    // checking happens inside SirGen via the worklist-based `Analyzer`
+    // (src/backend/analysis.rs).
     compiler_info!("Generating PreIR instructions");
-    let preir = compile_preir(&typeof_evaluated_program);
-    let preir = match preir {
+    let preir = match compile_preir(&lowered) {
         Ok(preir) => preir,
         Err(e) => {
             compiler_error!("PreIR generation failed: {}", e);
@@ -344,17 +235,11 @@ fn main() {
         }
     };
 
-    // Run worklist type inference if requested
-    if cli.type_check_preir {
-        if let Err(e) = type_check_preir(preir.clone(), &typeof_evaluated_program) {
-            compiler_error!("PreIR type checking failed: {}", e);
-            std::process::exit(1);
-        }
-    }
-
-    // Generate SIR (single interleaved typing + emission pass) — always runs.
+    // Generate SIR. This is the single type-inference + checking + emission
+    // pass: SirGen's internal Analyzer types every PreIR instruction as SIR
+    // is emitted, so any type error surfaces here.
     compiler_info!("Generating SIR...");
-    let sir_module = match SirGen::emit_sir_module(preir.clone(), &typeof_evaluated_program) {
+    let sir_module = match SirGen::emit_sir_module(preir.clone(), &lowered) {
         Ok(sir_module) => {
             compiler_info!("SIR generation successful");
             sir_module
@@ -405,126 +290,48 @@ fn main() {
         compiler_info!("IR instructions written to: {}", main_ir_file_path);
     }
 
-    // After PreIR generation and optional type checking, proceed with compilation
+    // Compile via the SIR-based Cranelift backend.
     let ir_lowering = IRLoweringPass::new();
-    
-    // Check if we're in CLIF mode
-    if cli.clif {
-        compiler_info!("Generating CLIF IR");
-        match ir_lowering.generate_clif(&typeof_evaluated_program) {
-            Ok(clif_ir) => {
-                compiler_info!("Successfully generated CLIF IR");
-                
-                // Determine output file path
-                let output_path = cli.output.unwrap_or_else(|| {
-                    if let Some(stripped) = file_path.strip_suffix(".err") {
-                        format!("{}.clif", stripped)
-                    } else {
-                        format!("{}.clif", file_path)
+    match ir_lowering.lower_sir_to_cranelift(&sir_module) {
+        Ok(compiled_code) => {
+            compiler_info!("Successfully compiled SIR to machine code ({} bytes)", compiled_code.len());
+
+            let obj_file_path = if let Some(stripped) = file_path.strip_suffix(".err") {
+                format!("{}.bin", stripped)
+            } else {
+                format!("{}.bin", file_path)
+            };
+
+            std::fs::write(&obj_file_path, &compiled_code)
+                .expect("Failed to write compiled code to file");
+            compiler_info!("Machine code written to: {}", obj_file_path);
+
+            match cli.emit {
+                EmitType::Obj => {
+                    if let Some(output) = cli.output {
+                        std::fs::copy(&obj_file_path, &output)
+                            .expect("Failed to copy object file");
+                        compiler_info!("Object file copied to: {}", output);
                     }
-                });
-                
-                std::fs::write(&output_path, clif_ir)
-                    .expect("Failed to write CLIF IR to file");
-                compiler_info!("CLIF IR written to: {}", output_path);
-            }
-            Err(e) => {
-                compiler_error!("CLIF generation failed: {}", e);
-                std::process::exit(1);
-            }
-        }
-    } else if cli.legacy_codegen {
-        // Legacy path: compile directly from the typed AST via the old CraneliftCompiler.
-        compiler_info!("Using legacy AST-based Cranelift backend");
-        match ir_lowering.lower_to_cranelift(&typeof_evaluated_program) {
-            Ok(compiled_code) => {
-                compiler_info!("Successfully compiled to machine code ({} bytes)", compiled_code.len());
+                }
+                EmitType::Exe => {
+                    let output_path = cli.output.unwrap_or_else(|| {
+                        Path::new(file_path).file_stem()
+                            .unwrap()
+                            .to_string_lossy()
+                            .to_string()
+                    });
 
-                let obj_file_path = if let Some(stripped) = file_path.strip_suffix(".err") {
-                    format!("{}.bin", stripped)
-                } else {
-                    format!("{}.bin", file_path)
-                };
-
-                std::fs::write(&obj_file_path, &compiled_code)
-                    .expect("Failed to write compiled code to file");
-                compiler_info!("Machine code written to: {}", obj_file_path);
-
-                match cli.emit {
-                    EmitType::Obj => {
-                        if let Some(output) = cli.output {
-                            std::fs::copy(&obj_file_path, &output)
-                                .expect("Failed to copy object file");
-                            compiler_info!("Object file copied to: {}", output);
-                        }
-                    }
-                    EmitType::Exe => {
-                        let output_path = cli.output.unwrap_or_else(|| {
-                            Path::new(file_path).file_stem()
-                                .unwrap()
-                                .to_string_lossy()
-                                .to_string()
-                        });
-                        if let Err(e) = link_object_file(&obj_file_path, &output_path, cli.arch) {
-                            compiler_error!("Error: {}", e);
-                            std::process::exit(1);
-                        }
+                    if let Err(e) = link_object_file(&obj_file_path, &output_path, cli.arch) {
+                        compiler_error!("Error: {}", e);
+                        std::process::exit(1);
                     }
                 }
             }
-            Err(e) => {
-                compiler_error!("Compilation failed: {}", e);
-                std::process::exit(1);
-            }
         }
-    } else {
-        // Compile via the new SIR-based Cranelift backend.
-        match ir_lowering.lower_sir_to_cranelift(&sir_module) {
-            Ok(compiled_code) => {
-                compiler_info!("Successfully compiled SIR to machine code ({} bytes)", compiled_code.len());
-                
-                // Determine object file path
-                let obj_file_path = if let Some(stripped) = file_path.strip_suffix(".err") {
-                    format!("{}.bin", stripped)
-                } else {
-                    format!("{}.bin", file_path)
-                };
-                
-                // Write the compiled code to object file
-                std::fs::write(&obj_file_path, &compiled_code)
-                    .expect("Failed to write compiled code to file");
-                compiler_info!("Machine code written to: {}", obj_file_path);
-                
-                // Handle linking based on emit type
-                match cli.emit {
-                    EmitType::Obj => {
-                        // Just output the object file, no linking needed
-                        if let Some(output) = cli.output {
-                            std::fs::copy(&obj_file_path, &output)
-                                .expect("Failed to copy object file");
-                            compiler_info!("Object file copied to: {}", output);
-                        }
-                    }
-                    EmitType::Exe => {
-                        // Link the object file to create executable
-                        let output_path = cli.output.unwrap_or_else(|| {
-                            Path::new(file_path).file_stem()
-                                .unwrap()
-                                .to_string_lossy()
-                                .to_string()
-                        });
-                        
-                        if let Err(e) = link_object_file(&obj_file_path, &output_path, cli.arch) {
-                            compiler_error!("Error: {}", e);
-                            std::process::exit(1);
-                        }
-                    }
-                }
-            }
-            Err(e) => {
-                compiler_error!("Compilation failed: {}", e);
-                std::process::exit(1);
-            }
+        Err(e) => {
+            compiler_error!("Compilation failed: {}", e);
+            std::process::exit(1);
         }
     }
 }

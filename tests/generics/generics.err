@@ -1,0 +1,65 @@
+foreign fn printf(fmt::Int):: Int
+
+struct Point<T>
+    x::T
+    y::T
+end
+
+struct Pair<A, B>
+    x::A
+    y::B
+end
+
+a::Point<Int> = Point(32, 32)
+printf("Point x: %d\n", a.x)
+
+p::Pair<Int, Int> = Pair(7, 8)
+printf("Pair x: %d\n", p.x)
+
+b::Pair<Int, Bool> = Pair(9, true)
+printf("Pair y: %d\n", b.y)
+
+c::Pair<Int, String> = Pair(10, "hello")
+printf("Pair y: %s\n", c.y)
+
++-- d::Pair<Int, Int> = Pair("hello", "world")
++-- printf("Pair y: %s\n", d.y)
+
+
++-- Options
+enum Option<T>
+    Some::T
+    None
+end
+
+a::Option<Int> = Option::Some(10)
+b::Option<Int> = Option::None
+
+match a 
+    Option::Some(x) -> printf("Some: %d\n", x)
+    Option::None -> printf("None\n")
+end
+
+match b 
+    Option::Some(x) -> printf("Some: %d\n", x)
+    Option::None -> printf("None\n")
+end
+
++-- Results
+enum Result<T, E>
+    Ok::T
+    Err::E
+end
+
+a::Result<Int, String> = Result::Ok(10)
+b::Result<Int, String> = Result::Err("error")
+
+match a 
+    Result::Ok(x) -> printf("Ok: %d\n", x)
+    Result::Err(e) -> printf("Err: %s\n", e)
+end 
+
+match b 
+    Result::Ok(x) -> printf("Ok: %d\n", x)
+    Result::Err(e) -> printf("Err: %s\n", e)
+end

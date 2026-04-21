@@ -4,6 +4,8 @@ use crate::backend::sir_lowering::SIRLoweringPass;
 use crate::backend::sir::SIRModule;
 use cranelift_codegen::ir::Function;
 
+// This is a wrapper for lowering IR to machine code.
+// The only up-to-date method is lower_sir_to_cranelift. Everything else is deprecated, or yet to be implemented.
 pub struct IRLoweringPass;
 
 impl IRLoweringPass {

@@ -24,16 +24,27 @@ pub fn compile_preir(program: &Program) -> Result<PreIR, String> {
                 };
                 ctx.emit_instruction(Instr::FuncDecl(func));
             }
-            Expression::StructDefinition { id, fields, .. } => {
+            Expression::StructDefinition {
+                id,
+                type_params,
+                fields,
+                ..
+            } => {
                let strct = StructData {
                     name: id.name.clone(),
+                    type_params: type_params.iter().map(|p| p.clone()).collect(),
                     fields: fields.clone(),
                 };
                 ctx.emit_instruction(Instr::StructDecl(strct));
             }
-            Expression::EnumDefinition { id, variants } => {
+            Expression::EnumDefinition {
+                id,
+                type_params,
+                variants,
+            } => {
                 let enum_data = EnumData {
                     name: id.name.clone(),
+                    type_params: type_params.iter().map(|p| p.clone()).collect(),
                     variants: variants.iter().map(|v| EnumVariantInfo {
                         name: v.name.clone(),
                         fields: v.fields.iter().map(|f| (f.id.name.clone(), f.field_type.clone())).collect(),
@@ -177,13 +188,14 @@ fn compile_expression(ctx: &mut PreIR, expr: &Expression) -> Result<instr_index,
             match operator {
                 BinaryOperator::Assignment => {
                     // Handle variable assignment
-                    if let Expression::Identifier { id, .. } = left.as_ref() {
+                    if let Expression::Identifier { id, type_expr } = left.as_ref() {
                         let value_idx = compile_expression(ctx, right)?;
                         
                         // Create or update variable declaration
                         let instr = Instr::VarDecl(VarDeclData {
                             name: id.name.clone(),
                             value: value_idx,
+                            declared_type: type_expr.clone(),
                         });
                         
                         // Return the value instruction index (assignments evaluate to their value)
@@ -205,6 +217,20 @@ fn compile_expression(ctx: &mut PreIR, expr: &Expression) -> Result<instr_index,
             }
         }
         Expression::FunctionCall { id, arguments } => {
+            // `typeof(arg)` is a built-in instruction, not a regular function
+            // call. Lower it to `Instr::Typeof` so it bypasses overload
+            // dispatch entirely; analysis and SIR generation handle it.
+            if id.name == "typeof" {
+                if arguments.len() != 1 {
+                    return Err(format!(
+                        "typeof expects exactly one argument, got {}",
+                        arguments.len()
+                    ));
+                }
+                let operand_idx = compile_expression(ctx, &arguments[0])?;
+                return Ok(ctx.emit_instruction(Instr::Typeof(operand_idx)));
+            }
+
             let mut arg_indices = Vec::new();
             for arg in arguments {
                 arg_indices.push(compile_expression(ctx, arg)?);
@@ -229,16 +255,26 @@ fn compile_expression(ctx: &mut PreIR, expr: &Expression) -> Result<instr_index,
             
             Ok(ctx.emit_instruction(func))
         }
-        Expression::StructDefinition { id, fields } => {
+        Expression::StructDefinition {
+            id,
+            type_params,
+            fields,
+        } => {
             let struct_data = Instr::StructDecl(StructData {
                 name: id.name.clone(),
+                type_params: type_params.iter().map(|p| p.clone()).collect(),
                 fields: fields.clone(),
             });
             Ok(ctx.emit_instruction(struct_data))
         }
-        Expression::EnumDefinition { id, variants } => {
+        Expression::EnumDefinition {
+            id,
+            type_params,
+            variants,
+        } => {
             let enum_data = Instr::EnumDecl(EnumData {
                 name: id.name.clone(),
+                type_params: type_params.iter().map(|p| p.clone()).collect(),
                 variants: variants.iter().map(|v| EnumVariantInfo {
                     name: v.name.clone(),
                     fields: v.fields.iter().map(|f| (f.id.name.clone(), f.field_type.clone())).collect(),
@@ -484,16 +520,13 @@ mod tests {
         // Get the formatted output to verify structure
         let formatted_output = preir.format_all();
         
-        // Verify the output contains expected elements
-        assert!(formatted_output.contains("PreIR Instructions:"));
+        // Verify the output contains expected elements (see `PreIR::format_all`).
         assert!(formatted_output.contains("%0"));
-        assert!(formatted_output.contains("PreIR Declarations:"));
-        assert!(formatted_output.contains("$0"));
         assert!(formatted_output.contains("Main:"));
         
-        // Check that we have variable declarations
-        assert!(formatted_output.contains("x: var"));
-        assert!(formatted_output.contains("y: var"));
+        // Check that we have variable declarations (`format_instruction` for VarDecl).
+        assert!(formatted_output.contains("var x ="));
+        assert!(formatted_output.contains("var y ="));
         
         // Print for manual verification
         println!("\n=== PreIR Formatting Test Output ===");

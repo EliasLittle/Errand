@@ -95,7 +95,10 @@ fn errand_type_to_string(ty: &ErrandType) -> String {
         ErrandType::Arrow(a, b) => format!("{} -> {}", errand_type_to_string(a), errand_type_to_string(b)),
         ErrandType::Forall(v, t) => format!("∀{}. {}", v, errand_type_to_string(t)),
         ErrandType::Product(ts) => ts.iter().map(errand_type_to_string).collect::<Vec<_>>().join(" × "),
-        ErrandType::Sum(ts) => ts.iter().map(errand_type_to_string).collect::<Vec<_>>().join(" + "),
+        ErrandType::App(h, args) => {
+            let parts: Vec<String> = args.iter().map(errand_type_to_string).collect();
+            format!("{}<{}>", errand_type_to_string(h), parts.join(", "))
+        }
     }
 }
 

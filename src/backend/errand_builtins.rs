@@ -1,5 +1,6 @@
 use std::collections::HashMap;
 use crate::backend::worklist::ErrandType;
+use crate::frontend::ast::{GenericArg, TypeExpression};
 
 /// Add built-in data constructors to the type inference context
 /// 
@@ -76,6 +77,34 @@ pub fn add_builtin_functions() -> HashMap<String, ErrandType> {
         ),
     );
 
+    // strlen :: String -> Int
+    // Injected by `printf` lowering (see frontend/lower.rs) when computing the
+    // size of the format string buffer to allocate. The Errand type system must
+    // know about it, otherwise downstream analysis (e.g. annotated var decls
+    // whose RHS contains the lowered call chain) will fail with
+    // UnboundVariable.
+    function_types.insert(
+        "strlen".to_string(),
+        ErrandType::Arrow(
+            Box::new(ErrandType::Con("String".to_string())),
+            Box::new(ErrandType::Con("Int".to_string())),
+        ),
+    );
+
+    // strcpy :: String -> String -> Int
+    // Also injected by `printf` lowering to copy the format string into the
+    // freshly malloc'd buffer.
+    function_types.insert(
+        "strcpy".to_string(),
+        ErrandType::Arrow(
+            Box::new(ErrandType::Con("String".to_string())),
+            Box::new(ErrandType::Arrow(
+                Box::new(ErrandType::Con("String".to_string())),
+                Box::new(ErrandType::Con("Int".to_string())),
+            )),
+        ),
+    );
+
     // getfield :: (struct_instance, field_symbol, struct_type) -> field_type
     // Struct instance can be any struct; symbols are String in the type system
     function_types.insert(
@@ -113,18 +142,43 @@ pub fn add_builtin_functions() -> HashMap<String, ErrandType> {
     function_types
 }
 
-/// Convert from Errand's frontend TypeExpression to ErrandType for inference
-pub fn type_expr_to_errand_type(type_expr: &crate::frontend::ast::TypeExpression) -> ErrandType {
+/// Convert from Errand's frontend TypeExpression to ErrandType for inference.
+pub fn type_expr_to_errand_type(type_expr: &TypeExpression) -> ErrandType {
+    type_expr_to_errand_type_with_params(type_expr, &[])
+}
+
+// TODO: This should return more than just ErrandType::Con
+// Structs should be ErrandType::Product, Enums ErrandType::Sum
+// Parametric types should be ErrandType::Forall
+/// Like [`type_expr_to_errand_type`], but names in `type_params` map to [`ErrandType::Var`].
+pub fn type_expr_to_errand_type_with_params(
+    type_expr: &TypeExpression,
+    type_params: &[String],
+) -> ErrandType {
     match type_expr {
-        crate::frontend::ast::TypeExpression::Int => ErrandType::Con("Int".to_string()),
-        crate::frontend::ast::TypeExpression::Int32 => ErrandType::Con("Int32".to_string()),
-        crate::frontend::ast::TypeExpression::Float => ErrandType::Con("Float".to_string()),
-        crate::frontend::ast::TypeExpression::Bool => ErrandType::Con("Bool".to_string()),
-        crate::frontend::ast::TypeExpression::String => ErrandType::Con("String".to_string()),
-        crate::frontend::ast::TypeExpression::Void => ErrandType::Con("Unit".to_string()),
-        crate::frontend::ast::TypeExpression::Struct(id, _fields) => {
-            // For now, treat structs as opaque types with their name
-            ErrandType::Con(id.name.clone())
+        TypeExpression::Int => ErrandType::Con("Int".to_string()),
+        TypeExpression::Int32 => ErrandType::Con("Int32".to_string()),
+        TypeExpression::Float => ErrandType::Con("Float".to_string()),
+        TypeExpression::Bool => ErrandType::Con("Bool".to_string()),
+        TypeExpression::String => ErrandType::Con("String".to_string()),
+        TypeExpression::Void => ErrandType::Con("Unit".to_string()),
+        TypeExpression::Struct(id, inner, generic_args) => {
+            if type_params.iter().any(|p| p == &id.name) {
+                return ErrandType::Var(id.name.clone());
+            }
+            if let Some(args) = generic_args {
+                let arg_tys: Vec<ErrandType> = args
+                    .iter()
+                    .map(|ga| match ga {
+                        GenericArg::Type(t) => type_expr_to_errand_type_with_params(t, type_params),
+                    })
+                    .collect();
+                ErrandType::App(Box::new(ErrandType::Con(id.name.clone())), arg_tys)
+            } else if inner.is_some() {
+                ErrandType::Con(id.name.clone())
+            } else {
+                ErrandType::Con(id.name.clone())
+            }
         }
     }
 }

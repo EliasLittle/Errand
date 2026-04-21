@@ -16,7 +16,7 @@ impl Program {
         //       being eliminated (per AGENTS.md).
         let mut enum_names: HashMap<String, Vec<String>> = HashMap::new();
         for expr in &self.expressions {
-            if let Expression::EnumDefinition { id, variants } = expr {
+            if let Expression::EnumDefinition { id, variants, .. } = expr {
                 let variant_list: Vec<String> =
                     variants.iter().map(|v| v.name.clone()).collect();
                 enum_names.insert(id.name.clone(), variant_list);
@@ -26,7 +26,12 @@ impl Program {
         // 2. Find all struct definitions and generate constructor functions
         let mut constructor_functions = Vec::new();
         for expr in &self.expressions {
-            if let Expression::StructDefinition { id, fields } = expr {
+            if let Expression::StructDefinition {
+                id,
+                fields,
+                type_params,
+            } = expr
+            {
                 // Build parameter list from fields
                 let parameters: Vec<Parameter> = fields.iter().map(|f| Parameter {
                     id: f.id.clone(),
@@ -42,11 +47,27 @@ impl Program {
                     id: Id { name: "new".to_string() },
                     arguments: new_args,
                 }))));
+                let return_type_expr = if type_params.is_empty() {
+                    Some(TypeExpression::Struct(id.clone(), None, None))
+                } else {
+                    let gen_args: Vec<GenericArg> = type_params
+                        .iter()
+                        .map(|t| {
+                            // TODO: This should be recursive in some sense. These arguments could also have generic parameters.
+                            GenericArg::Type(TypeExpression::Struct(
+                                t.clone(),
+                                None,
+                                None,
+                            ))
+                        })
+                        .collect();
+                    Some(TypeExpression::Struct(id.clone(), None, Some(gen_args)))
+                };
                 let constructor = Expression::FunctionDefinition {
                     id: id.clone(),
                     parameters: parameters.clone(),
                     body: body,
-                    return_type_expr: Some(TypeExpression::Struct(id.clone(), None)),
+                    return_type_expr,
                     foreign: false,
                 };
                 constructor_functions.push(constructor);
@@ -306,7 +327,7 @@ fn recognize_enum_variants(
     match expr {
         Expression::Identifier {
             ref id,
-            type_expr: Some(TypeExpression::Struct(ref variant_id, None)),
+            type_expr: Some(TypeExpression::Struct(ref variant_id, None, None)),
         } if enum_names.contains_key(&id.name) => {
             let variants = &enum_names[&id.name];
             if variants.contains(&variant_id.name) {

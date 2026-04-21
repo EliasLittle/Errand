@@ -1,3 +1,5 @@
+use std::collections::HashMap;
+
 use crate::backend::preir::{Instr, instr_index};
 
 /// Type inference for Errand's PreIR using the DK Worklist Algorithm.
@@ -22,8 +24,8 @@ pub enum ErrandType {
     Forall(String, Box<ErrandType>),
     /// Product type: T1 × T2 × …
     Product(Vec<ErrandType>),
-    /// Sum type: T1 + T2 + …
-    Sum(Vec<ErrandType>),
+    /// Type application: `F<T1, T2, …>` (e.g. `Option` applied to `Int`).
+    App(Box<ErrandType>, Vec<ErrandType>),
 }
 
 /// An entry in the constraint-solving worklist.
@@ -54,8 +56,12 @@ pub enum Judgment {
     Inf { instr: Instr, ty: ErrandType },
     /// Checking mode: verify `instr` has type `ty`
     Chk { instr: Instr, ty: ErrandType },
-    /// Instruction-sequence typing (placeholder for future use)
-    InstrSeq { instrs: Vec<instr_index>, ty: ErrandType },
+    /// Application inference: `func_ty • arg` yields `result_ty` (DK algorithm).
+    InfApp {
+        func_ty: ErrandType,
+        arg_idx: instr_index,
+        result_ty: ErrandType,
+    },
 }
 
 // ─── Worklist ─────────────────────────────────────────────────────────────────
@@ -64,6 +70,8 @@ pub enum Judgment {
 pub struct Worklist {
     entries: Vec<WorklistEntry>,
     next_var: usize,
+    /// Latest solution for each existential (survives after the solve loop pops `TVar` entries).
+    pub evar_bindings: HashMap<String, ErrandType>,
 }
 
 impl Default for Worklist {
@@ -74,7 +82,51 @@ impl Default for Worklist {
 
 impl Worklist {
     pub fn new() -> Self {
-        Worklist { entries: Vec::new(), next_var: 0 }
+        Worklist {
+            entries: Vec::new(),
+            next_var: 0,
+            evar_bindings: HashMap::new(),
+        }
+    }
+
+    /// Substitute solved existential variables (one level; call in a loop for fixpoint).
+    pub fn expand_type_shallow(&self, ty: &ErrandType) -> ErrandType {
+        match ty {
+            ErrandType::ETVar(n) => self
+                .evar_bindings
+                .get(n)
+                .cloned()
+                .unwrap_or_else(|| ty.clone()),
+            ErrandType::Arrow(a, b) => ErrandType::Arrow(
+                Box::new(self.expand_type_shallow(a)),
+                Box::new(self.expand_type_shallow(b)),
+            ),
+            ErrandType::App(h, args) => ErrandType::App(
+                Box::new(self.expand_type_shallow(h)),
+                args.iter().map(|t| self.expand_type_shallow(t)).collect(),
+            ),
+            ErrandType::Forall(v, b) => ErrandType::Forall(
+                v.clone(),
+                Box::new(self.expand_type_shallow(b)),
+            ),
+            ErrandType::Product(ts) => ErrandType::Product(
+                ts.iter().map(|t| self.expand_type_shallow(t)).collect(),
+            ),
+            ErrandType::Var(_) | ErrandType::Con(_) => ty.clone(),
+        }
+    }
+
+    /// Expand evar bindings until fixpoint.
+    pub fn expand_type(&self, ty: &ErrandType) -> ErrandType {
+        let mut cur = ty.clone();
+        for _ in 0..64 {
+            let next = self.expand_type_shallow(&cur);
+            if next == cur {
+                return cur;
+            }
+            cur = next;
+        }
+        cur
     }
 
     pub fn fresh_var(&mut self) -> TyVar {
@@ -115,6 +167,7 @@ impl Worklist {
                 if var_name == name {
                     match kind {
                         TyVarKind::Existential => {
+                            self.evar_bindings.insert(var_name.clone(), ty.clone());
                             *kind = TyVarKind::Solved(ty);
                             return Ok(());
                         }
