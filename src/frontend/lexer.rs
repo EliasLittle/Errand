@@ -297,7 +297,7 @@ impl Lexer {
     }
 
     fn read_block_comment(&mut self) -> Result<Token, String> {
-        let span = tracing::debug_span!(
+        let span = tracing::trace_span!(
             "lexer.read_block_comment",
             line = self.line,
             column = self.column
@@ -315,8 +315,13 @@ impl Lexer {
         // Read the header
         while self.peek_n(3) != ['-', '-', '+'] {
             if self.current_char == '\n' || self.current_char == '\0' {
-                tracing::debug!(%header, "block comment: header incomplete before newline/EOF");
-                tracing::debug!(current = %self.current_char, "block comment: lexer position");
+                tracing::warn!(
+                    %header,
+                    line = self.line,
+                    column = self.column,
+                    at = %self.current_char,
+                    "invalid block comment: header not terminated"
+                );
                 return Err("Invalid block comment: header not properly terminated.".to_string());
             }
             header.push(self.current_char);
@@ -381,7 +386,7 @@ impl Lexer {
 
     fn read_comment(&mut self) -> Result<Token, String> {
         let is_block = self.is_block_comment();
-        let span = tracing::debug_span!(
+        let span = tracing::trace_span!(
             "lexer.read_comment",
             line = self.line,
             column = self.column,
@@ -475,7 +480,7 @@ impl Lexer {
 
     fn read_string(&mut self) -> Result<Token, String> {
         let span =
-            tracing::debug_span!("lexer.read_string", line = self.line, column = self.column);
+            tracing::trace_span!("lexer.read_string", line = self.line, column = self.column);
         let _guard = span.enter();
 
         let start_line = self.line;
@@ -647,8 +652,6 @@ impl Lexer {
         let span = tracing::info_span!("lexer.lex", file = %file_path);
         let _guard = span.enter();
 
-        tracing::debug!("lex: start");
-
         // Reset scan position (buffer unchanged; `lex` may be called again).
         self.current = 0;
         self.line = 1;
@@ -686,11 +689,9 @@ impl Lexer {
         Ok(tokens)
     }
 
+    /// Debug helper: not used on the normal compile path; only traces when called.
     pub fn print_tokens(&self, tokens: &[Token]) {
-        let span = tracing::debug_span!("lexer.print_tokens", count = tokens.len());
-        let _guard = span.enter();
-
-        tracing::debug!("print_tokens: start");
+        let _span = tracing::trace_span!("lexer.print_tokens", count = tokens.len()).entered();
         for token in tokens {
             tracing::trace!(token = %token, "print_tokens");
         }

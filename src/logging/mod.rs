@@ -234,7 +234,7 @@ macro_rules! lexer_log {
 #[macro_export]
 macro_rules! parser_log {
     ($($arg:tt)*) => {
-        log::log!(target: "parser", log::Level::Debug, $($arg)*);
+        tracing::trace!(target: "parser", $($arg)*);
     };
 }
 

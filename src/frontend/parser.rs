@@ -3,7 +3,6 @@ use super::ast::{
     MatchPattern, Parameter, Program, TypeExpression, UnaryOperator,
 };
 use super::lexer::{token_type, Token, TokenType};
-use crate::parser_log;
 use std::iter::Peekable;
 use std::vec::IntoIter;
 
@@ -29,25 +28,33 @@ impl Parser {
 
     /// Core parsing function that returns a Program AST
     pub fn parse(&mut self) -> Result<Program, Vec<String>> {
+        let _span = tracing::debug_span!(target: "parser", "parser.parse_program").entered();
         let mut expressions = Vec::new();
 
         while !self.at_end() {
-            parser_log!("------ Parsing new top level expression ------");
             match self.parse_expression() {
                 Ok(expr) => expressions.push(expr),
                 Err(e) => {
-                    parser_log!("Error: {:?}", &e);
+                    tracing::trace!(target: "parser", error = %e, "top-level statement parse error");
                     self.errors.push(e);
                     //self.synchronize(); // Error recovery
                 }
             }
         }
-        parser_log!("------ End of parsing ------");
 
         if self.errors.is_empty() {
+            tracing::debug!(
+                target: "parser",
+                top_level = expressions.len(),
+                "parse succeeded"
+            );
             Ok(Program { expressions })
         } else {
-            parser_log!("------ Errors found ------");
+            tracing::debug!(
+                target: "parser",
+                errors = self.errors.len(),
+                "parse failed"
+            );
             Err(self.errors.clone())
         }
     }
@@ -104,9 +111,9 @@ impl Parser {
     /// Returns the token if it matches the expected type, otherwise returns an error
     /// Used for tokens like identifiers, keywords, etc.
     fn expect(&mut self, token_type: &TokenType) -> Result<Token, String> {
-        parser_log!("Expecting {:?}", token_type);
+        tracing::trace!(target: "parser","Expecting {:?}", token_type);
         if let Some(token) = self.bump() {
-            parser_log!("Expecting| actual token:{:?}", token);
+            tracing::trace!(target: "parser","Expecting| actual token:{:?}", token);
             if token.var() == token_type.var() {
                 Ok(token)
             } else {
@@ -116,7 +123,7 @@ impl Parser {
                 ))
             }
         } else {
-            parser_log!("Unexpected end of input");
+            tracing::trace!(target: "parser","Unexpected end of input");
             Err("Unexpected end of input".to_string())
         }
     }
@@ -124,7 +131,7 @@ impl Parser {
     /// Parse expressions (functions, structs, if statements, for statements, return statements)
     /// TODO: Change to parse_statement()
     pub fn parse_expression(&mut self) -> Result<Expression, String> {
-        parser_log!("Parsing expression| current:{:?}", self.current_type());
+        tracing::trace!(target: "parser","Parsing expression| current:{:?}", self.current_type());
         let result = match self.current_type() {
             Some(TokenType::Foreign) => self.function(),
             Some(TokenType::Function) => self.function(),
@@ -151,7 +158,7 @@ impl Parser {
             }
             None => Err("No current token".to_string()),
         };
-        parser_log!("Parsing expression| result:{:?}", result);
+        tracing::trace!(target: "parser","Parsing expression| result:{:?}", result);
         let mut at_newline = self.eat(&TokenType::Newline);
         while at_newline {
             at_newline = self.eat(&TokenType::Newline);
@@ -166,20 +173,19 @@ impl Parser {
         lhs: Expression,
         min_precedence: i32,
     ) -> Result<Expression, String> {
-        parser_log!("Parsing expression 1| Starting -------------------");
-        parser_log!(
-            "Parsing expression 1| lhs:{:?}, current:{:?}",
-            lhs,
-            self.current_type()
+        tracing::trace!(
+            target: "parser",
+            lhs = ?lhs,
+            current = ?self.current_type(),
+            "parse_expression_1"
         );
         let mut level_lhs = lhs;
         while let Some(current) = self.current_type() {
             if !current.is_infix() {
-                parser_log!("No infix operator found");
                 break;
             }
             if !(current.precedence()? >= min_precedence) {
-                parser_log!(
+                tracing::trace!(target: "parser",
                     "Parsing expression 1| precedence:{:?} < {:?}",
                     current.precedence(),
                     min_precedence
@@ -188,13 +194,13 @@ impl Parser {
             }
             let op = self.bump().ok_or("No operator found".to_string())?;
             let op_precedence = op.precedence()?;
-            parser_log!(
+            tracing::trace!(target: "parser",
                 "Parsing expression 1| op:{:?}, op_precedence:{:?}",
                 op,
                 op_precedence
             );
             let mut rhs = self.primary()?;
-            parser_log!("Parsing expression 1| rhs:{:?}", rhs);
+            tracing::trace!(target: "parser","Parsing expression 1| rhs:{:?}", rhs);
 
             // Handle operator precedence and associativity
             while let Some(next) = self.current_type() {
@@ -202,16 +208,16 @@ impl Parser {
                     // No infix operator found, break
                     break;
                 }
-                parser_log!("Parsing expression 1| next op:{:?}", next);
+                tracing::trace!(target: "parser","Parsing expression 1| next op:{:?}", next);
                 let precedence = next.precedence()?;
                 if precedence > op_precedence {
-                    parser_log!(
+                    tracing::trace!(target: "parser",
                         "Parsing expression 1| left associative precedence:{:?}",
                         op_precedence + 1
                     );
                     rhs = self.parse_expression_1(rhs.clone(), op_precedence + 1)?;
                 } else if precedence == op_precedence && next.is_right_associative() {
-                    parser_log!(
+                    tracing::trace!(target: "parser",
                         "Parsing expression 1| right associative precedence:{:?}",
                         op_precedence
                     );
@@ -221,7 +227,7 @@ impl Parser {
                 }
             }
 
-            parser_log!(
+            tracing::trace!(target: "parser",
                 "Applying infix operator: {:?} {:?} {:?}",
                 level_lhs,
                 op.token_type,
@@ -230,7 +236,6 @@ impl Parser {
             level_lhs = self.apply_infix_operator(level_lhs.clone(), &op, rhs.clone())?;
         }
 
-        parser_log!("Parsing expression 1| End of expression 1");
         // Don't consume newlines here - let the caller handle it
         Ok(level_lhs) // Return the final expression as a clone
     }
@@ -344,7 +349,7 @@ impl Parser {
     /// prefix -> call -> literal
     /// primary ::= '-' inner_primary | '!' inner_primary
     fn primary(&mut self) -> Result<Expression, String> {
-        parser_log!("Parsing primary| current:{:?}", self.current_type());
+        tracing::trace!(target: "parser","Parsing primary| current:{:?}", self.current_type());
         let prefix_op = self.check_prefix_operator();
 
         let inner_primary = self.inner_primary()?;
@@ -361,7 +366,7 @@ impl Parser {
 
     /// inner_primary ::= call | literal
     fn inner_primary(&mut self) -> Result<Expression, String> {
-        parser_log!("Parsing inner primary| current:{:?}", self.current_type());
+        tracing::trace!(target: "parser","Parsing inner primary| current:{:?}", self.current_type());
         match self.current_type() {
             Some(TokenType::Colon) => self.symbol(),
             Some(TokenType::LParen) => self.parenthesized_expression(),
@@ -379,7 +384,7 @@ impl Parser {
     }
 
     fn check_prefix_operator(&mut self) -> Option<UnaryOperator> {
-        parser_log!(
+        tracing::trace!(target: "parser",
             "Checking prefix operator| current:{:?}",
             self.current_type()
         );
@@ -399,13 +404,13 @@ impl Parser {
     /// Parse parenthesized expressions
     /// Does not allow
     fn parenthesized_expression(&mut self) -> Result<Expression, String> {
-        parser_log!(
+        tracing::trace!(target: "parser",
             "Parsing parenthesized expression| current:{:?}",
             self.current_type()
         );
         self.expect(&TokenType::LParen)?;
         let primary_expr = self.primary()?; // Store the result of primary
-        parser_log!("Parenthesized | primary expression: {:?}", primary_expr);
+        tracing::trace!(target: "parser","Parenthesized | primary expression: {:?}", primary_expr);
         let expression = self.parse_expression_1(primary_expr, 0)?; // Use the stored result
         self.expect(&TokenType::RParen)?;
         Ok(expression)
@@ -414,7 +419,7 @@ impl Parser {
     /// identifier ::= IDENTIFIER(::Type) | IDENTIFIER '(' parameters ')' (call) | IDENTIFIER.IDENTIFIER (field access)
     /// Also handles enum variant construction: `EnumName::Variant(args)`
     fn identifier(&mut self) -> Result<Expression, String> {
-        parser_log!("Parsing identifier| current:{:?}", self.current_type());
+        tracing::trace!(target: "parser","Parsing identifier| current:{:?}", self.current_type());
         let id = self.id()?;
 
         if self.eat(&TokenType::TypeDef) {
@@ -423,7 +428,7 @@ impl Parser {
 
             if self.eat(&TokenType::LParen) {
                 // `Name::Variant(args)` — enum variant construction with positional args.
-                parser_log!("Enum variant construction");
+                tracing::trace!(target: "parser","Enum variant construction");
                 let args = self.arguments()?;
                 self.expect(&TokenType::RParen)?;
                 Ok(Expression::EnumVariantConstruct {
@@ -433,7 +438,7 @@ impl Parser {
                 })
             } else {
                 // `Name::Type` or `Name::Foo<Int>` — type annotation.
-                parser_log!("Identifier with type annotation");
+                tracing::trace!(target: "parser","Identifier with type annotation");
                 let gen = if self.eat(&TokenType::LessThan) {
                     Some(self.generic_type_args()?)
                 } else {
@@ -446,7 +451,7 @@ impl Parser {
             }
         } else if self.eat(&TokenType::LParen) {
             // `Name(args)` - function call with arguments
-            parser_log!("Function call");
+            tracing::trace!(target: "parser","Function call");
             let parameters = self.arguments()?;
             self.expect(&TokenType::RParen)?;
             Ok(Expression::FunctionCall {
@@ -454,7 +459,7 @@ impl Parser {
                 arguments: parameters,
             })
         } else {
-            parser_log!("Identifier");
+            tracing::trace!(target: "parser","Identifier");
             Ok(Expression::Identifier {
                 id,
                 type_expr: None,
@@ -476,14 +481,14 @@ impl Parser {
         match self.expect(&token_type("Identifier")?)?.token_type {
             TokenType::Identifier(id_str) => Ok(Id { name: id_str }),
             _ => {
-                parser_log!("Expected identifier! found: {:?}", self.current_type());
+                tracing::trace!(target: "parser","Expected identifier! found: {:?}", self.current_type());
                 Err("Expected identifier".to_string())
             }
         }
     }
 
     fn type_expr(&mut self) -> Result<TypeExpression, String> {
-        parser_log!("Parsing type expression| current:{:?}", self.current_type());
+        tracing::trace!(target: "parser","Parsing type expression| current:{:?}", self.current_type());
 
         let id = self.id()?; // Parse the base identifier
         if self.eat(&TokenType::LBrace) {
@@ -545,7 +550,7 @@ impl Parser {
 
     /// Parse literals (String, int, float, boolean)
     fn literal(&mut self, token_type: &TokenType) -> Result<Expression, String> {
-        parser_log!(
+        tracing::trace!(target: "parser",
             "Parsing literal| current:{:?} expected:{:?}",
             self.current_type(),
             token_type
@@ -564,7 +569,7 @@ impl Parser {
     /// Parse function definitions
     /// Currently only supports standard block function definitions
     fn function(&mut self) -> Result<Expression, String> {
-        parser_log!("Parsing function| current:{:?}", self.current_type());
+        tracing::trace!(target: "parser","Parsing function| current:{:?}", self.current_type());
         let mut foreign = false;
         if self.eat(&TokenType::Foreign) {
             foreign = true;
@@ -592,7 +597,7 @@ impl Parser {
             self.expect(&TokenType::Newline)?; // TODO: Change to or '=' to support inline functions
             let body = self.block()?;
             self.expect(&TokenType::End)?;
-            parser_log!("Parsing function| End of function");
+            tracing::trace!(target: "parser","Parsing function| End of function");
             self.expect(&TokenType::Newline); // Should these be eats or expects?
             Ok(Expression::FunctionDefinition {
                 id,
@@ -611,7 +616,7 @@ impl Parser {
     // end
     /// Parse struct definitions
     fn structure(&mut self) -> Result<Expression, String> {
-        parser_log!("Parsing structure| current:{:?}", self.current_type());
+        tracing::trace!(target: "parser","Parsing structure| current:{:?}", self.current_type());
         self.expect(&TokenType::Struct)?;
         let id = self.id()?;
         let type_params = if self.eat(&TokenType::LessThan) {
@@ -637,7 +642,7 @@ impl Parser {
     /// Parse enum definitions.
     /// Each variant is a bare identifier on its own line.
     fn enum_def(&mut self) -> Result<Expression, String> {
-        parser_log!("Parsing enum| current:{:?}", self.current_type());
+        tracing::trace!(target: "parser","Parsing enum| current:{:?}", self.current_type());
         self.expect(&TokenType::Enum)?;
         let id = self.id()?;
         let type_params = if self.eat(&TokenType::LessThan) {
@@ -663,7 +668,7 @@ impl Parser {
     ///   `Write::String`           → single-type variant; field auto-named _0
     ///   `Point::{x::Int, y::Int}` → struct variant with named fields
     fn enum_variants(&mut self) -> Result<Vec<EnumVariant>, String> {
-        parser_log!("Parsing enum variants| current:{:?}", self.current_type());
+        tracing::trace!(target: "parser","Parsing enum variants| current:{:?}", self.current_type());
         let mut variants = Vec::new();
         while self.at(&token_type("Identifier")?) {
             let id = self.id()?;
@@ -754,13 +759,12 @@ impl Parser {
 
     /// Parse expressions until 'END' token
     fn block(&mut self) -> Result<Expression, String> {
-        parser_log!("Parsing block| Starting block: {:?}", self.current_type());
+        tracing::trace!(target: "parser","Parsing block| Starting block: {:?}", self.current_type());
         let mut expressions = Vec::new();
         while !self.at(&TokenType::End) {
-            parser_log!("Parsing block| not end: {:?}", self.current_type());
             expressions.push(Box::new(self.parse_expression()?));
         }
-        parser_log!("Parsing block| End of block");
+        tracing::trace!(target: "parser","Parsing block| End of block");
         Ok(Expression::Block(expressions))
     }
 
@@ -768,7 +772,7 @@ impl Parser {
 
     /// Parse expressions until 'RParen' token
     fn parameters(&mut self) -> Result<Vec<Parameter>, String> {
-        parser_log!("Parsing parameters| current:{:?}", self.current_type());
+        tracing::trace!(target: "parser","Parsing parameters| current:{:?}", self.current_type());
         let mut parameters = Vec::new();
         while !self.at(&TokenType::RParen) {
             let id = self.id()?;
@@ -795,7 +799,7 @@ impl Parser {
     /// Parse field definitions
     /// id::type
     fn field_parameters(&mut self) -> Result<Vec<FieldDefinition>, String> {
-        parser_log!(
+        tracing::trace!(target: "parser",
             "Parsing field parameters| current:{:?}",
             self.current_type()
         );
@@ -813,7 +817,7 @@ impl Parser {
 
     /// Parse arguments of a function call
     fn arguments(&mut self) -> Result<Vec<Expression>, String> {
-        parser_log!("Parsing arguments| current:{:?}", self.current_type());
+        tracing::trace!(target: "parser","Parsing arguments| current:{:?}", self.current_type());
         let mut arguments = Vec::new();
         while !self.at(&TokenType::RParen) {
             let primary_expr = self.primary()?; // Store the result of primary
@@ -830,7 +834,7 @@ impl Parser {
     /// TODO: Support both block and inline if statements
     /// inline should be within parse_expression_1() and blocks should be within parse_expression()
     fn if_statement(&mut self) -> Result<Expression, String> {
-        parser_log!("Parsing if statement| current:{:?}", self.current_type());
+        tracing::trace!(target: "parser","Parsing if statement| current:{:?}", self.current_type());
         self.expect(&TokenType::If)?;
         let condition = self.parse_expression()?;
         self.eat(&TokenType::Newline); // Keep as eat to support inline
@@ -869,7 +873,7 @@ impl Parser {
     /// end
     /// ```
     fn match_expr(&mut self) -> Result<Expression, String> {
-        parser_log!(
+        tracing::trace!(target: "parser",
             "Parsing match expression| current:{:?}",
             self.current_type()
         );
@@ -897,7 +901,7 @@ impl Parser {
     /// - `EnumName::Variant`          → EnumVariant with no bindings
     /// - `EnumName::Variant(x, y)`    → EnumVariant with positional bindings
     fn match_pattern(&mut self) -> Result<MatchPattern, String> {
-        parser_log!("Parsing match pattern| current:{:?}", self.current_type());
+        tracing::trace!(target: "parser","Parsing match pattern| current:{:?}", self.current_type());
         // Wildcard
         if let Some(TokenType::Identifier(name)) = self.current_type() {
             if name == "_" {
@@ -931,17 +935,16 @@ impl Parser {
     }
 
     fn while_statement(&mut self) -> Result<Expression, String> {
-        parser_log!("Parsing while statement| current:{:?}", self.current_type());
+        tracing::trace!(target: "parser","Parsing while statement| current:{:?}", self.current_type());
         self.expect(&TokenType::While)?;
         let primary_expr = self.primary()?;
         let condition = self.parse_expression_1(primary_expr, 0)?;
-        parser_log!("Parsing while statement| condition:{:?}", condition);
+        tracing::trace!(target: "parser","Parsing while statement| condition:{:?}", condition);
         self.eat(&TokenType::Newline); // parse_expression_1() eats the newline
-        parser_log!("Parsing while statement| newline");
         let body = self.block()?;
         self.eat(&TokenType::Newline);
         self.expect(&TokenType::End)?;
-        parser_log!("Parsing while statement| body:{:?}", body);
+        tracing::trace!(target: "parser","Parsing while statement| body:{:?}", body);
         Ok(Expression::While {
             condition: Box::new(condition),
             body: Box::new(body),
@@ -949,7 +952,7 @@ impl Parser {
     }
 
     fn for_statement(&mut self) -> Result<Expression, String> {
-        parser_log!("Parsing for statement| current:{:?}", self.current_type());
+        tracing::trace!(target: "parser","Parsing for statement| current:{:?}", self.current_type());
         self.expect(&TokenType::For)?;
         let iterator = self.id()?;
         self.expect(&TokenType::In)?;
@@ -965,7 +968,7 @@ impl Parser {
     }
 
     fn return_statement(&mut self) -> Result<Expression, String> {
-        parser_log!(
+        tracing::trace!(target: "parser",
             "Parsing return statement| current:{:?}",
             self.current_type()
         );
@@ -973,12 +976,12 @@ impl Parser {
         let primary_expr = self.primary()?; // Store the result of primary
         let value = self.parse_expression_1(primary_expr, 0)?;
         self.eat(&TokenType::Newline);
-        parser_log!("Parsing return statement| end of return");
+        tracing::trace!(target: "parser","Parsing return statement| end of return");
         Ok(Expression::Return(Some(Box::new(value))))
     }
 
     fn print_statement(&mut self) -> Result<Expression, String> {
-        parser_log!("Parsing print statement| current:{:?}", self.current_type());
+        tracing::trace!(target: "parser","Parsing print statement| current:{:?}", self.current_type());
         self.expect(&TokenType::Print)?;
         let primary_expr = self.primary()?;
         let value = self.parse_expression_1(primary_expr, 0)?;
