@@ -1,5 +1,7 @@
 //use crate::frontend::lexer::TokenType;
 
+use std::fmt;
+
 #[derive(Debug, Clone)]
 pub enum Expression {
     Int(i64),
@@ -243,204 +245,223 @@ impl TypeExpression {
     }
 }
 
-use std::fmt;
+/// Renders `struct Foo<T, U>` / `enum Bar<T>` style angle brackets, or `""` if empty.
+fn fmt_type_params(type_params: &[Id]) -> String {
+    if type_params.is_empty() {
+        return String::new();
+    }
+    let names: Vec<String> = type_params.iter().map(|p| p.name.clone()).collect();
+    format!("<{}>", names.join(", "))
+}
 
 impl fmt::Display for Expression {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
-        match self {
-            Expression::Int(n) => write!(f, "{}::Int", n),
-            Expression::Float(n) => write!(f, "{}::Float", n),
-            Expression::Boolean(b) => write!(f, "{}::Bool", b),
-            Expression::String(s) => write!(f, "\"{}\"::String", s),
-            Expression::Symbol(s) => write!(f, ":{}", s),
-            Expression::Identifier { id, type_expr } => match type_expr {
-                Some(type_expr) => write!(f, "{}::{}", id.name, type_expr.name()),
-                None => write!(f, "{}::Any", id.name),
-            },
-            Expression::UnaryOp { operator, operand } => write!(f, "({:?} {})", operator, operand),
-            Expression::BinaryOp {
-                operator,
-                left,
-                right,
-            } => write!(f, "({} {:?} {})", left, operator, right),
-            Expression::FunctionCall { id, arguments } => {
-                let args: Vec<String> = arguments.iter().map(|arg| format!("{}", arg)).collect();
-                write!(f, "{}({})", id.name, args.join(", "))
-            }
-            Expression::FunctionDefinition {
-                id,
-                parameters,
-                body,
-                return_type_expr,
-                foreign,
-            } => {
-                let params: Vec<String> = parameters
-                    .iter()
-                    .map(|param| format!("{}", param))
-                    .collect();
-                let body_str = format!("{}", *body);
-                let fn_kw = if *foreign { "foreign fn" } else { "fn" };
-                match return_type_expr {
-                    Some(return_type_expr) => write!(
-                        f,
-                        "{} {}({}) -> {} {{ {} }}",
-                        fn_kw,
-                        id.name,
-                        params.join(", "),
-                        return_type_expr.name(),
-                        body_str
-                    ),
-                    None => write!(
-                        f,
-                        "{} {}({}) {{ {} }}",
-                        fn_kw,
-                        id.name,
-                        params.join(", "),
-                        body_str
-                    ),
-                }
-            }
-            Expression::StructDefinition {
-                id,
-                fields,
-                type_params,
-            } => {
-                let fields_str: Vec<String> = fields
-                    .iter()
-                    .map(|field| format!("{}", field.id.name))
-                    .collect();
-                let tp = if type_params.is_empty() {
-                    String::new()
-                } else {
-                    format!(
-                        "<{}>",
-                        type_params
-                            .iter()
-                            .map(|p| p.name.clone())
-                            .collect::<Vec<String>>()
-                            .join(", ")
-                    )
-                };
-                write!(
-                    f,
-                    "struct {}{} {{ {} }}",
-                    id.name,
-                    tp,
-                    fields_str.join(", ")
-                )
-            }
-            Expression::EnumDefinition {
-                id,
-                variants,
-                type_params,
-            } => {
-                let variants_str: Vec<String> = variants
-                    .iter()
-                    .map(|v| {
-                        if v.fields.is_empty() {
-                            v.name.clone()
-                        } else if v.is_tuple {
-                            let types: Vec<String> =
-                                v.fields.iter().map(|f| f.field_type.name()).collect();
-                            format!("{}::({})", v.name, types.join(", "))
-                        } else {
-                            let fields: Vec<String> = v
-                                .fields
-                                .iter()
-                                .map(|f| format!("{}::{}", f.id.name, f.field_type.name()))
-                                .collect();
-                            format!("{}::{{ {} }}", v.name, fields.join(", "))
-                        }
-                    })
-                    .collect();
-                let tp = if type_params.is_empty() {
-                    String::new()
-                } else {
-                    format!(
-                        "<{}>",
-                        type_params
-                            .iter()
-                            .map(|p| p.name.clone())
-                            .collect::<Vec<String>>()
-                            .join(", ")
-                    )
-                };
-                write!(
-                    f,
-                    "enum {}{} {{ {} }}",
-                    id.name,
-                    tp,
-                    variants_str.join(", ")
-                )
-            }
-            Expression::EnumVariantAccess { enum_name, variant } => {
-                write!(f, "{}::{}", enum_name, variant)
-            }
-            Expression::EnumVariantConstruct {
-                enum_name,
-                variant,
-                args,
-            } => {
-                let args_str: Vec<String> = args.iter().map(|a| format!("{}", a)).collect();
-                write!(f, "{}::{}({})", enum_name, variant, args_str.join(", "))
-            }
-            Expression::If {
-                condition,
-                then_branch,
-                else_branch,
-            } => {
-                let else_str = if let Some(else_branch) = else_branch {
-                    format!(" else {}", else_branch)
-                } else {
-                    String::new()
-                };
-                write!(f, "if {} {{ {} }}{}", condition, then_branch, else_str)?;
-                Ok(())
-            }
-            Expression::While { condition, body } => {
-                write!(f, "while {} {{ {} }}", condition, body)
-            }
-            Expression::For {
-                iterator,
-                range,
-                body,
-            } => write!(f, "for {} in {} {{ {} }}", iterator.name, range, body),
-            Expression::Block(expressions) => {
-                let block_str: Vec<String> =
-                    expressions.iter().map(|expr| format!("{}", expr)).collect();
-                write!(f, "{{ {} }}", block_str.join("; "))
-            }
-            Expression::Return(expr) => write!(
-                f,
-                "return {}",
-                expr.as_ref().map_or("".to_string(), |e| format!("{}", e))
-            ),
-            Expression::Print(expr) => write!(f, "print({})", expr),
-            Expression::Match { value, cases } => {
-                let cases_str: Vec<String> = cases
-                    .iter()
-                    .map(|case| {
-                        let pat = match &case.pattern {
-                            MatchPattern::Wildcard => "_".to_string(),
-                            MatchPattern::EnumVariant {
-                                enum_name,
-                                variant,
-                                bindings,
-                            } => {
-                                if bindings.is_empty() {
-                                    format!("{}::{}", enum_name, variant)
-                                } else {
-                                    format!("{}::{}({})", enum_name, variant, bindings.join(", "))
-                                }
-                            }
-                        };
-                        format!("{} => {}", pat, case.body)
-                    })
-                    .collect();
-                write!(f, "match {} {{ {} }}", value, cases_str.join("; "))
-            } //Expression::VariableAssignment { id, value } => write!(f, "{} = {}", id.name, value),
-        }
+        display_expression(self, f)
     }
+}
+
+fn display_expression(e: &Expression, f: &mut fmt::Formatter) -> fmt::Result {
+    match e {
+        Expression::Int(n) => write!(f, "{}::Int", n),
+        Expression::Float(n) => write!(f, "{}::Float", n),
+        Expression::Boolean(b) => write!(f, "{}::Bool", b),
+        Expression::String(s) => write!(f, "\"{}\"::String", s),
+        Expression::Symbol(s) => write!(f, ":{}", s),
+        Expression::Identifier { id, type_expr } => match type_expr {
+            Some(type_expr) => write!(f, "{}::{}", id.name, type_expr.name()),
+            None => write!(f, "{}::Any", id.name),
+        },
+        Expression::UnaryOp { operator, operand } => write!(f, "({:?} {})", operator, operand),
+        Expression::BinaryOp {
+            operator,
+            left,
+            right,
+        } => write!(f, "({} {:?} {})", left, operator, right),
+        Expression::FunctionCall { id, arguments } => {
+            let args: Vec<String> = arguments.iter().map(|arg| format!("{}", arg)).collect();
+            write!(f, "{}({})", id.name, args.join(", "))
+        }
+        Expression::FunctionDefinition {
+            id,
+            parameters,
+            body,
+            return_type_expr,
+            foreign,
+        } => fmt_function_definition(f, id, parameters, body, return_type_expr, *foreign),
+        Expression::StructDefinition {
+            id,
+            fields,
+            type_params,
+        } => fmt_struct_definition(f, id, fields, type_params),
+        Expression::EnumDefinition {
+            id,
+            variants,
+            type_params,
+        } => fmt_enum_definition(f, id, variants, type_params),
+        Expression::EnumVariantAccess { enum_name, variant } => {
+            write!(f, "{}::{}", enum_name, variant)
+        }
+        Expression::EnumVariantConstruct {
+            enum_name,
+            variant,
+            args,
+        } => {
+            let args_str: Vec<String> = args.iter().map(|a| format!("{}", a)).collect();
+            write!(f, "{}::{}({})", enum_name, variant, args_str.join(", "))
+        }
+        Expression::If {
+            condition,
+            then_branch,
+            else_branch,
+        } => fmt_if(f, condition, then_branch, else_branch),
+        Expression::While { condition, body } => {
+            write!(f, "while {} {{ {} }}", condition, body)
+        }
+        Expression::For {
+            iterator,
+            range,
+            body,
+        } => write!(f, "for {} in {} {{ {} }}", iterator.name, range, body),
+        Expression::Block(expressions) => {
+            let block_str: Vec<String> =
+                expressions.iter().map(|expr| format!("{}", expr)).collect();
+            write!(f, "{{ {} }}", block_str.join("; "))
+        }
+        Expression::Return(expr) => write!(
+            f,
+            "return {}",
+            expr.as_ref().map_or("".to_string(), |e| format!("{}", e))
+        ),
+        Expression::Print(expr) => write!(f, "print({})", expr),
+        Expression::Match { value, cases } => fmt_match(f, value, cases),
+    }
+}
+
+fn fmt_function_definition(
+    f: &mut fmt::Formatter,
+    id: &Id,
+    parameters: &[Parameter],
+    body: &Expression,
+    return_type_expr: &Option<TypeExpression>,
+    foreign: bool,
+) -> fmt::Result {
+    let params: Vec<String> = parameters
+        .iter()
+        .map(|param| format!("{}", param))
+        .collect();
+    let body_str = format!("{}", body);
+    let fn_kw = if foreign { "foreign fn" } else { "fn" };
+    match return_type_expr {
+        Some(return_type_expr) => write!(
+            f,
+            "{} {}({}) -> {} {{ {} }}",
+            fn_kw,
+            id.name,
+            params.join(", "),
+            return_type_expr.name(),
+            body_str
+        ),
+        None => write!(
+            f,
+            "{} {}({}) {{ {} }}",
+            fn_kw,
+            id.name,
+            params.join(", "),
+            body_str
+        ),
+    }
+}
+
+fn fmt_struct_definition(
+    f: &mut fmt::Formatter,
+    id: &Id,
+    fields: &[FieldDefinition],
+    type_params: &[Id],
+) -> fmt::Result {
+    let fields_str: Vec<String> = fields
+        .iter()
+        .map(|field| format!("{}", field.id.name))
+        .collect();
+    let tp = fmt_type_params(type_params);
+    write!(
+        f,
+        "struct {}{} {{ {} }}",
+        id.name,
+        tp,
+        fields_str.join(", ")
+    )
+}
+
+fn fmt_enum_variant_display(v: &EnumVariant) -> String {
+    if v.fields.is_empty() {
+        v.name.clone()
+    } else if v.is_tuple {
+        let types: Vec<String> = v.fields.iter().map(|f| f.field_type.name()).collect();
+        format!("{}::({})", v.name, types.join(", "))
+    } else {
+        let fields: Vec<String> = v
+            .fields
+            .iter()
+            .map(|f| format!("{}::{}", f.id.name, f.field_type.name()))
+            .collect();
+        format!("{}::{{ {} }}", v.name, fields.join(", "))
+    }
+}
+
+fn fmt_enum_definition(
+    f: &mut fmt::Formatter,
+    id: &Id,
+    variants: &[EnumVariant],
+    type_params: &[Id],
+) -> fmt::Result {
+    let variants_str: Vec<String> = variants.iter().map(fmt_enum_variant_display).collect();
+    let tp = fmt_type_params(type_params);
+    write!(
+        f,
+        "enum {}{} {{ {} }}",
+        id.name,
+        tp,
+        variants_str.join(", ")
+    )
+}
+
+fn fmt_if(
+    f: &mut fmt::Formatter,
+    condition: &Expression,
+    then_branch: &Expression,
+    else_branch: &Option<Box<Expression>>,
+) -> fmt::Result {
+    let else_str = if let Some(else_branch) = else_branch {
+        format!(" else {}", else_branch)
+    } else {
+        String::new()
+    };
+    write!(f, "if {} {{ {} }}{}", condition, then_branch, else_str)?;
+    Ok(())
+}
+
+fn fmt_match(f: &mut fmt::Formatter, value: &Expression, cases: &[MatchCase]) -> fmt::Result {
+    let cases_str: Vec<String> = cases
+        .iter()
+        .map(|case| {
+            let pat = match &case.pattern {
+                MatchPattern::Wildcard => "_".to_string(),
+                MatchPattern::EnumVariant {
+                    enum_name,
+                    variant,
+                    bindings,
+                } => {
+                    if bindings.is_empty() {
+                        format!("{}::{}", enum_name, variant)
+                    } else {
+                        format!("{}::{}({})", enum_name, variant, bindings.join(", "))
+                    }
+                }
+            };
+            format!("{} => {}", pat, case.body)
+        })
+        .collect();
+    write!(f, "match {} {{ {} }}", value, cases_str.join("; "))
 }
 
 impl fmt::Display for Program {

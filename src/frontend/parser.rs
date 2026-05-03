@@ -6,6 +6,8 @@ use super::lexer::{token_type, Token, TokenType};
 use std::iter::Peekable;
 use std::vec::IntoIter;
 
+// --- Cursor / token stream ---
+
 /// A streaming parser that uses pattern matching and Pratt parsing for expressions
 pub struct Parser {
     tokens: Peekable<IntoIter<Token>>,
@@ -25,6 +27,8 @@ impl Parser {
         parser.bump(); // Load first token
         parser
     }
+
+    // --- Top-level ---
 
     /// Core parsing function that returns a Program AST
     pub fn parse(&mut self) -> Result<Program, Vec<String>> {
@@ -62,7 +66,7 @@ impl Parser {
         }
     }
 
-    // Token Stream Management
+    // --- Cursor ---
 
     /// Advance to next token and return previous, skipping comment tokens
     fn bump(&mut self) -> Option<Token> {
@@ -98,6 +102,11 @@ impl Parser {
         self.current.is_none() || self.at(&TokenType::EOF)
     }
 
+    /// True if the current token is any identifier (including `_`).
+    fn at_identifier(&self) -> bool {
+        matches!(self.current_type(), Some(TokenType::Identifier(_)))
+    }
+
     /// Consume current token if it matches expected type
     /// Returns true if the token was consumed, false otherwise
     /// Used for tokens like parens, commas, etc.
@@ -131,6 +140,29 @@ impl Parser {
         }
     }
 
+    fn skip_newlines(&mut self) {
+        while self.eat(&TokenType::Newline) {}
+    }
+
+    /// Parses zero or more comma-separated items until `close` is the current token (`close` is not consumed).
+    fn parse_comma_separated_until<T>(
+        &mut self,
+        close: &TokenType,
+        expected_sep_msg: &'static str,
+        mut parse_elem: impl FnMut(&mut Self) -> Result<T, String>,
+    ) -> Result<Vec<T>, String> {
+        let mut out = Vec::new();
+        while !self.at(close) {
+            out.push(parse_elem(self)?);
+            if !(self.eat(&TokenType::Comma) ^ self.at(close)) {
+                return Err(expected_sep_msg.to_string());
+            }
+        }
+        Ok(out)
+    }
+
+    // --- Top-level statement / expression ---
+
     /// Parse expressions (functions, structs, if statements, for statements, return statements)
     /// TODO: Change to parse_statement()
     pub fn parse_expression(&mut self) -> Result<Expression, String> {
@@ -140,7 +172,7 @@ impl Parser {
             Some(TokenType::Function) => self.function(),
             Some(TokenType::Struct) => self.structure(),
             Some(TokenType::Enum) => self.enum_def(),
-            Some(TokenType::If) => self.if_statement(), // TODO: Move to parse_expression_1
+            Some(TokenType::If) => self.if_statement(), // TODO: Move to parse_expr_bp
             Some(TokenType::While) => self.while_statement(),
             Some(TokenType::For) => self.for_statement(),
             Some(TokenType::Return) => self.return_statement(),
@@ -157,21 +189,20 @@ impl Parser {
             }
             Some(_) => {
                 let primary_expr = self.primary()?; // Store the result of primary
-                self.parse_expression_1(primary_expr, 0) // Delegate to the new expression parser
+                self.parse_expr_bp(primary_expr, 0) // Pratt / binding-power parser
             }
             None => Err("No current token".to_string()),
         };
         tracing::trace!(target: "parser","Parsing expression| result:{:?}", result);
-        let mut at_newline = self.eat(&TokenType::Newline);
-        while at_newline {
-            at_newline = self.eat(&TokenType::Newline);
-        }
+        self.skip_newlines();
         result
     }
 
-    /// Bottom-up operator-precedence parsing of expressions
-    /// Any operators, literals, and calls, are parsed here (including parenthesized expressions)
-    fn parse_expression_1(
+    // --- Pratt parsing (binding power) ---
+
+    /// Bottom-up operator-precedence parsing of expressions.
+    /// Operators, literals, and calls (including parenthesized expressions).
+    fn parse_expr_bp(
         &mut self,
         lhs: Expression,
         min_precedence: i32,
@@ -180,7 +211,7 @@ impl Parser {
             target: "parser",
             lhs = ?lhs,
             current = ?self.current_type(),
-            "parse_expression_1"
+            "parse_expr_bp"
         );
         let mut level_lhs = lhs;
         while let Some(current) = self.current_type() {
@@ -189,7 +220,7 @@ impl Parser {
             }
             if !(current.precedence()? >= min_precedence) {
                 tracing::trace!(target: "parser",
-                    "Parsing expression 1| precedence:{:?} < {:?}",
+                    "parse_expr_bp| precedence:{:?} < {:?}",
                     current.precedence(),
                     min_precedence
                 );
@@ -198,12 +229,12 @@ impl Parser {
             let op = self.bump().ok_or("No operator found".to_string())?;
             let op_precedence = op.precedence()?;
             tracing::trace!(target: "parser",
-                "Parsing expression 1| op:{:?}, op_precedence:{:?}",
+                "parse_expr_bp| op:{:?}, op_precedence:{:?}",
                 op,
                 op_precedence
             );
             let mut rhs = self.primary()?;
-            tracing::trace!(target: "parser","Parsing expression 1| rhs:{:?}", rhs);
+            tracing::trace!(target: "parser","parse_expr_bp| rhs:{:?}", rhs);
 
             // Handle operator precedence and associativity
             while let Some(next) = self.current_type() {
@@ -211,20 +242,20 @@ impl Parser {
                     // No infix operator found, break
                     break;
                 }
-                tracing::trace!(target: "parser","Parsing expression 1| next op:{:?}", next);
+                tracing::trace!(target: "parser","parse_expr_bp| next op:{:?}", next);
                 let precedence = next.precedence()?;
                 if precedence > op_precedence {
                     tracing::trace!(target: "parser",
-                        "Parsing expression 1| left associative precedence:{:?}",
+                        "parse_expr_bp| left associative precedence:{:?}",
                         op_precedence + 1
                     );
-                    rhs = self.parse_expression_1(rhs.clone(), op_precedence + 1)?;
+                    rhs = self.parse_expr_bp(rhs.clone(), op_precedence + 1)?;
                 } else if precedence == op_precedence && next.is_right_associative() {
                     tracing::trace!(target: "parser",
-                        "Parsing expression 1| right associative precedence:{:?}",
+                        "parse_expr_bp| right associative precedence:{:?}",
                         op_precedence
                     );
-                    rhs = self.parse_expression_1(rhs.clone(), op_precedence)?;
+                    rhs = self.parse_expr_bp(rhs.clone(), op_precedence)?;
                 } else {
                     break; // Exit the loop if precedence is not greater
                 }
@@ -240,7 +271,41 @@ impl Parser {
         }
 
         // Don't consume newlines here - let the caller handle it
-        Ok(level_lhs) // Return the final expression as a clone
+        Ok(level_lhs)
+    }
+
+    // --- Infix operators ---
+
+    fn binary_op(lhs: Expression, operator: BinaryOperator, rhs: Expression) -> Expression {
+        Expression::BinaryOp {
+            operator,
+            left: Box::new(lhs),
+            right: Box::new(rhs),
+        }
+    }
+
+    /// Maps infix token types to `BinaryOperator`, excluding `=` (handled separately).
+    fn binary_operator_for_token(tt: &TokenType) -> Option<BinaryOperator> {
+        match tt {
+            TokenType::Dot => Some(BinaryOperator::Dot),
+            TokenType::Plus => Some(BinaryOperator::Add),
+            TokenType::Minus => Some(BinaryOperator::Subtract),
+            TokenType::Asterisk => Some(BinaryOperator::Multiply),
+            TokenType::Slash => Some(BinaryOperator::Divide),
+            TokenType::Modulo => Some(BinaryOperator::Modulo),
+            TokenType::Carrot => Some(BinaryOperator::Power),
+            TokenType::Equal => Some(BinaryOperator::Equal),
+            TokenType::NotEqual => Some(BinaryOperator::NotEqual),
+            TokenType::LessThan => Some(BinaryOperator::LessThan),
+            TokenType::GreaterThan => Some(BinaryOperator::GreaterThan),
+            TokenType::LessThanEqual => Some(BinaryOperator::LessThanEqual),
+            TokenType::GreaterThanEqual => Some(BinaryOperator::GreaterThanEqual),
+            TokenType::And => Some(BinaryOperator::And),
+            TokenType::Ampersand => Some(BinaryOperator::Ampersand),
+            TokenType::Or => Some(BinaryOperator::Or),
+            TokenType::Pipe => Some(BinaryOperator::Pipe),
+            _ => None,
+        }
     }
 
     fn apply_infix_operator(
@@ -249,104 +314,28 @@ impl Parser {
         op: &Token,
         rhs: Expression,
     ) -> Result<Expression, String> {
-        match op.token_type {
-            TokenType::Dot => Ok(Expression::BinaryOp {
-                operator: BinaryOperator::Dot,
-                left: Box::new(lhs),
-                right: Box::new(rhs),
-            }),
-            TokenType::Plus => Ok(Expression::BinaryOp {
-                operator: BinaryOperator::Add,
-                left: Box::new(lhs),
-                right: Box::new(rhs),
-            }),
-            TokenType::Minus => Ok(Expression::BinaryOp {
-                operator: BinaryOperator::Subtract,
-                left: Box::new(lhs),
-                right: Box::new(rhs),
-            }),
-            TokenType::Asterisk => Ok(Expression::BinaryOp {
-                operator: BinaryOperator::Multiply,
-                left: Box::new(lhs),
-                right: Box::new(rhs),
-            }),
-            TokenType::Slash => Ok(Expression::BinaryOp {
-                operator: BinaryOperator::Divide,
-                left: Box::new(lhs),
-                right: Box::new(rhs),
-            }),
-            TokenType::Modulo => Ok(Expression::BinaryOp {
-                operator: BinaryOperator::Modulo,
-                left: Box::new(lhs),
-                right: Box::new(rhs),
-            }),
-            TokenType::Carrot => Ok(Expression::BinaryOp {
-                operator: BinaryOperator::Power,
-                left: Box::new(lhs),
-                right: Box::new(rhs),
-            }),
-            TokenType::Equal => Ok(Expression::BinaryOp {
-                operator: BinaryOperator::Equal,
-                left: Box::new(lhs),
-                right: Box::new(rhs),
-            }),
-            TokenType::NotEqual => Ok(Expression::BinaryOp {
-                operator: BinaryOperator::NotEqual,
-                left: Box::new(lhs),
-                right: Box::new(rhs),
-            }),
-            TokenType::LessThan => Ok(Expression::BinaryOp {
-                operator: BinaryOperator::LessThan,
-                left: Box::new(lhs),
-                right: Box::new(rhs),
-            }),
-            TokenType::GreaterThan => Ok(Expression::BinaryOp {
-                operator: BinaryOperator::GreaterThan,
-                left: Box::new(lhs),
-                right: Box::new(rhs),
-            }),
-            TokenType::LessThanEqual => Ok(Expression::BinaryOp {
-                operator: BinaryOperator::LessThanEqual,
-                left: Box::new(lhs),
-                right: Box::new(rhs),
-            }),
-            TokenType::GreaterThanEqual => Ok(Expression::BinaryOp {
-                operator: BinaryOperator::GreaterThanEqual,
-                left: Box::new(lhs),
-                right: Box::new(rhs),
-            }),
-            TokenType::And => Ok(Expression::BinaryOp {
-                operator: BinaryOperator::And,
-                left: Box::new(lhs),
-                right: Box::new(rhs),
-            }),
-            TokenType::Ampersand => Ok(Expression::BinaryOp {
-                operator: BinaryOperator::Ampersand,
-                left: Box::new(lhs),
-                right: Box::new(rhs),
-            }),
-            TokenType::Or => Ok(Expression::BinaryOp {
-                operator: BinaryOperator::Or,
-                left: Box::new(lhs),
-                right: Box::new(rhs),
-            }),
-            TokenType::Pipe => Ok(Expression::BinaryOp {
-                operator: BinaryOperator::Pipe,
-                left: Box::new(lhs),
-                right: Box::new(rhs),
-            }),
+        if let Some(bo) = Self::binary_operator_for_token(&op.token_type) {
+            return Ok(Self::binary_op(lhs, bo, rhs));
+        }
+        match &op.token_type {
             // TODO: Do we need to move assignment out of infix? It could be called in places it shouldn't be
             // e.g. my_fn(x = 1, y = 2). This is only valid if x and y are parameters.
             TokenType::Assignment => match &lhs {
-                Expression::Identifier { id, type_expr } => Ok(Expression::BinaryOp {
-                    operator: BinaryOperator::Assignment,
-                    left: Box::new(lhs),
-                    right: Box::new(rhs),
-                }),
+                Expression::Identifier { .. } => {
+                    Ok(Self::binary_op(lhs, BinaryOperator::Assignment, rhs))
+                }
                 _ => Err(format!("Cannot assign to {:?}", lhs)),
             },
             _ => Err(format!("Unsupported operator: {:?}", op.token_type)),
         }
+    }
+
+    // --- Primary expressions ---
+
+    /// `primary()` followed by infix operators until precedence stops extension.
+    fn parse_full_expression(&mut self) -> Result<Expression, String> {
+        let primary_expr = self.primary()?;
+        self.parse_expr_bp(primary_expr, 0)
     }
 
     /// prefix -> call -> literal
@@ -414,7 +403,7 @@ impl Parser {
         self.expect(&TokenType::LParen)?;
         let primary_expr = self.primary()?; // Store the result of primary
         tracing::trace!(target: "parser","Parenthesized | primary expression: {:?}", primary_expr);
-        let expression = self.parse_expression_1(primary_expr, 0)?; // Use the stored result
+        let expression = self.parse_expr_bp(primary_expr, 0)?;
         self.expect(&TokenType::RParen)?;
         Ok(expression)
     }
@@ -470,6 +459,8 @@ impl Parser {
         }
     }
 
+    // --- Symbols, identifiers & types ---
+
     fn symbol(&mut self) -> Result<Expression, String> {
         self.expect(&TokenType::Colon)?;
         if let Some(TokenType::Identifier(s)) = self.current_type().cloned() {
@@ -495,17 +486,13 @@ impl Parser {
 
         let id = self.id()?; // Parse the base identifier
         if self.eat(&TokenType::LBrace) {
-            // Check for the start of a composite type
-            let mut types = Vec::new();
-            while !self.at(&TokenType::RBrace) {
-                let inner_type = self.type_expr()?; // Parse inner types
-                types.push(inner_type);
-                if !self.eat(&TokenType::Comma) && !self.at(&TokenType::RBrace) {
-                    return Err("Expected comma or right brace".to_string());
-                }
-            }
-            self.expect(&TokenType::RBrace)?; // Expect the closing brace
-            Ok(TypeExpression::Struct(id, Some(types), None)) // Return struct type expression
+            let types = self.parse_comma_separated_until(
+                &TokenType::RBrace,
+                "Expected comma or right brace",
+                |p| p.type_expr(),
+            )?;
+            self.expect(&TokenType::RBrace)?;
+            Ok(TypeExpression::Struct(id, Some(types), None))
         } else {
             match id.name.as_str() {
                 "Int" => Ok(TypeExpression::Int),
@@ -524,32 +511,41 @@ impl Parser {
         }
     }
 
-    /// Comma-separated type arguments inside `< ... >` (closing `>` already consumed by caller for first `<`).
+    /// Comma-separated type arguments inside `< ... >` (opening `<` already consumed).
     fn generic_type_args(&mut self) -> Result<Vec<GenericArg>, String> {
-        let mut args = Vec::new();
-        while !self.at(&TokenType::GreaterThan) {
-            let te = self.type_expr()?;
-            args.push(GenericArg::Type(te));
-            if !self.eat(&TokenType::Comma) && !self.at(&TokenType::GreaterThan) {
-                return Err("Expected comma or '>' in generic type argument list".to_string());
-            }
-        }
+        let args = self.parse_comma_separated_until(
+            &TokenType::GreaterThan,
+            "Expected comma or '>' in generic type argument list",
+            |p| {
+                let te = p.type_expr()?;
+                Ok(GenericArg::Type(te))
+            },
+        )?;
         self.expect(&TokenType::GreaterThan)?;
         Ok(args)
     }
 
     /// Type parameter names on `struct Foo<T, U>` / `enum Bar<T>`.
     fn type_param_names(&mut self) -> Result<Vec<Id>, String> {
-        let mut names = Vec::new();
-        while !self.at(&TokenType::GreaterThan) {
-            names.push(self.id()?);
-            if !self.eat(&TokenType::Comma) && !self.at(&TokenType::GreaterThan) {
-                return Err("Expected comma or '>' in type parameter list".to_string());
-            }
-        }
+        let names = self.parse_comma_separated_until(
+            &TokenType::GreaterThan,
+            "Expected comma or '>' in type parameter list",
+            |p| p.id(),
+        )?;
         self.expect(&TokenType::GreaterThan)?;
         Ok(names)
     }
+
+    /// Optional `<T, U, …>` after a struct or enum name.
+    fn parse_optional_type_params(&mut self) -> Result<Vec<Id>, String> {
+        if self.eat(&TokenType::LessThan) {
+            self.type_param_names()
+        } else {
+            Ok(vec![])
+        }
+    }
+
+    // --- Literals ---
 
     /// Parse literals (String, int, float, boolean)
     fn literal(&mut self, token_type: &TokenType) -> Result<Expression, String> {
@@ -568,6 +564,8 @@ impl Parser {
             _ => Err(format!("Unexpected token: {:?}", token_type)),
         }
     }
+
+    // --- Definitions (fn, struct, enum) ---
 
     /// Parse function definitions
     /// Currently only supports standard block function definitions
@@ -601,7 +599,7 @@ impl Parser {
             let body = self.block()?;
             self.expect(&TokenType::End)?;
             tracing::trace!(target: "parser","Parsing function| End of function");
-            self.expect(&TokenType::Newline); // Should these be eats or expects?
+            let _ = self.expect(&TokenType::Newline); // Should these be eats or expects?
             Ok(Expression::FunctionDefinition {
                 id,
                 parameters: arguments,
@@ -622,11 +620,7 @@ impl Parser {
         tracing::trace!(target: "parser","Parsing structure| current:{:?}", self.current_type());
         self.expect(&TokenType::Struct)?;
         let id = self.id()?;
-        let type_params = if self.eat(&TokenType::LessThan) {
-            self.type_param_names()?
-        } else {
-            vec![]
-        };
+        let type_params = self.parse_optional_type_params()?;
         self.expect(&TokenType::Newline)?;
         let fields = self.field_parameters()?;
         self.expect(&TokenType::End)?;
@@ -648,11 +642,7 @@ impl Parser {
         tracing::trace!(target: "parser","Parsing enum| current:{:?}", self.current_type());
         self.expect(&TokenType::Enum)?;
         let id = self.id()?;
-        let type_params = if self.eat(&TokenType::LessThan) {
-            self.type_param_names()?
-        } else {
-            vec![]
-        };
+        let type_params = self.parse_optional_type_params()?;
         self.expect(&TokenType::Newline)?;
         let variants = self.enum_variants()?;
         self.expect(&TokenType::End)?;
@@ -673,7 +663,7 @@ impl Parser {
     fn enum_variants(&mut self) -> Result<Vec<EnumVariant>, String> {
         tracing::trace!(target: "parser","Parsing enum variants| current:{:?}", self.current_type());
         let mut variants = Vec::new();
-        while self.at(&token_type("Identifier")?) {
+        while self.at_identifier() {
             let id = self.id()?;
 
             let (fields, is_tuple) = if self.eat(&TokenType::TypeDef) {
@@ -731,33 +721,26 @@ impl Parser {
 
     /// Parse a comma-separated list of `TypeExpression`s up to `)`.
     fn type_list(&mut self) -> Result<Vec<TypeExpression>, String> {
-        let mut types = Vec::new();
-        while !self.at(&TokenType::RParen) {
-            types.push(self.type_expr()?);
-            if !(self.eat(&TokenType::Comma) ^ self.at(&TokenType::RParen)) {
-                return Err("Expected comma or right parenthesis in type list".to_string());
-            }
-        }
-        Ok(types)
+        self.parse_comma_separated_until(
+            &TokenType::RParen,
+            "Expected comma or right parenthesis in type list",
+            |p| p.type_expr(),
+        )
     }
 
     /// Parse comma-separated `name::Type` field pairs inside `{ … }`.
     /// Does NOT consume the closing `}`.
     fn inline_field_list(&mut self) -> Result<Vec<FieldDefinition>, String> {
-        let mut fields = Vec::new();
-        while self.at(&token_type("Identifier")?) {
-            let id = self.id()?;
-            self.expect(&TokenType::TypeDef)?;
-            let field_type = self.type_expr()?;
-            let field = FieldDefinition { id, field_type };
-            fields.push(field);
-            if !(self.eat(&TokenType::Comma) ^ self.at(&TokenType::RBrace)) {
-                return Err(
-                    "Expected comma or right brace in struct variant field list".to_string()
-                );
-            }
-        }
-        Ok(fields)
+        self.parse_comma_separated_until(
+            &TokenType::RBrace,
+            "Expected comma or right brace in struct variant field list",
+            |p| {
+                let id = p.id()?;
+                p.expect(&TokenType::TypeDef)?;
+                let field_type = p.type_expr()?;
+                Ok(FieldDefinition { id, field_type })
+            },
+        )
     }
 
     /// Parse expressions until 'END' token
@@ -771,32 +754,31 @@ impl Parser {
         Ok(Expression::Block(expressions))
     }
 
-    // TODO: Abstract parameters, field_parameters, and arguments into Delimited(self, parse_element_fn, delim, end)
+    // --- Delimited lists (comma-separated) ---
 
     /// Parse expressions until 'RParen' token
     fn parameters(&mut self) -> Result<Vec<Parameter>, String> {
         tracing::trace!(target: "parser","Parsing parameters| current:{:?}", self.current_type());
-        let mut parameters = Vec::new();
-        while !self.at(&TokenType::RParen) {
-            let id = self.id()?;
-            let parameter = if self.eat(&TokenType::TypeDef) {
-                let type_expr = self.type_expr()?;
-                Parameter {
-                    id,
-                    type_expr: Some(type_expr),
-                }
-            } else {
-                Parameter {
-                    id,
-                    type_expr: None,
-                }
-            };
-            parameters.push(parameter);
-            if !(self.eat(&TokenType::Comma) ^ self.at(&TokenType::RParen)) {
-                return Err("Expected comma or right parenthesis".to_string());
-            }
-        }
-        Ok(parameters)
+        self.parse_comma_separated_until(
+            &TokenType::RParen,
+            "Expected comma or right parenthesis",
+            |p| {
+                let id = p.id()?;
+                let parameter = if p.eat(&TokenType::TypeDef) {
+                    let type_expr = p.type_expr()?;
+                    Parameter {
+                        id,
+                        type_expr: Some(type_expr),
+                    }
+                } else {
+                    Parameter {
+                        id,
+                        type_expr: None,
+                    }
+                };
+                Ok(parameter)
+            },
+        )
     }
 
     /// Parse field definitions
@@ -807,7 +789,7 @@ impl Parser {
             self.current_type()
         );
         let mut fields = Vec::new();
-        while self.at(&token_type("Identifier")?) {
+        while self.at_identifier() {
             let id = self.id()?;
             self.expect(&TokenType::TypeDef)?;
             let field_type = self.type_expr()?; // Required here
@@ -821,21 +803,18 @@ impl Parser {
     /// Parse arguments of a function call
     fn arguments(&mut self) -> Result<Vec<Expression>, String> {
         tracing::trace!(target: "parser","Parsing arguments| current:{:?}", self.current_type());
-        let mut arguments = Vec::new();
-        while !self.at(&TokenType::RParen) {
-            let primary_expr = self.primary()?; // Store the result of primary
-            let expression = self.parse_expression_1(primary_expr, 0)?; // Use the stored result
-            arguments.push(expression);
-            if !(self.eat(&TokenType::Comma) ^ self.at(&TokenType::RParen)) {
-                return Err("Expected comma or right parenthesis".to_string());
-            }
-        }
-        Ok(arguments)
+        self.parse_comma_separated_until(
+            &TokenType::RParen,
+            "Expected comma or right parenthesis",
+            |p| p.parse_full_expression(),
+        )
     }
+
+    // --- Control flow ---
 
     /// Parse if-elseif-else-end expressions
     /// TODO: Support both block and inline if statements
-    /// inline should be within parse_expression_1() and blocks should be within parse_expression()
+    /// inline should be within parse_expr_bp() and blocks should be within parse_expression()
     fn if_statement(&mut self) -> Result<Expression, String> {
         tracing::trace!(target: "parser","Parsing if statement| current:{:?}", self.current_type());
         self.expect(&TokenType::If)?;
@@ -917,14 +896,11 @@ impl Parser {
         self.expect(&TokenType::TypeDef)?; // ::
         let variant_id = self.id()?;
         let bindings = if self.eat(&TokenType::LParen) {
-            let mut names = Vec::new();
-            while !self.at(&TokenType::RParen) {
-                let binding = self.id()?;
-                names.push(binding.name);
-                if !(self.eat(&TokenType::Comma) ^ self.at(&TokenType::RParen)) {
-                    return Err("Expected comma or ')' in match pattern bindings".to_string());
-                }
-            }
+            let names = self.parse_comma_separated_until(
+                &TokenType::RParen,
+                "Expected comma or ')' in match pattern bindings",
+                |p| p.id().map(|id| id.name),
+            )?;
             self.expect(&TokenType::RParen)?;
             names
         } else {
@@ -940,10 +916,9 @@ impl Parser {
     fn while_statement(&mut self) -> Result<Expression, String> {
         tracing::trace!(target: "parser","Parsing while statement| current:{:?}", self.current_type());
         self.expect(&TokenType::While)?;
-        let primary_expr = self.primary()?;
-        let condition = self.parse_expression_1(primary_expr, 0)?;
+        let condition = self.parse_full_expression()?;
         tracing::trace!(target: "parser","Parsing while statement| condition:{:?}", condition);
-        self.eat(&TokenType::Newline); // parse_expression_1() eats the newline
+        self.eat(&TokenType::Newline); // parse_expr_bp leaves newline for the caller
         let body = self.block()?;
         self.eat(&TokenType::Newline);
         self.expect(&TokenType::End)?;
@@ -976,8 +951,7 @@ impl Parser {
             self.current_type()
         );
         self.expect(&TokenType::Return)?;
-        let primary_expr = self.primary()?; // Store the result of primary
-        let value = self.parse_expression_1(primary_expr, 0)?;
+        let value = self.parse_full_expression()?;
         self.eat(&TokenType::Newline);
         tracing::trace!(target: "parser","Parsing return statement| end of return");
         Ok(Expression::Return(Some(Box::new(value))))
@@ -986,8 +960,7 @@ impl Parser {
     fn print_statement(&mut self) -> Result<Expression, String> {
         tracing::trace!(target: "parser","Parsing print statement| current:{:?}", self.current_type());
         self.expect(&TokenType::Print)?;
-        let primary_expr = self.primary()?;
-        let value = self.parse_expression_1(primary_expr, 0)?;
+        let value = self.parse_full_expression()?;
         self.eat(&TokenType::Newline);
         Ok(Expression::Print(Box::new(value)))
     }
