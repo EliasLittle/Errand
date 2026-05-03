@@ -137,7 +137,7 @@ fn run_compile(cli: &Cli) -> Result<(), String> {
     let source = std::fs::read_to_string(file_path).expect("Failed to read file");
     compiler_info!("Compiling {}...", file_path);
 
-    let mut lexer = Lexer::new(&source);
+    let mut lexer = Lexer::new(source);
     let tokens = lexer.lex(file_path).expect("Lexing failed");
     compiler_info!("Lexer processed tokens successfully.");
 

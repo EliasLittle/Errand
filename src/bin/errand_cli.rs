@@ -200,7 +200,7 @@ fn parse_to_ast(file: &str) -> Result<(), String> {
         return Err(format!("File '{}' not found", file));
     }
     let source = fs::read_to_string(file).map_err(|e| format!("Failed to read file: {}", e))?;
-    let mut lexer = Lexer::new(&source);
+    let mut lexer = Lexer::new(source);
     let tokens = lexer
         .lex(file)
         .map_err(|e| format!("Lexing failed: {}", e))?;

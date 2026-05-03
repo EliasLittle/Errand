@@ -2,6 +2,7 @@ use crate::lexer_log;
 use std::fmt;
 use std::io::Write;
 use std::mem::Discriminant;
+
 #[derive(Debug, Clone, PartialEq)]
 pub enum TokenType {
     Int(i64),
@@ -73,7 +74,7 @@ pub enum TokenType {
 
 impl TokenType {
     pub fn var(&self) -> Discriminant<TokenType> {
-        return std::mem::discriminant(self);
+        std::mem::discriminant(self)
     }
 
     // Higher precedence means the token is evaluated first
@@ -133,10 +134,9 @@ impl TokenType {
         }
     }
 
+    /// Reserved for future postfix operators.
     pub fn is_postfix(&self) -> bool {
-        match self {
-            _ => false,
-        }
+        false
     }
 
     pub fn is_comment(&self) -> bool {
@@ -201,33 +201,37 @@ impl fmt::Display for Token {
 }
 
 pub struct Lexer {
-    source: String,
-    tokens: Vec<Token>,
+    chars: Vec<char>,
     current: usize,
     line: usize,
     column: usize,
-    chars: Vec<char>,
     current_char: char,
 }
 
 impl Lexer {
-    pub fn new(source: &String) -> Self {
-        let chars: Vec<char> = source.chars().collect();
+    /// Takes ownership of the source text and expands it to UTF-32 scalars once.
+    /// Pass the `String` from `read_to_string` directly to avoid an extra full-buffer copy.
+    pub fn new(source: impl Into<String>) -> Self {
+        let chars: Vec<char> = source.into().chars().collect();
         let current_char = if chars.is_empty() { '\0' } else { chars[0] };
         Lexer {
-            source: source.to_string(),
-            tokens: Vec::new(),
+            chars,
             current: 0,
             line: 1,
             column: 1,
-            chars,
             current_char,
         }
     }
 
     fn advance(&mut self) {
+        let prev = self.current_char;
         self.current += 1;
-        self.column += 1;
+        if prev == '\n' {
+            self.line += 1;
+            self.column = 1;
+        } else {
+            self.column += 1;
+        }
         self.current_char = if self.current >= self.chars.len() {
             '\0'
         } else {
@@ -236,13 +240,12 @@ impl Lexer {
     }
 
     fn advance_n(&mut self, n: usize) {
-        self.current += n;
-        self.column += n;
-        self.current_char = if self.current >= self.chars.len() {
-            '\0'
-        } else {
-            self.chars[self.current]
-        };
+        for _ in 0..n {
+            if self.current >= self.chars.len() {
+                break;
+            }
+            self.advance();
+        }
     }
 
     fn peek(&self) -> char {
@@ -253,29 +256,30 @@ impl Lexer {
         }
     }
 
+    /// Lookahead of up to `n` characters after the current position. Shorter
+    /// when near EOF; compare to `[char; n]` only when you need exactly `n`
+    /// characters (length mismatch implies “not equal”).
     fn peek_n(&self, n: usize) -> &[char] {
-        if self.current + n >= self.chars.len() {
-            &['\0']
-        } else {
-            &self.chars[self.current + 1..self.current + n + 1]
+        let start = self.current + 1;
+        if start >= self.chars.len() {
+            return &[];
         }
+        let end = (start + n).min(self.chars.len());
+        &self.chars[start..end]
     }
 
     fn is_block_comment(&self) -> bool {
-        let mut char = self.current_char;
+        let mut ch = self.current_char;
         let mut i = 0;
-        while char != '\n' && char != '\0' {
-            char = self.chars[self.current + i];
+        while ch != '\n' && ch != '\0' {
+            ch = self.chars[self.current + i];
             i += 1;
         }
-        if is_comment_end(&self.chars, self.current + i) {
-            return true;
-        }
-        return false;
+        is_comment_end(&self.chars, self.current + i)
     }
 
     fn is_identifier_start(&self, c: char) -> bool {
-        c.is_alphabetic() || c == '_'
+        matches!(c, 'a'..='z' | 'A'..='Z' | '_')
     }
 
     fn is_identifier_part(&self, c: char) -> bool {
@@ -291,10 +295,6 @@ impl Lexer {
             self.advance();
         }
         self.read_token()
-    }
-
-    fn read_multiline_comment(&mut self) -> Result<Token, String> {
-        self.read_block_comment()
     }
 
     fn read_block_comment(&mut self) -> Result<Token, String> {
@@ -325,10 +325,6 @@ impl Lexer {
         while self.peek_n(3) != ['+', '-', '-'] {
             if self.current_char == '\0' {
                 return Err("Invalid block comment: body cannot be terminated by EOF.".to_string());
-            }
-            if self.current_char == '\n' {
-                self.line += 1;
-                self.column = 0;
             }
             body.push(self.current_char);
             self.advance();
@@ -379,9 +375,9 @@ impl Lexer {
 
     fn read_comment(&mut self) -> Result<Token, String> {
         if self.is_block_comment() {
-            return self.read_block_comment();
+            self.read_block_comment()
         } else {
-            return self.read_inline_comment();
+            self.read_inline_comment()
         }
     }
 
@@ -482,10 +478,6 @@ impl Lexer {
                     _ => return Err(format!("Invalid escape sequence: \\{}", self.current_char)),
                 }
             } else {
-                if self.current_char == '\n' {
-                    self.line += 1;
-                    self.column = 0;
-                }
                 string.push(self.current_char);
             }
             self.advance();
@@ -505,81 +497,42 @@ impl Lexer {
         })
     }
 
+    #[inline]
+    fn ok_token(&self, token_type: TokenType) -> Result<Token, String> {
+        Ok(Token {
+            token_type,
+            line: self.line,
+            column: self.column,
+        })
+    }
+
     pub fn read_token(&mut self) -> Result<Token, String> {
         let mut advance_char = true;
         let tok = match self.current_char {
-            '(' => Ok(Token {
-                token_type: TokenType::LParen,
-                line: self.line,
-                column: self.column,
-            }),
-            ')' => Ok(Token {
-                token_type: TokenType::RParen,
-                line: self.line,
-                column: self.column,
-            }),
-            '{' => Ok(Token {
-                token_type: TokenType::LBrace,
-                line: self.line,
-                column: self.column,
-            }),
-            '}' => Ok(Token {
-                token_type: TokenType::RBrace,
-                line: self.line,
-                column: self.column,
-            }),
-            ',' => Ok(Token {
-                token_type: TokenType::Comma,
-                line: self.line,
-                column: self.column,
-            }),
-            '.' => Ok(Token {
-                token_type: TokenType::Dot,
-                line: self.line,
-                column: self.column,
-            }),
+            '(' => self.ok_token(TokenType::LParen),
+            ')' => self.ok_token(TokenType::RParen),
+            '{' => self.ok_token(TokenType::LBrace),
+            '}' => self.ok_token(TokenType::RBrace),
+            ',' => self.ok_token(TokenType::Comma),
+            '.' => self.ok_token(TokenType::Dot),
             ':' => {
                 if self.peek() == ':' {
                     self.advance();
-                    Ok(Token {
-                        token_type: TokenType::TypeDef,
-                        line: self.line,
-                        column: self.column,
-                    })
+                    self.ok_token(TokenType::TypeDef)
                 } else {
-                    Ok(Token {
-                        token_type: TokenType::Colon,
-                        line: self.line,
-                        column: self.column,
-                    })
+                    self.ok_token(TokenType::Colon)
                 }
             }
-            ';' => Ok(Token {
-                token_type: TokenType::Semicolon,
-                line: self.line,
-                column: self.column,
-            }),
+            ';' => self.ok_token(TokenType::Semicolon),
             '=' => {
                 if self.peek() == '=' {
                     self.advance();
-                    Ok(Token {
-                        token_type: TokenType::Equal,
-                        line: self.line,
-                        column: self.column,
-                    })
+                    self.ok_token(TokenType::Equal)
                 } else if self.peek() == '>' {
                     self.advance();
-                    Ok(Token {
-                        token_type: TokenType::FatArrow,
-                        line: self.line,
-                        column: self.column,
-                    })
+                    self.ok_token(TokenType::FatArrow)
                 } else {
-                    Ok(Token {
-                        token_type: TokenType::Assignment,
-                        line: self.line,
-                        column: self.column,
-                    })
+                    self.ok_token(TokenType::Assignment)
                 }
             }
             '+' => {
@@ -587,146 +540,70 @@ impl Lexer {
                     advance_char = false;
                     self.read_comment()
                 } else {
-                    Ok(Token {
-                        token_type: TokenType::Plus,
-                        line: self.line,
-                        column: self.column,
-                    })
+                    self.ok_token(TokenType::Plus)
                 }
             }
             '-' => {
                 if self.peek() == '>' {
                     self.advance();
-                    Ok(Token {
-                        token_type: TokenType::Arrow,
-                        line: self.line,
-                        column: self.column,
-                    })
+                    self.ok_token(TokenType::Arrow)
                 } else {
-                    Ok(Token {
-                        token_type: TokenType::Minus,
-                        line: self.line,
-                        column: self.column,
-                    })
+                    self.ok_token(TokenType::Minus)
                 }
             }
-            '*' => Ok(Token {
-                token_type: TokenType::Asterisk,
-                line: self.line,
-                column: self.column,
-            }),
-            '/' => Ok(Token {
-                token_type: TokenType::Slash,
-                line: self.line,
-                column: self.column,
-            }),
-            '%' => Ok(Token {
-                token_type: TokenType::Modulo,
-                line: self.line,
-                column: self.column,
-            }),
-            '^' => Ok(Token {
-                token_type: TokenType::Carrot,
-                line: self.line,
-                column: self.column,
-            }),
+            '*' => self.ok_token(TokenType::Asterisk),
+            '/' => self.ok_token(TokenType::Slash),
+            '%' => self.ok_token(TokenType::Modulo),
+            '^' => self.ok_token(TokenType::Carrot),
             '!' => {
                 if self.peek() == '=' {
                     self.advance();
-                    Ok(Token {
-                        token_type: TokenType::NotEqual,
-                        line: self.line,
-                        column: self.column,
-                    })
+                    self.ok_token(TokenType::NotEqual)
                 } else {
-                    Ok(Token {
-                        token_type: TokenType::Bang,
-                        line: self.line,
-                        column: self.column,
-                    })
+                    self.ok_token(TokenType::Bang)
                 }
             }
             '"' => {
                 advance_char = false;
                 self.read_string()
             }
-            '\n' => Ok(Token {
-                token_type: TokenType::Newline,
-                line: self.line,
-                column: self.column,
-            }),
+            '\n' => self.ok_token(TokenType::Newline),
             '<' => match self.peek() {
                 ':' => {
                     self.advance();
-                    Ok(Token {
-                        token_type: TokenType::Subtype,
-                        line: self.line,
-                        column: self.column,
-                    })
+                    self.ok_token(TokenType::Subtype)
                 }
                 '=' => {
                     self.advance();
-                    Ok(Token {
-                        token_type: TokenType::LessThanEqual,
-                        line: self.line,
-                        column: self.column,
-                    })
+                    self.ok_token(TokenType::LessThanEqual)
                 }
-                _ => Ok(Token {
-                    token_type: TokenType::LessThan,
-                    line: self.line,
-                    column: self.column,
-                }),
+                _ => self.ok_token(TokenType::LessThan),
             },
             '>' => {
                 if self.peek() == '=' {
                     self.advance();
-                    Ok(Token {
-                        token_type: TokenType::GreaterThanEqual,
-                        line: self.line,
-                        column: self.column,
-                    })
+                    self.ok_token(TokenType::GreaterThanEqual)
                 } else {
-                    Ok(Token {
-                        token_type: TokenType::GreaterThan,
-                        line: self.line,
-                        column: self.column,
-                    })
+                    self.ok_token(TokenType::GreaterThan)
                 }
             }
             '&' => {
                 if self.peek() == '&' {
                     self.advance();
-                    Ok(Token {
-                        token_type: TokenType::And,
-                        line: self.line,
-                        column: self.column,
-                    })
+                    self.ok_token(TokenType::And)
                 } else {
-                    Ok(Token {
-                        token_type: TokenType::Ampersand,
-                        line: self.line,
-                        column: self.column,
-                    })
+                    self.ok_token(TokenType::Ampersand)
                 }
             }
             '|' => {
                 if self.peek() == '|' {
                     self.advance();
-                    Ok(Token {
-                        token_type: TokenType::Or,
-                        line: self.line,
-                        column: self.column,
-                    })
+                    self.ok_token(TokenType::Or)
                 } else {
-                    Ok(Token {
-                        token_type: TokenType::Pipe,
-                        line: self.line,
-                        column: self.column,
-                    })
+                    self.ok_token(TokenType::Pipe)
                 }
             }
-            'a'..='z' | 'A'..='Z' | '_' => {
+            c if self.is_identifier_start(c) => {
                 advance_char = false;
                 self.read_identifier_or_keyword()
             }
@@ -738,24 +615,19 @@ impl Lexer {
                 advance_char = false;
                 self.read_number()
             }
-            '\0' => Ok(Token {
-                token_type: TokenType::EOF,
-                line: self.line,
-                column: self.column,
-            }),
+            '\0' => self.ok_token(TokenType::EOF),
             _ => Err(format!("Unexpected character: {}", self.current_char)),
         };
         if advance_char {
             self.advance();
         }
-        return tok;
+        tok
     }
 
     pub fn lex(&mut self, file_path: &str) -> Result<Vec<Token>, String> {
         lexer_log!("Starting to lex the file");
 
-        // Initialize the lexer with the file contents
-        self.chars = self.source.chars().collect();
+        // Reset scan position (buffer unchanged; `lex` may be called again).
         self.current = 0;
         self.line = 1;
         self.column = 1;
@@ -776,16 +648,17 @@ impl Lexer {
                 Err(e) => return Err(e),
             }
         }
-        if file_path != "" {
+        if !file_path.is_empty() {
             let output_file_path = if let Some(stripped) = file_path.strip_suffix(".err") {
                 format!("{}.lex", stripped)
             } else {
                 format!("{}.lex", file_path)
             };
-            let mut output_file =
-                std::fs::File::create(output_file_path).expect("Unable to create file");
+            let mut output_file = std::fs::File::create(&output_file_path)
+                .map_err(|e| format!("Unable to create .lex file {output_file_path}: {e}"))?;
             for token in &tokens {
-                writeln!(output_file, "{}", token).expect("Unable to write to file");
+                writeln!(output_file, "{}", token)
+                    .map_err(|e| format!("Unable to write .lex file {output_file_path}: {e}"))?;
             }
         }
         Ok(tokens)
@@ -800,11 +673,8 @@ impl Lexer {
 }
 
 fn is_comment_end(chars: &[char], current: usize) -> bool {
-    let char_1 = chars[current - 4];
-    let char_2 = chars[current - 3];
-    let char_3 = chars[current - 2];
-    if char_1 == '-' && char_2 == '-' && char_3 == '+' {
-        return true;
+    if current < 4 {
+        return false;
     }
-    return false;
+    chars[current - 4] == '-' && chars[current - 3] == '-' && chars[current - 2] == '+'
 }
