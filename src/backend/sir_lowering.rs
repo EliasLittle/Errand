@@ -705,7 +705,8 @@ impl SIRLoweringPass {
                 builder.switch_to_block(loop_block);
                 let cond = self.emit_fresh(condition_idx as usize, sir, builder, var_map)?;
                 builder.ins().brif(cond, body_block, &[], exit_block, &[]);
-                builder.seal_block(loop_block);
+                // Do not seal `loop_block` yet: the body must emit its back-edge first,
+                // otherwise Cranelift's SSA builder sees a sealed header without all preds.
 
                 // Loop body.
                 builder.switch_to_block(body_block);
@@ -722,10 +723,15 @@ impl SIRLoweringPass {
                 }
                 builder.seal_block(body_block);
 
-                // Exit.
+                // Seal the loop header while the cursor is still on `body_block` (the back-edge
+                // source). The header is already filled by `brif`, so we must not switch back into
+                // `loop_block` before sealing it.
+                builder.seal_block(loop_block);
+
                 builder.switch_to_block(exit_block);
+                let v = builder.ins().iconst(types::I64, 0);
                 builder.seal_block(exit_block);
-                builder.ins().iconst(types::I64, 0)
+                v
             }
 
             // ─── For loop (basic stub) ─────────────────────────────────────────
@@ -1315,6 +1321,7 @@ fn compute_nested_for_range(sir: &SIR, start: usize, end: usize) -> HashSet<usiz
             }
             Instr::WhileLoop(data) => {
                 mark_nested_region(sir, data.body as usize, &mut nested);
+                mark_nested_deps(sir, data.condition as usize, &mut nested);
             }
             Instr::ForLoop(data) => {
                 mark_nested_region(sir, data.body as usize, &mut nested);
@@ -1370,6 +1377,7 @@ fn mark_nested_region(sir: &SIR, region_idx: usize, nested: &mut HashSet<usize>)
                 }
                 Instr::WhileLoop(d) => {
                     mark_nested_region(sir, d.body as usize, nested);
+                    mark_nested_deps(sir, d.condition as usize, nested);
                 }
                 Instr::ForLoop(d) => {
                     mark_nested_region(sir, d.body as usize, nested);

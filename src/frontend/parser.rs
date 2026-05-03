@@ -37,7 +37,10 @@ impl Parser {
                 Err(e) => {
                     tracing::trace!(target: "parser", error = %e, "top-level statement parse error");
                     self.errors.push(e);
-                    //self.synchronize(); // Error recovery
+                    // Must advance the stream or we spin forever on the same token.
+                    if self.bump().is_none() {
+                        break;
+                    }
                 }
             }
         }

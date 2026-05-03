@@ -757,6 +757,44 @@ impl SirGen {
 
     // ── Emission ──────────────────────────────────────────────────────────────
 
+    /// PreIR lays out `while cond do (block)` as: `cond…`, `block` statements, the block's
+    /// `Region` node, then the `WhileLoop`. A linear scan would emit the block twice (once
+    /// while walking the parent range, again when lowering the `WhileLoop`), leaving the
+    /// `WhileLoop`'s body `Region` empty in SIR because `preir_to_sir` is already populated.
+    /// Skip the operand `Region` and its `instr_start..instr_end` range whenever we see a
+    /// control-flow instruction that owns them.
+    fn control_flow_operand_skip_indices(
+        &self,
+        start: instr_index,
+        end: instr_index,
+    ) -> HashSet<instr_index> {
+        let mut skip = HashSet::new();
+        let preir = &self.analyzer.preir;
+        for i in start..end {
+            match preir.get_instruction(i) {
+                Some(Instr::WhileLoop(d)) => Self::mark_region_body_skip(preir, d.body, &mut skip),
+                Some(Instr::ForLoop(d)) => Self::mark_region_body_skip(preir, d.body, &mut skip),
+                Some(Instr::IfStatement(d)) => {
+                    Self::mark_region_body_skip(preir, d.then_branch, &mut skip);
+                    if let Some(e) = d.else_branch {
+                        Self::mark_region_body_skip(preir, e, &mut skip);
+                    }
+                }
+                _ => {}
+            }
+        }
+        skip
+    }
+
+    fn mark_region_body_skip(preir: &PreIR, body: instr_index, skip: &mut HashSet<instr_index>) {
+        if let Some(Instr::Region(rd)) = preir.get_instruction(body) {
+            skip.insert(body);
+            for j in rd.instr_start..rd.instr_end {
+                skip.insert(j);
+            }
+        }
+    }
+
     /// Emit SIR for a function body rooted at `root_idx`.
     /// Resets the index map so local indices start at 0.
     fn emit_body_sir(&mut self, root_idx: instr_index) -> Result<SIR, String> {
@@ -786,6 +824,8 @@ impl SirGen {
         // is required for the lowering pass to correctly mark them as nested.
         let arm_owned =
             self.collect_arm_owned_preir(region_data.instr_start, region_data.instr_end);
+        let cf_skip =
+            self.control_flow_operand_skip_indices(region_data.instr_start, region_data.instr_end);
 
         for i in region_data.instr_start..region_data.instr_end {
             match self.analyzer.preir.get_instruction(i) {
@@ -794,7 +834,7 @@ impl SirGen {
                 | Some(Instr::EnumDecl(_)) => continue,
                 _ => {}
             }
-            if arm_owned.contains(&i) {
+            if arm_owned.contains(&i) || cf_skip.contains(&i) {
                 continue;
             }
             self.analyze_and_emit(i, &mut sir)?;
@@ -939,6 +979,7 @@ impl SirGen {
         // match arm body within this Region so they are emitted lazily at SIR
         // indices inside the arm body Region's range.
         let arm_owned = self.collect_arm_owned_preir(rd.instr_start, rd.instr_end);
+        let cf_skip = self.control_flow_operand_skip_indices(rd.instr_start, rd.instr_end);
 
         for i in rd.instr_start..rd.instr_end {
             match self.analyzer.preir.get_instruction(i) {
@@ -950,7 +991,7 @@ impl SirGen {
                 }
                 _ => {}
             }
-            if arm_owned.contains(&i) {
+            if arm_owned.contains(&i) || cf_skip.contains(&i) {
                 continue;
             }
             self.analyze_and_emit(i, sir)?;

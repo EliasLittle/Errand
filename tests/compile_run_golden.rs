@@ -37,6 +37,11 @@ const CASES: &[GoldenCase] = &[
         source_rel: "tests/test_printf/simple_math.err",
         expected: include_str!("compile_run_expected/simple_math.expected"),
     },
+    GoldenCase {
+        name: "sieve",
+        source_rel: "tests/sieve/sieve.err",
+        expected: include_str!("compile_run_expected/sieve.expected"),
+    },
 ];
 
 fn parse_expected(content: &str) -> (i32, String) {
@@ -44,7 +49,11 @@ fn parse_expected(content: &str) -> (i32, String) {
     let first_line_end = match content.find('\n') {
         Some(i) => i,
         None => {
-            return if let Some(n) = content.strip_prefix("# exit:").map(str::trim).and_then(|s| s.parse().ok()) {
+            return if let Some(n) = content
+                .strip_prefix("# exit:")
+                .map(str::trim)
+                .and_then(|s| s.parse().ok())
+            {
                 (n, String::new())
             } else {
                 (0, content.to_string())
@@ -66,14 +75,16 @@ fn parse_expected(content: &str) -> (i32, String) {
 fn copy_fixture(manifest: &Path, rel: &Path, work: &Path, stem: &str) -> PathBuf {
     let dest = work.join(format!("{stem}.err"));
     let src = manifest.join(rel);
-    fs::copy(&src, &dest).unwrap_or_else(|e| panic!("copy {} -> {}: {e}", src.display(), dest.display()));
+    fs::copy(&src, &dest)
+        .unwrap_or_else(|e| panic!("copy {} -> {}: {e}", src.display(), dest.display()));
     dest
 }
 
 #[test]
 fn compile_run_golden_fixtures() {
-    let errand = option_env!("CARGO_BIN_EXE_Errand")
-        .expect("CARGO_BIN_EXE_Errand must be set when running integration tests with `cargo test`");
+    let errand = option_env!("CARGO_BIN_EXE_Errand").expect(
+        "CARGO_BIN_EXE_Errand must be set when running integration tests with `cargo test`",
+    );
     let manifest = Path::new(env!("CARGO_MANIFEST_DIR"));
     let work = manifest.join("target").join("compile_run_golden");
     fs::create_dir_all(&work).expect("create work dir");
