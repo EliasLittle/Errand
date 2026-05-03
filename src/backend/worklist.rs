@@ -1,6 +1,6 @@
 use std::collections::HashMap;
 
-use crate::backend::preir::{Instr, instr_index};
+use crate::backend::preir::{instr_index, Instr};
 
 /// Type inference for Errand's PreIR using the DK Worklist Algorithm.
 /// This module contains only the constraint-solver data types and the `Worklist`
@@ -105,13 +105,12 @@ impl Worklist {
                 Box::new(self.expand_type_shallow(h)),
                 args.iter().map(|t| self.expand_type_shallow(t)).collect(),
             ),
-            ErrandType::Forall(v, b) => ErrandType::Forall(
-                v.clone(),
-                Box::new(self.expand_type_shallow(b)),
-            ),
-            ErrandType::Product(ts) => ErrandType::Product(
-                ts.iter().map(|t| self.expand_type_shallow(t)).collect(),
-            ),
+            ErrandType::Forall(v, b) => {
+                ErrandType::Forall(v.clone(), Box::new(self.expand_type_shallow(b)))
+            }
+            ErrandType::Product(ts) => {
+                ErrandType::Product(ts.iter().map(|t| self.expand_type_shallow(t)).collect())
+            }
             ErrandType::Var(_) | ErrandType::Con(_) => ty.clone(),
         }
     }
@@ -153,7 +152,11 @@ impl Worklist {
     pub fn find_var(&self, name: &str) -> Option<&ErrandType> {
         self.entries.iter().rev().find_map(|e| {
             if let WorklistEntry::Var(n, ty) = e {
-                if n == name { Some(ty) } else { None }
+                if n == name {
+                    Some(ty)
+                } else {
+                    None
+                }
             } else {
                 None
             }
@@ -187,8 +190,12 @@ impl Worklist {
         let mut pos_b = None;
         for (i, entry) in self.entries.iter().enumerate() {
             if let WorklistEntry::TVar(name, _) = entry {
-                if name == a { pos_a = Some(i); }
-                if name == b { pos_b = Some(i); }
+                if name == a {
+                    pos_a = Some(i);
+                }
+                if name == b {
+                    pos_b = Some(i);
+                }
             }
         }
         matches!((pos_a, pos_b), (Some(pa), Some(pb)) if pa < pb)

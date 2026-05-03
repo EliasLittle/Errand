@@ -1,7 +1,7 @@
 use std::collections::HashMap;
 use std::fmt::{Display, Formatter, Result as FmtResult};
 
-use crate::backend::preir::{Instr, instr_index};
+use crate::backend::preir::{instr_index, Instr};
 use crate::backend::worklist::ErrandType;
 
 /// One typed instruction in SIR. Operand indices are local to this SIR instance.
@@ -92,9 +92,17 @@ pub struct SIRModule {
 fn errand_type_to_string(ty: &ErrandType) -> String {
     match ty {
         ErrandType::Var(n) | ErrandType::ETVar(n) | ErrandType::Con(n) => n.clone(),
-        ErrandType::Arrow(a, b) => format!("{} -> {}", errand_type_to_string(a), errand_type_to_string(b)),
+        ErrandType::Arrow(a, b) => format!(
+            "{} -> {}",
+            errand_type_to_string(a),
+            errand_type_to_string(b)
+        ),
         ErrandType::Forall(v, t) => format!("∀{}. {}", v, errand_type_to_string(t)),
-        ErrandType::Product(ts) => ts.iter().map(errand_type_to_string).collect::<Vec<_>>().join(" × "),
+        ErrandType::Product(ts) => ts
+            .iter()
+            .map(errand_type_to_string)
+            .collect::<Vec<_>>()
+            .join(" × "),
         ErrandType::App(h, args) => {
             let parts: Vec<String> = args.iter().map(errand_type_to_string).collect();
             format!("{}<{}>", errand_type_to_string(h), parts.join(", "))
@@ -136,17 +144,28 @@ impl SIRModule {
             enum_names.sort();
             for name in enum_names {
                 let layout = &self.enums[name];
-                let variants_str: Vec<String> = layout.variants.iter().enumerate()
+                let variants_str: Vec<String> = layout
+                    .variants
+                    .iter()
+                    .enumerate()
                     .map(|(i, v)| {
                         if v.fields.is_empty() {
                             format!("{} = {}", v.name, i)
                         } else {
-                            let fields_str: Vec<String> = v.fields.iter().map(|f| format!("{}@{}", f.name, f.byte_offset)).collect();
+                            let fields_str: Vec<String> = v
+                                .fields
+                                .iter()
+                                .map(|f| format!("{}@{}", f.name, f.byte_offset))
+                                .collect();
                             format!("{} = {} ({})", v.name, i, fields_str.join(", "))
                         }
                     })
                     .collect();
-                out.push_str(&format!("\n=== SIR: enum {} {{ {} }} ===\n", name, variants_str.join(", ")));
+                out.push_str(&format!(
+                    "\n=== SIR: enum {} {{ {} }} ===\n",
+                    name,
+                    variants_str.join(", ")
+                ));
             }
         }
 

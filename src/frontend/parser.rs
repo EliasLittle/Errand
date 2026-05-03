@@ -1,6 +1,9 @@
-use crate::{parser_log};
-use super::lexer::{Token, TokenType, token_type};
-use super::ast::{Expression, Program, UnaryOperator, BinaryOperator, Parameter, FieldDefinition, Id, TypeExpression, EnumVariant, MatchCase, MatchPattern, GenericArg};
+use super::ast::{
+    BinaryOperator, EnumVariant, Expression, FieldDefinition, GenericArg, Id, MatchCase,
+    MatchPattern, Parameter, Program, TypeExpression, UnaryOperator,
+};
+use super::lexer::{token_type, Token, TokenType};
+use crate::parser_log;
 use std::iter::Peekable;
 use std::vec::IntoIter;
 
@@ -27,7 +30,7 @@ impl Parser {
     /// Core parsing function that returns a Program AST
     pub fn parse(&mut self) -> Result<Program, Vec<String>> {
         let mut expressions = Vec::new();
-        
+
         while !self.at_end() {
             parser_log!("------ Parsing new top level expression ------");
             match self.parse_expression() {
@@ -107,7 +110,10 @@ impl Parser {
             if token.var() == token_type.var() {
                 Ok(token)
             } else {
-                Err(format!("Expected {:?}, found {:?}", token_type, token.token_type))
+                Err(format!(
+                    "Expected {:?}, found {:?}",
+                    token_type, token.token_type
+                ))
             }
         } else {
             parser_log!("Unexpected end of input");
@@ -119,7 +125,7 @@ impl Parser {
     /// TODO: Change to parse_statement()
     pub fn parse_expression(&mut self) -> Result<Expression, String> {
         parser_log!("Parsing expression| current:{:?}", self.current_type());
-        let result = match self.current_type(){
+        let result = match self.current_type() {
             Some(TokenType::Foreign) => self.function(),
             Some(TokenType::Function) => self.function(),
             Some(TokenType::Struct) => self.structure(),
@@ -130,15 +136,15 @@ impl Parser {
             Some(TokenType::Return) => self.return_statement(),
             Some(TokenType::Match) => self.match_expr(),
             Some(TokenType::Newline) => {
-                self.bump(); 
+                self.bump();
                 self.parse_expression()
-            },
+            }
             Some(TokenType::Print) => self.print_statement(),
             Some(TokenType::End) => {
                 // Skip End tokens at the top level - they should be handled by their respective constructs
                 self.bump();
                 Err("Unexpected End token at top level".to_string())
-            },
+            }
             Some(_) => {
                 let primary_expr = self.primary()?; // Store the result of primary
                 self.parse_expression_1(primary_expr, 0) // Delegate to the new expression parser
@@ -155,9 +161,17 @@ impl Parser {
 
     /// Bottom-up operator-precedence parsing of expressions
     /// Any operators, literals, and calls, are parsed here (including parenthesized expressions)
-    fn parse_expression_1(&mut self, lhs: Expression, min_precedence: i32) -> Result<Expression, String> {
+    fn parse_expression_1(
+        &mut self,
+        lhs: Expression,
+        min_precedence: i32,
+    ) -> Result<Expression, String> {
         parser_log!("Parsing expression 1| Starting -------------------");
-        parser_log!("Parsing expression 1| lhs:{:?}, current:{:?}", lhs, self.current_type());
+        parser_log!(
+            "Parsing expression 1| lhs:{:?}, current:{:?}",
+            lhs,
+            self.current_type()
+        );
         let mut level_lhs = lhs;
         while let Some(current) = self.current_type() {
             if !current.is_infix() {
@@ -165,12 +179,20 @@ impl Parser {
                 break;
             }
             if !(current.precedence()? >= min_precedence) {
-                parser_log!("Parsing expression 1| precedence:{:?} < {:?}", current.precedence(), min_precedence);
+                parser_log!(
+                    "Parsing expression 1| precedence:{:?} < {:?}",
+                    current.precedence(),
+                    min_precedence
+                );
                 break; // Exit the loop if precedence is not greater
             }
             let op = self.bump().ok_or("No operator found".to_string())?;
             let op_precedence = op.precedence()?;
-            parser_log!("Parsing expression 1| op:{:?}, op_precedence:{:?}", op, op_precedence);
+            parser_log!(
+                "Parsing expression 1| op:{:?}, op_precedence:{:?}",
+                op,
+                op_precedence
+            );
             let mut rhs = self.primary()?;
             parser_log!("Parsing expression 1| rhs:{:?}", rhs);
 
@@ -183,17 +205,28 @@ impl Parser {
                 parser_log!("Parsing expression 1| next op:{:?}", next);
                 let precedence = next.precedence()?;
                 if precedence > op_precedence {
-                    parser_log!("Parsing expression 1| left associative precedence:{:?}", op_precedence+1);
-                    rhs = self.parse_expression_1(rhs.clone(), op_precedence+1)?;
+                    parser_log!(
+                        "Parsing expression 1| left associative precedence:{:?}",
+                        op_precedence + 1
+                    );
+                    rhs = self.parse_expression_1(rhs.clone(), op_precedence + 1)?;
                 } else if precedence == op_precedence && next.is_right_associative() {
-                    parser_log!("Parsing expression 1| right associative precedence:{:?}", op_precedence);
+                    parser_log!(
+                        "Parsing expression 1| right associative precedence:{:?}",
+                        op_precedence
+                    );
                     rhs = self.parse_expression_1(rhs.clone(), op_precedence)?;
                 } else {
                     break; // Exit the loop if precedence is not greater
                 }
             }
 
-            parser_log!("Applying infix operator: {:?} {:?} {:?}", level_lhs, op.token_type, rhs);
+            parser_log!(
+                "Applying infix operator: {:?} {:?} {:?}",
+                level_lhs,
+                op.token_type,
+                rhs
+            );
             level_lhs = self.apply_infix_operator(level_lhs.clone(), &op, rhs.clone())?;
         }
 
@@ -202,38 +235,113 @@ impl Parser {
         Ok(level_lhs) // Return the final expression as a clone
     }
 
-    fn apply_infix_operator(&mut self, lhs: Expression, op: &Token, rhs: Expression) -> Result<Expression, String> {
+    fn apply_infix_operator(
+        &mut self,
+        lhs: Expression,
+        op: &Token,
+        rhs: Expression,
+    ) -> Result<Expression, String> {
         match op.token_type {
-            TokenType::Dot => Ok(Expression::BinaryOp { operator: BinaryOperator::Dot, left: Box::new(lhs), right: Box::new(rhs) }),
-            TokenType::Plus => Ok(Expression::BinaryOp { operator: BinaryOperator::Add, left: Box::new(lhs), right: Box::new(rhs) }),
-            TokenType::Minus => Ok(Expression::BinaryOp { operator: BinaryOperator::Subtract, left: Box::new(lhs), right: Box::new(rhs) }),
-            TokenType::Asterisk => Ok(Expression::BinaryOp { operator: BinaryOperator::Multiply, left: Box::new(lhs), right: Box::new(rhs) }),
-            TokenType::Slash => Ok(Expression::BinaryOp { operator: BinaryOperator::Divide, left: Box::new(lhs), right: Box::new(rhs) }),
-            TokenType::Modulo => Ok(Expression::BinaryOp { operator: BinaryOperator::Modulo, left: Box::new(lhs), right: Box::new(rhs) }),
-            TokenType::Carrot => Ok(Expression::BinaryOp { operator: BinaryOperator::Power, left: Box::new(lhs), right: Box::new(rhs) }),
-            TokenType::Equal => Ok(Expression::BinaryOp { operator: BinaryOperator::Equal, left: Box::new(lhs), right: Box::new(rhs) }),
-            TokenType::NotEqual => Ok(Expression::BinaryOp { operator: BinaryOperator::NotEqual, left: Box::new(lhs), right: Box::new(rhs) }),
-            TokenType::LessThan => Ok(Expression::BinaryOp { operator: BinaryOperator::LessThan, left: Box::new(lhs), right: Box::new(rhs) }),
-            TokenType::GreaterThan => Ok(Expression::BinaryOp { operator: BinaryOperator::GreaterThan, left: Box::new(lhs), right: Box::new(rhs) }),
-            TokenType::LessThanEqual => Ok(Expression::BinaryOp { operator: BinaryOperator::LessThanEqual, left: Box::new(lhs), right: Box::new(rhs) }),
-            TokenType::GreaterThanEqual => Ok(Expression::BinaryOp { operator: BinaryOperator::GreaterThanEqual, left: Box::new(lhs), right: Box::new(rhs) }),
-            TokenType::And => Ok(Expression::BinaryOp { operator: BinaryOperator::And, left: Box::new(lhs), right: Box::new(rhs) }),
-            TokenType::Ampersand => Ok(Expression::BinaryOp { operator: BinaryOperator::Ampersand, left: Box::new(lhs), right: Box::new(rhs) }),
-            TokenType::Or => Ok(Expression::BinaryOp { operator: BinaryOperator::Or, left: Box::new(lhs), right: Box::new(rhs) }),
-            TokenType::Pipe => Ok(Expression::BinaryOp { operator: BinaryOperator::Pipe, left: Box::new(lhs), right: Box::new(rhs) }),
+            TokenType::Dot => Ok(Expression::BinaryOp {
+                operator: BinaryOperator::Dot,
+                left: Box::new(lhs),
+                right: Box::new(rhs),
+            }),
+            TokenType::Plus => Ok(Expression::BinaryOp {
+                operator: BinaryOperator::Add,
+                left: Box::new(lhs),
+                right: Box::new(rhs),
+            }),
+            TokenType::Minus => Ok(Expression::BinaryOp {
+                operator: BinaryOperator::Subtract,
+                left: Box::new(lhs),
+                right: Box::new(rhs),
+            }),
+            TokenType::Asterisk => Ok(Expression::BinaryOp {
+                operator: BinaryOperator::Multiply,
+                left: Box::new(lhs),
+                right: Box::new(rhs),
+            }),
+            TokenType::Slash => Ok(Expression::BinaryOp {
+                operator: BinaryOperator::Divide,
+                left: Box::new(lhs),
+                right: Box::new(rhs),
+            }),
+            TokenType::Modulo => Ok(Expression::BinaryOp {
+                operator: BinaryOperator::Modulo,
+                left: Box::new(lhs),
+                right: Box::new(rhs),
+            }),
+            TokenType::Carrot => Ok(Expression::BinaryOp {
+                operator: BinaryOperator::Power,
+                left: Box::new(lhs),
+                right: Box::new(rhs),
+            }),
+            TokenType::Equal => Ok(Expression::BinaryOp {
+                operator: BinaryOperator::Equal,
+                left: Box::new(lhs),
+                right: Box::new(rhs),
+            }),
+            TokenType::NotEqual => Ok(Expression::BinaryOp {
+                operator: BinaryOperator::NotEqual,
+                left: Box::new(lhs),
+                right: Box::new(rhs),
+            }),
+            TokenType::LessThan => Ok(Expression::BinaryOp {
+                operator: BinaryOperator::LessThan,
+                left: Box::new(lhs),
+                right: Box::new(rhs),
+            }),
+            TokenType::GreaterThan => Ok(Expression::BinaryOp {
+                operator: BinaryOperator::GreaterThan,
+                left: Box::new(lhs),
+                right: Box::new(rhs),
+            }),
+            TokenType::LessThanEqual => Ok(Expression::BinaryOp {
+                operator: BinaryOperator::LessThanEqual,
+                left: Box::new(lhs),
+                right: Box::new(rhs),
+            }),
+            TokenType::GreaterThanEqual => Ok(Expression::BinaryOp {
+                operator: BinaryOperator::GreaterThanEqual,
+                left: Box::new(lhs),
+                right: Box::new(rhs),
+            }),
+            TokenType::And => Ok(Expression::BinaryOp {
+                operator: BinaryOperator::And,
+                left: Box::new(lhs),
+                right: Box::new(rhs),
+            }),
+            TokenType::Ampersand => Ok(Expression::BinaryOp {
+                operator: BinaryOperator::Ampersand,
+                left: Box::new(lhs),
+                right: Box::new(rhs),
+            }),
+            TokenType::Or => Ok(Expression::BinaryOp {
+                operator: BinaryOperator::Or,
+                left: Box::new(lhs),
+                right: Box::new(rhs),
+            }),
+            TokenType::Pipe => Ok(Expression::BinaryOp {
+                operator: BinaryOperator::Pipe,
+                left: Box::new(lhs),
+                right: Box::new(rhs),
+            }),
             // TODO: Do we need to move assignment out of infix? It could be called in places it shouldn't be
             // e.g. my_fn(x = 1, y = 2). This is only valid if x and y are parameters.
-            TokenType::Assignment => {
-                match &lhs {
-                    Expression::Identifier { id, type_expr } => Ok(Expression::BinaryOp { operator: BinaryOperator::Assignment, left: Box::new(lhs), right: Box::new(rhs) }),
-                    _ => Err(format!("Cannot assign to {:?}", lhs)),
-                }
+            TokenType::Assignment => match &lhs {
+                Expression::Identifier { id, type_expr } => Ok(Expression::BinaryOp {
+                    operator: BinaryOperator::Assignment,
+                    left: Box::new(lhs),
+                    right: Box::new(rhs),
+                }),
+                _ => Err(format!("Cannot assign to {:?}", lhs)),
             },
             _ => Err(format!("Unsupported operator: {:?}", op.token_type)),
         }
     }
 
-    /// prefix -> call -> literal 
+    /// prefix -> call -> literal
     /// primary ::= '-' inner_primary | '!' inner_primary
     fn primary(&mut self) -> Result<Expression, String> {
         parser_log!("Parsing primary| current:{:?}", self.current_type());
@@ -242,7 +350,10 @@ impl Parser {
         let inner_primary = self.inner_primary()?;
 
         if let Some(op) = prefix_op {
-            Ok(Expression::UnaryOp { operator: op, operand: Box::new(inner_primary) })
+            Ok(Expression::UnaryOp {
+                operator: op,
+                operand: Box::new(inner_primary),
+            })
         } else {
             Ok(inner_primary)
         }
@@ -256,7 +367,9 @@ impl Parser {
             Some(TokenType::LParen) => self.parenthesized_expression(),
             Some(TokenType::Int(n)) => self.literal(&TokenType::Int(*n)),
             Some(TokenType::Float(n)) => self.literal(&TokenType::Float(*n)),
-            Some(TokenType::StringLiteral(s)) => self.literal(&TokenType::StringLiteral(s.to_string())),
+            Some(TokenType::StringLiteral(s)) => {
+                self.literal(&TokenType::StringLiteral(s.to_string()))
+            }
             Some(TokenType::True) => self.literal(&TokenType::True),
             Some(TokenType::False) => self.literal(&TokenType::False),
             Some(TokenType::Match) => self.match_expr(),
@@ -266,24 +379,30 @@ impl Parser {
     }
 
     fn check_prefix_operator(&mut self) -> Option<UnaryOperator> {
-        parser_log!("Checking prefix operator| current:{:?}", self.current_type());
+        parser_log!(
+            "Checking prefix operator| current:{:?}",
+            self.current_type()
+        );
         match self.current_type() {
             Some(TokenType::Minus) => {
                 self.bump()?;
                 Some(UnaryOperator::Negate)
-            },
+            }
             Some(TokenType::Bang) => {
                 self.bump()?;
                 Some(UnaryOperator::Not)
-            },
+            }
             _ => None,
         }
     }
 
     /// Parse parenthesized expressions
-    /// Does not allow 
+    /// Does not allow
     fn parenthesized_expression(&mut self) -> Result<Expression, String> {
-        parser_log!("Parsing parenthesized expression| current:{:?}", self.current_type());
+        parser_log!(
+            "Parsing parenthesized expression| current:{:?}",
+            self.current_type()
+        );
         self.expect(&TokenType::LParen)?;
         let primary_expr = self.primary()?; // Store the result of primary
         parser_log!("Parenthesized | primary expression: {:?}", primary_expr);
@@ -312,7 +431,6 @@ impl Parser {
                     variant: next_id.name,
                     args,
                 })
-
             } else {
                 // `Name::Type` or `Name::Foo<Int>` — type annotation.
                 parser_log!("Identifier with type annotation");
@@ -331,10 +449,16 @@ impl Parser {
             parser_log!("Function call");
             let parameters = self.arguments()?;
             self.expect(&TokenType::RParen)?;
-            Ok(Expression::FunctionCall { id, arguments: parameters })
+            Ok(Expression::FunctionCall {
+                id,
+                arguments: parameters,
+            })
         } else {
             parser_log!("Identifier");
-            Ok(Expression::Identifier { id, type_expr: None })
+            Ok(Expression::Identifier {
+                id,
+                type_expr: None,
+            })
         }
     }
 
@@ -360,9 +484,10 @@ impl Parser {
 
     fn type_expr(&mut self) -> Result<TypeExpression, String> {
         parser_log!("Parsing type expression| current:{:?}", self.current_type());
-        
+
         let id = self.id()?; // Parse the base identifier
-        if self.eat(&TokenType::LBrace) { // Check for the start of a composite type
+        if self.eat(&TokenType::LBrace) {
+            // Check for the start of a composite type
             let mut types = Vec::new();
             while !self.at(&TokenType::RBrace) {
                 let inner_type = self.type_expr()?; // Parse inner types
@@ -420,16 +545,20 @@ impl Parser {
 
     /// Parse literals (String, int, float, boolean)
     fn literal(&mut self, token_type: &TokenType) -> Result<Expression, String> {
-        parser_log!("Parsing literal| current:{:?} expected:{:?}", self.current_type(), token_type);
-       let literal = self.expect(token_type)?;
-       match literal.token_type {
-        TokenType::StringLiteral(s) => Ok(Expression::String(s)),
-        TokenType::Int(n) => Ok(Expression::Int(n)),
-        TokenType::Float(n) => Ok(Expression::Float(n)),
-        TokenType::True => Ok(Expression::Boolean(true)),
-        TokenType::False => Ok(Expression::Boolean(false)),
-        _ => Err(format!("Unexpected token: {:?}", token_type)),
-       }
+        parser_log!(
+            "Parsing literal| current:{:?} expected:{:?}",
+            self.current_type(),
+            token_type
+        );
+        let literal = self.expect(token_type)?;
+        match literal.token_type {
+            TokenType::StringLiteral(s) => Ok(Expression::String(s)),
+            TokenType::Int(n) => Ok(Expression::Int(n)),
+            TokenType::Float(n) => Ok(Expression::Float(n)),
+            TokenType::True => Ok(Expression::Boolean(true)),
+            TokenType::False => Ok(Expression::Boolean(false)),
+            _ => Err(format!("Unexpected token: {:?}", token_type)),
+        }
     }
 
     /// Parse function definitions
@@ -493,7 +622,11 @@ impl Parser {
         self.expect(&TokenType::Newline)?;
         let fields = self.field_parameters()?;
         self.expect(&TokenType::End)?;
-        Ok(Expression::StructDefinition { id, fields, type_params })
+        Ok(Expression::StructDefinition {
+            id,
+            fields,
+            type_params,
+        })
     }
 
     // enum <identifier>
@@ -515,7 +648,11 @@ impl Parser {
         self.expect(&TokenType::Newline)?;
         let variants = self.enum_variants()?;
         self.expect(&TokenType::End)?;
-        Ok(Expression::EnumDefinition { id, variants, type_params })
+        Ok(Expression::EnumDefinition {
+            id,
+            variants,
+            type_params,
+        })
     }
 
     /// Parse enum variant names until `end`.
@@ -545,7 +682,9 @@ impl Parser {
                         .into_iter()
                         .enumerate()
                         .map(|(i, t)| FieldDefinition {
-                            id: Id { name: format!("_{}", i) },
+                            id: Id {
+                                name: format!("_{}", i),
+                            },
                             field_type: t,
                         })
                         .collect();
@@ -560,7 +699,9 @@ impl Parser {
                     // Single-type variant: Write::String
                     let t = self.type_expr()?;
                     let fields = vec![FieldDefinition {
-                        id: Id { name: "_0".to_string() },
+                        id: Id {
+                            name: "_0".to_string(),
+                        },
                         field_type: t,
                     }];
                     (fields, true)
@@ -571,7 +712,11 @@ impl Parser {
             };
 
             self.expect(&TokenType::Newline)?;
-            variants.push(EnumVariant { name: id.name, fields, is_tuple });
+            variants.push(EnumVariant {
+                name: id.name,
+                fields,
+                is_tuple,
+            });
         }
         Ok(variants)
     }
@@ -599,7 +744,9 @@ impl Parser {
             let field = FieldDefinition { id, field_type };
             fields.push(field);
             if !(self.eat(&TokenType::Comma) ^ self.at(&TokenType::RBrace)) {
-                return Err("Expected comma or right brace in struct variant field list".to_string());
+                return Err(
+                    "Expected comma or right brace in struct variant field list".to_string()
+                );
             }
         }
         Ok(fields)
@@ -622,32 +769,41 @@ impl Parser {
     /// Parse expressions until 'RParen' token
     fn parameters(&mut self) -> Result<Vec<Parameter>, String> {
         parser_log!("Parsing parameters| current:{:?}", self.current_type());
-       let mut parameters = Vec::new();
-       while !self.at(&TokenType::RParen) {
-        let id = self.id()?;
-        let parameter = if self.eat(&TokenType::TypeDef) {
-            let type_expr = self.type_expr()?;
-            Parameter { id, type_expr: Some(type_expr) }
-        } else {
-            Parameter { id, type_expr: None }
-        };
-        parameters.push(parameter);
-        if !(self.eat(&TokenType::Comma) ^ self.at(&TokenType::RParen)) {
-            return Err("Expected comma or right parenthesis".to_string());
+        let mut parameters = Vec::new();
+        while !self.at(&TokenType::RParen) {
+            let id = self.id()?;
+            let parameter = if self.eat(&TokenType::TypeDef) {
+                let type_expr = self.type_expr()?;
+                Parameter {
+                    id,
+                    type_expr: Some(type_expr),
+                }
+            } else {
+                Parameter {
+                    id,
+                    type_expr: None,
+                }
+            };
+            parameters.push(parameter);
+            if !(self.eat(&TokenType::Comma) ^ self.at(&TokenType::RParen)) {
+                return Err("Expected comma or right parenthesis".to_string());
+            }
         }
-       }
-       Ok(parameters)
+        Ok(parameters)
     }
 
     /// Parse field definitions
     /// id::type
     fn field_parameters(&mut self) -> Result<Vec<FieldDefinition>, String> {
-        parser_log!("Parsing field parameters| current:{:?}", self.current_type());
+        parser_log!(
+            "Parsing field parameters| current:{:?}",
+            self.current_type()
+        );
         let mut fields = Vec::new();
         while self.at(&token_type("Identifier")?) {
             let id = self.id()?;
             self.expect(&TokenType::TypeDef)?;
-            let field_type = self.type_expr()?; // Required here 
+            let field_type = self.type_expr()?; // Required here
             self.expect(&TokenType::Newline)?;
             let field = FieldDefinition { id, field_type };
             fields.push(field);
@@ -691,20 +847,19 @@ impl Parser {
             let elseif_branch = self.block()?;
             elseif_branches.push((elseif_condition, elseif_branch));
         }*/
-        
+
         // Check for else
         if self.eat(&TokenType::Else) {
             else_branch = Some(Box::new(self.block()?));
         }
 
         self.expect(&TokenType::End)?;
-        Ok(Expression::If { 
-            condition: Box::new(condition), 
-            then_branch: Box::new(then_branch), 
-            else_branch: else_branch
+        Ok(Expression::If {
+            condition: Box::new(condition),
+            then_branch: Box::new(then_branch),
+            else_branch: else_branch,
         })
     }
-
 
     /// Parse a `match` expression:
     /// ```text
@@ -714,7 +869,10 @@ impl Parser {
     /// end
     /// ```
     fn match_expr(&mut self) -> Result<Expression, String> {
-        parser_log!("Parsing match expression| current:{:?}", self.current_type());
+        parser_log!(
+            "Parsing match expression| current:{:?}",
+            self.current_type()
+        );
         self.expect(&TokenType::Match)?;
         let value = self.parse_expression()?;
         // parse_expression already consumes a newline; eat it if still present
@@ -728,7 +886,10 @@ impl Parser {
             cases.push(MatchCase { pattern, body });
         }
         self.expect(&TokenType::End)?;
-        Ok(Expression::Match { value: Box::new(value), cases })
+        Ok(Expression::Match {
+            value: Box::new(value),
+            cases,
+        })
     }
 
     /// Parse a single match arm pattern:
@@ -746,7 +907,7 @@ impl Parser {
         }
         // EnumName::Variant or EnumName::Variant(bindings)
         let enum_id = self.id()?;
-        self.expect(&TokenType::TypeDef)?;  // ::
+        self.expect(&TokenType::TypeDef)?; // ::
         let variant_id = self.id()?;
         let bindings = if self.eat(&TokenType::LParen) {
             let mut names = Vec::new();
@@ -781,7 +942,10 @@ impl Parser {
         self.eat(&TokenType::Newline);
         self.expect(&TokenType::End)?;
         parser_log!("Parsing while statement| body:{:?}", body);
-        Ok(Expression::While { condition: Box::new(condition), body: Box::new(body) })
+        Ok(Expression::While {
+            condition: Box::new(condition),
+            body: Box::new(body),
+        })
     }
 
     fn for_statement(&mut self) -> Result<Expression, String> {
@@ -793,11 +957,18 @@ impl Parser {
         self.expect(&TokenType::Newline)?;
         let body = self.block()?;
         self.expect(&TokenType::End)?;
-        Ok(Expression::For { iterator, range: Box::new(range), body: Box::new(body) })
+        Ok(Expression::For {
+            iterator,
+            range: Box::new(range),
+            body: Box::new(body),
+        })
     }
 
     fn return_statement(&mut self) -> Result<Expression, String> {
-        parser_log!("Parsing return statement| current:{:?}", self.current_type());
+        parser_log!(
+            "Parsing return statement| current:{:?}",
+            self.current_type()
+        );
         self.expect(&TokenType::Return)?;
         let primary_expr = self.primary()?; // Store the result of primary
         let value = self.parse_expression_1(primary_expr, 0)?;
@@ -814,5 +985,4 @@ impl Parser {
         self.eat(&TokenType::Newline);
         Ok(Expression::Print(Box::new(value)))
     }
-
 }

@@ -1,9 +1,7 @@
-
-
-
-use crate::{frontend::ast::{BinaryOperator, FieldDefinition, Id, Parameter, TypeExpression, UnaryOperator}};
+use crate::frontend::ast::{
+    BinaryOperator, FieldDefinition, Id, Parameter, TypeExpression, UnaryOperator,
+};
 use std::fmt::{Display, Formatter, Result as FmtResult};
-
 
 #[derive(Debug, Clone)]
 pub struct PreIR {
@@ -42,19 +40,16 @@ impl PreIR {
     /// Format an instruction with context
     pub fn format_instruction(&self, index: instr_index) -> String {
         match self.get_instruction(index) {
-            Some(instr) => {
-                match instr {
-                    Instr::VarDecl(data) => format!("    {}", self.format_instr_with_context(instr)),
-                    Instr::FuncDecl(data) => format!("    {}", self.format_instr_with_context(instr)),
-                    Instr::StructDecl(data) => format!("    {}", self.format_instr_with_context(instr)),
-                    Instr::EnumDecl(data) => format!("    {}", self.format_instr_with_context(instr)),
-                    _ => format!("%{} = {}", index, self.format_instr_with_context(instr)),
-                } 
+            Some(instr) => match instr {
+                Instr::VarDecl(data) => format!("    {}", self.format_instr_with_context(instr)),
+                Instr::FuncDecl(data) => format!("    {}", self.format_instr_with_context(instr)),
+                Instr::StructDecl(data) => format!("    {}", self.format_instr_with_context(instr)),
+                Instr::EnumDecl(data) => format!("    {}", self.format_instr_with_context(instr)),
+                _ => format!("%{} = {}", index, self.format_instr_with_context(instr)),
             },
             None => format!("%{} = <invalid>", index),
         }
     }
-
 
     /// Format an instruction with contextual information (resolving indices)
     pub fn format_instr_with_context(&self, instr: &Instr) -> String {
@@ -67,19 +62,23 @@ impl PreIR {
                     None => format!("%{}", data.operand),
                 };
                 format!("unop {:?} {}", data.op, operand)
-            },
+            }
             Instr::BinOp(data) => {
                 format!("binop {:?} %{} %{}", data.op, data.left, data.right)
-            },
+            }
             Instr::FnCall(data) => {
-                let args: Vec<String> = data.arguments.iter().map(|&arg_idx| {
-                    match self.get_instruction(arg_idx) {
-                        Some(arg_instr) => format!("({})", self.format_instr_with_context(arg_instr)),
+                let args: Vec<String> = data
+                    .arguments
+                    .iter()
+                    .map(|&arg_idx| match self.get_instruction(arg_idx) {
+                        Some(arg_instr) => {
+                            format!("({})", self.format_instr_with_context(arg_instr))
+                        }
                         None => format!("%{}", arg_idx),
-                    }
-                }).collect();
+                    })
+                    .collect();
                 format!("call {}({})", data.name, args.join(", "))
-            },
+            }
             Instr::IfStatement(data) => {
                 let condition = match self.get_instruction(data.condition) {
                     Some(cond_instr) => format!("({})", self.format_instr_with_context(cond_instr)),
@@ -91,14 +90,16 @@ impl PreIR {
                 };
                 if let Some(else_idx) = data.else_branch {
                     let else_branch = match self.get_instruction(else_idx) {
-                        Some(else_instr) => format!("({})", self.format_instr_with_context(else_instr)),
+                        Some(else_instr) => {
+                            format!("({})", self.format_instr_with_context(else_instr))
+                        }
                         None => format!("%{}", else_idx),
                     };
                     format!("if {} then {} else {}", condition, then_branch, else_branch)
                 } else {
                     format!("if {} then {}", condition, then_branch)
                 }
-            },
+            }
             Instr::WhileLoop(data) => {
                 let condition = match self.get_instruction(data.condition) {
                     Some(cond_instr) => format!("({})", self.format_instr_with_context(cond_instr)),
@@ -109,11 +110,13 @@ impl PreIR {
                     None => format!("%{}", data.body),
                 };
                 format!("while {} do {}", condition, body)
-            },
+            }
             Instr::ForLoop(data) => {
                 let iterator = data.iterator.clone();
                 let range = match self.get_instruction(data.range) {
-                    Some(range_instr) => format!("({})", self.format_instr_with_context(range_instr)),
+                    Some(range_instr) => {
+                        format!("({})", self.format_instr_with_context(range_instr))
+                    }
                     None => format!("%{}", data.range),
                 };
                 let body = match self.get_instruction(data.body) {
@@ -121,28 +124,31 @@ impl PreIR {
                     None => format!("%{}", data.body),
                 };
                 format!("for {} in {} do {}", iterator, range, body)
-            },
+            }
             Instr::Return(data) => {
                 if let Some(value_idx) = data.value {
                     let value = match self.get_instruction(value_idx) {
-                        Some(val_instr) => format!("({})", self.format_instr_with_context(val_instr)),
+                        Some(val_instr) => {
+                            format!("({})", self.format_instr_with_context(val_instr))
+                        }
                         None => format!("%{}", value_idx),
                     };
                     format!("ret_node({})", value)
                 } else {
                     format!("ret_node()")
                 }
-            },
+            }
             Instr::Region(data) => {
                 let mut parts = Vec::new();
-                
+
                 // Show instructions on separate lines with indentation
                 if data.instr_start != data.instr_end {
                     let instrs: Vec<String> = (data.instr_start..data.instr_end)
                         .map(|i| {
                             let formatted = self.format_instruction(i);
                             // Indent all lines of multi-line instructions
-                            formatted.lines()
+                            formatted
+                                .lines()
                                 .map(|line| format!("    {}", line))
                                 .collect::<Vec<_>>()
                                 .join("\n")
@@ -150,82 +156,109 @@ impl PreIR {
                         .collect();
                     parts.push(format!("    {}", instrs.join("\n")));
                 }
-                
+
                 // Show return location with just the index
                 parts.push(format!("    ret: %{}", data.return_loc));
-                
+
                 format!("region {{\n{}\n}}", parts.join("\n"))
-            },
+            }
             Instr::StructDecl(data) => {
                 format!("struct {} {{}}", data.name)
-            },
+            }
             Instr::EnumDecl(data) => {
-                let variants_str: Vec<String> = data.variants.iter().map(|v| {
-                    if v.fields.is_empty() {
-                        v.name.clone()
-                    } else {
-                        let fields_str: Vec<String> = v.fields.iter().map(|(n, t)| format!("{}::{}", n, t.name())).collect();
-                        format!("{}({})", v.name, fields_str.join(", "))
-                    }
-                }).collect();
+                let variants_str: Vec<String> = data
+                    .variants
+                    .iter()
+                    .map(|v| {
+                        if v.fields.is_empty() {
+                            v.name.clone()
+                        } else {
+                            let fields_str: Vec<String> = v
+                                .fields
+                                .iter()
+                                .map(|(n, t)| format!("{}::{}", n, t.name()))
+                                .collect();
+                            format!("{}({})", v.name, fields_str.join(", "))
+                        }
+                    })
+                    .collect();
                 format!("enum {} {{ {} }}", data.name, variants_str.join(", "))
-            },
+            }
             Instr::EnumVariantAccess(data) => {
                 format!("{}::{}", data.enum_name, data.variant)
-            },
+            }
             Instr::EnumVariantConstruct(data) => {
-                let args_str: Vec<String> = data.arg_indices.iter().map(|i| format!("%{}", i)).collect();
-                format!("{}::{}({})", data.enum_name, data.variant, args_str.join(", "))
-            },
+                let args_str: Vec<String> =
+                    data.arg_indices.iter().map(|i| format!("%{}", i)).collect();
+                format!(
+                    "{}::{}({})",
+                    data.enum_name,
+                    data.variant,
+                    args_str.join(", ")
+                )
+            }
             Instr::Match(data) => {
-                let arms_str: Vec<String> = data.arms.iter().map(|arm| {
-                    let tag_s = arm.tag.map_or("_".to_string(), |t| t.to_string());
-                    format!("{} [{}] => %{}", tag_s, arm.bindings.join(","), arm.body)
-                }).collect();
+                let arms_str: Vec<String> = data
+                    .arms
+                    .iter()
+                    .map(|arm| {
+                        let tag_s = arm.tag.map_or("_".to_string(), |t| t.to_string());
+                        format!("{} [{}] => %{}", tag_s, arm.bindings.join(","), arm.body)
+                    })
+                    .collect();
                 format!("match %{} {{ {} }}", data.scrutinee, arms_str.join("; "))
-            },
+            }
             Instr::FuncDecl(data) => {
-                let params: Vec<String> = data.parameters.iter().map(|p| p.id.name.clone()).collect();
-                let body = self.format_instr_with_context(&self.get_instruction(data.body_index).unwrap());
+                let params: Vec<String> =
+                    data.parameters.iter().map(|p| p.id.name.clone()).collect();
+                let body =
+                    self.format_instr_with_context(&self.get_instruction(data.body_index).unwrap());
                 // Handle multi-line body formatting - indent all lines after the first
                 let body_lines: Vec<&str> = body.lines().collect();
                 let formatted_body = if body_lines.len() > 1 {
                     let first_line = body_lines[0];
                     let remaining_lines: Vec<String> = body_lines[1..]
                         .iter()
-                        .map(|line| format!("    {}", line))  // Indent continuation lines
+                        .map(|line| format!("    {}", line)) // Indent continuation lines
                         .collect();
                     format!("{}\n{}", first_line, remaining_lines.join("\n"))
                 } else {
                     body
                 };
-                format!("func {} [{}] {}", data.name, params.join(", "), formatted_body)
-            },
+                format!(
+                    "func {} [{}] {}",
+                    data.name,
+                    params.join(", "),
+                    formatted_body
+                )
+            }
             Instr::VarDecl(data) => {
                 format!("var {} = %{}", data.name, data.value)
-            },
+            }
             Instr::Typeof(operand) => {
                 let operand_str = match self.get_instruction(*operand) {
                     Some(op_instr) => format!("({})", self.format_instr_with_context(op_instr)),
                     None => format!("%{}", operand),
                 };
                 format!("typeof {}", operand_str)
-            },
+            }
         }
     }
-
 
     /// Returns a formatted string representation of all instructions
     pub fn format_all(&self) -> String {
         let mut output = String::new();
         for (index, _instr) in self.instructions.iter().enumerate() {
-            output.push_str(&format!("{}\n", self.format_instruction(index as instr_index)));
+            output.push_str(&format!(
+                "{}\n",
+                self.format_instruction(index as instr_index)
+            ));
         }
-        
+
         output.push_str("\nMain:\n");
         output.push_str("=====\n");
         output.push_str(&format!("{}\n", self.format_instr_with_context(&self.main)));
-        
+
         output
     }
 
@@ -263,7 +296,6 @@ pub enum Instr {
     /// operand's type is known.
     Typeof(instr_index),
 }
-
 
 //
 // Declaration Values
@@ -384,7 +416,7 @@ pub struct UnOpPl {
 #[derive(Debug, Clone, PartialEq)]
 pub struct BinOpPl {
     pub op: BinaryOperator,
-    pub left: instr_index, 
+    pub left: instr_index,
     pub right: instr_index,
 }
 
@@ -452,53 +484,82 @@ impl Display for Instr {
             Instr::FnCall(data) => {
                 let args: Vec<String> = data.arguments.iter().map(|arg| arg.to_string()).collect();
                 write!(f, "call {}({})", data.name, args.join(", "))
-            },
+            }
             Instr::IfStatement(data) => {
                 if let Some(else_branch) = &data.else_branch {
-                    write!(f, "if {} then {} else {}", data.condition, data.then_branch, else_branch)
+                    write!(
+                        f,
+                        "if {} then {} else {}",
+                        data.condition, data.then_branch, else_branch
+                    )
                 } else {
                     write!(f, "if {} then {}", data.condition, data.then_branch)
                 }
-            },
+            }
             Instr::WhileLoop(data) => write!(f, "while {} do {}", data.condition, data.body),
-            Instr::ForLoop(data) => write!(f, "for {} in {} do {}", data.iterator, data.range, data.body),
+            Instr::ForLoop(data) => write!(
+                f,
+                "for {} in {} do {}",
+                data.iterator, data.range, data.body
+            ),
             Instr::Return(data) => {
                 if let Some(value) = &data.value {
                     write!(f, "ret_node({})", value)
                 } else {
                     write!(f, "ret_node()")
                 }
-            },
+            }
             Instr::Region(data) => {
-                write!(f, "region[{}..{}, ret:{}]", 
-                       data.instr_start, data.instr_end, 
-                       data.return_loc)
-            },
+                write!(
+                    f,
+                    "region[{}..{}, ret:{}]",
+                    data.instr_start, data.instr_end, data.return_loc
+                )
+            }
             Instr::StructDecl(data) => {
-                let fields: Vec<String> = data.fields.iter().map(|field| field.id.name.clone()).collect();
+                let fields: Vec<String> = data
+                    .fields
+                    .iter()
+                    .map(|field| field.id.name.clone())
+                    .collect();
                 write!(f, "struct {} {{ {} }}", data.name, fields.join(", "))
-            },
+            }
             Instr::EnumDecl(data) => {
-                let variants_str: Vec<String> = data.variants.iter().map(|v| v.name.clone()).collect();
+                let variants_str: Vec<String> =
+                    data.variants.iter().map(|v| v.name.clone()).collect();
                 write!(f, "enum {} {{ {} }}", data.name, variants_str.join(", "))
-            },
+            }
             Instr::EnumVariantAccess(data) => {
                 write!(f, "enum_variant {}::{}", data.enum_name, data.variant)
-            },
+            }
             Instr::EnumVariantConstruct(data) => {
-                let args_str: Vec<String> = data.arg_indices.iter().map(|i| format!("%{}", i)).collect();
-                write!(f, "enum_construct {}::{}({})", data.enum_name, data.variant, args_str.join(", "))
-            },
+                let args_str: Vec<String> =
+                    data.arg_indices.iter().map(|i| format!("%{}", i)).collect();
+                write!(
+                    f,
+                    "enum_construct {}::{}({})",
+                    data.enum_name,
+                    data.variant,
+                    args_str.join(", ")
+                )
+            }
             Instr::Match(data) => {
                 write!(f, "match %{} [{}]", data.scrutinee, data.arms.len())
-            },
+            }
             Instr::FuncDecl(data) => {
-                let params: Vec<String> = data.parameters.iter().map(|p| p.id.name.clone()).collect();
-                write!(f, "func {} [{}] {}", data.name, params.join(", "), data.body_index)
-            },
+                let params: Vec<String> =
+                    data.parameters.iter().map(|p| p.id.name.clone()).collect();
+                write!(
+                    f,
+                    "func {} [{}] {}",
+                    data.name,
+                    params.join(", "),
+                    data.body_index
+                )
+            }
             Instr::VarDecl(data) => {
                 write!(f, "var {} = {}", data.name, data.value)
-            },
+            }
             Instr::Typeof(operand) => write!(f, "typeof {}", operand),
         }
     }

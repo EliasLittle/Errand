@@ -1,7 +1,7 @@
-use crate::{compiler_debug};
+use crate::compiler_debug;
+use crate::frontend::ast::{Expression, Id, Program, TypeExpression};
 use std::collections::HashMap;
 use std::collections::VecDeque;
-use crate::frontend::ast::{Expression, Program, Id, TypeExpression};
 
 #[derive(Debug)]
 pub struct Resolver {
@@ -22,14 +22,18 @@ impl Resolver {
     pub fn resolve(&mut self, program: &Program) -> Result<HashMap<String, usize>, Vec<String>> {
         compiler_debug!("------ Resolver start ------");
         self.begin_scope(); // Global scope
-        compiler_debug!("Res.resolve| Global scope: {:?}, locals: {:?}", self.scopes, self.locals);
-        
+        compiler_debug!(
+            "Res.resolve| Global scope: {:?}, locals: {:?}",
+            self.scopes,
+            self.locals
+        );
+
         for expr in &program.expressions {
             self.resolve_expr(expr);
         }
-        
+
         self.end_scope();
-        
+
         compiler_debug!("------ Resolver end ------");
 
         if self.errors.is_empty() {
@@ -41,35 +45,49 @@ impl Resolver {
 
     fn resolve_expr(&mut self, expr: &Expression) -> Result<(), String> {
         match expr {
-            Expression::Int(_) | Expression::Float(_) | Expression::Boolean(_) | Expression::String(_) | Expression::Symbol(_) => Ok(()),
+            Expression::Int(_)
+            | Expression::Float(_)
+            | Expression::Boolean(_)
+            | Expression::String(_)
+            | Expression::Symbol(_) => Ok(()),
             Expression::Identifier { id, type_expr: _ } => self.resolve_identifier(id),
             Expression::UnaryOp { operand, .. } => self.resolve_expr(operand),
             Expression::BinaryOp { left, right, .. } => {
                 self.resolve_expr(left)?;
                 self.resolve_expr(right)
-            },
+            }
             Expression::FunctionCall { id, arguments } => {
                 self.resolve_identifier(id)?;
                 for arg in arguments {
                     self.resolve_expr(arg)?;
                 }
                 Ok(())
-            },
-            Expression::FunctionDefinition { id, parameters, body, return_type_expr, foreign: _ } => {
+            }
+            Expression::FunctionDefinition {
+                id,
+                parameters,
+                body,
+                return_type_expr,
+                foreign: _,
+            } => {
                 // Declare the function name in the current scope
                 self.declare(id)?;
                 self.define(id);
-                
+
                 // Create new scope for function body
                 self.begin_scope();
-                compiler_debug!("Res.resolve_expr.fn_def| Function scope: {:?}, locals: {:?}", self.scopes, self.locals);
-                
+                compiler_debug!(
+                    "Res.resolve_expr.fn_def| Function scope: {:?}, locals: {:?}",
+                    self.scopes,
+                    self.locals
+                );
+
                 // Declare and define parameters
                 for param in parameters {
                     self.declare(&param.id)?;
                     self.define(&param.id);
                 }
-                
+
                 // Resolve the function body
                 match body.as_ref() {
                     Expression::Block(expressions) => {
@@ -78,72 +96,92 @@ impl Resolver {
                             self.resolve_expr(&expr)?;
                         }
                     }
-                    _ => return Err(format!("Invalid function body: {:?}", body))
+                    _ => return Err(format!("Invalid function body: {:?}", body)),
                 }
                 //self.resolve_expr(body)?;
-                
+
                 self.end_scope();
                 Ok(())
-            },
+            }
             Expression::StructDefinition { id, fields, .. } => {
                 self.declare(id)?;
                 self.define(id);
-                
+
                 // Create scope for struct fields
                 self.begin_scope();
-                compiler_debug!("Res.resolve_expr.struct_def| Struct scope: {:?}, locals: {:?}", self.scopes, self.locals);
+                compiler_debug!(
+                    "Res.resolve_expr.struct_def| Struct scope: {:?}, locals: {:?}",
+                    self.scopes,
+                    self.locals
+                );
 
                 for field in fields {
                     self.declare(&field.id)?;
                     self.define(&field.id);
                 }
-                
+
                 self.end_scope();
                 Ok(())
-            },
-            Expression::If { condition, then_branch, else_branch } => {
+            }
+            Expression::If {
+                condition,
+                then_branch,
+                else_branch,
+            } => {
                 self.resolve_expr(condition)?;
                 self.resolve_expr(then_branch)?;
                 if let Some(else_branch) = else_branch {
                     self.resolve_expr(else_branch)?;
                 }
                 Ok(())
-            },
+            }
             Expression::While { condition, body } => {
                 self.resolve_expr(condition)?;
                 self.resolve_expr(body)
-            },
-            Expression::For { iterator, range, body } => {
+            }
+            Expression::For {
+                iterator,
+                range,
+                body,
+            } => {
                 self.resolve_expr(range)?;
-                
+
                 // Create new scope for iterator variable
                 self.begin_scope();
-                compiler_debug!("Res.resolve_expr.for| For scope: {:?}, locals: {:?}", self.scopes, self.locals);
+                compiler_debug!(
+                    "Res.resolve_expr.for| For scope: {:?}, locals: {:?}",
+                    self.scopes,
+                    self.locals
+                );
 
                 self.declare(iterator)?;
                 self.define(iterator);
-                
+
                 self.resolve_expr(body)?;
-                
+
                 self.end_scope();
                 Ok(())
-            },
+            }
             Expression::Block(expressions) => {
                 self.begin_scope();
-                compiler_debug!("Res.resolve_expr.block| Block scope: {:?}, locals: {:?}", self.scopes, self.locals);
+                compiler_debug!(
+                    "Res.resolve_expr.block| Block scope: {:?}, locals: {:?}",
+                    self.scopes,
+                    self.locals
+                );
 
                 for expr in expressions {
                     self.resolve_expr(expr)?;
                 }
                 self.end_scope();
                 Ok(())
-            },
+            }
             Expression::Return(expr) => {
                 if let Some(expr) = expr {
                     self.resolve_expr(expr)?;
                 }
                 Ok(())
-            },
+            }
             Expression::Print(expr) => self.resolve_expr(expr),
             Expression::EnumDefinition { .. } => Ok(()),
             Expression::EnumVariantAccess { .. } => Ok(()),
@@ -152,14 +190,14 @@ impl Resolver {
                     self.resolve_expr(a)?;
                 }
                 Ok(())
-            },
+            }
             Expression::Match { value, cases } => {
                 self.resolve_expr(value)?;
                 for case in cases {
                     self.resolve_expr(&case.body)?;
                 }
                 Ok(())
-            },
+            }
             // Expression::VariableAssignment { id, value } => {
             //     compiler_debug!("Res.resolve_expr.var_assign| Variable assignment: {:?}, value: {:?}", id.name, value);
             //     // Check if the variable is already declared
@@ -185,11 +223,14 @@ impl Resolver {
         if let Some(scope) = self.scopes.front() {
             if let Some(&initialized) = scope.get(&id.name) {
                 if !initialized {
-                    return Err(format!("Cannot read local variable '{}' in its own initializer", id.name));
+                    return Err(format!(
+                        "Cannot read local variable '{}' in its own initializer",
+                        id.name
+                    ));
                 }
             }
         }
-        
+
         self.resolve_local(id)?;
         return Ok(());
     }
@@ -205,7 +246,10 @@ impl Resolver {
     fn declare(&mut self, id: &Id) -> Result<(), String> {
         if let Some(scope) = self.scopes.front_mut() {
             if scope.contains_key(&id.name) {
-                return Err(format!("Variable '{}' already declared in this scope", id.name));
+                return Err(format!(
+                    "Variable '{}' already declared in this scope",
+                    id.name
+                ));
             }
             scope.insert(id.name.clone(), false);
         }

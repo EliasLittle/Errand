@@ -5,9 +5,9 @@ use crate::backend::errand_builtins::{
     type_expr_to_errand_type_with_params,
 };
 use crate::backend::preir::{
-    BinOpPl, EnumData, EnumVariantData, EnumVariantConstructData, EnumVariantInfo, FnCallPl,
-    FuncData, IfStatementData, Instr, LiteralPl, MatchData, PreIR, RegionData, ReturnData,
-    StructData, UnOpPl, VarDeclData, VarRefData, WhileLoopData, instr_index,
+    instr_index, BinOpPl, EnumData, EnumVariantConstructData, EnumVariantData, EnumVariantInfo,
+    FnCallPl, FuncData, IfStatementData, Instr, LiteralPl, MatchData, PreIR, RegionData,
+    ReturnData, StructData, UnOpPl, VarDeclData, VarRefData, WhileLoopData,
 };
 use crate::backend::worklist::{
     ErrandType, ErrandTypeError, Judgment, TyVarKind, TypeResult, Worklist, WorklistEntry,
@@ -50,7 +50,14 @@ impl TypePool {
         let string = push(&mut types, ErrandType::Con("String".into()));
         let unit = push(&mut types, ErrandType::Con("Unit".into()));
 
-        TypePool { types, int, float, bool_, string, unit }
+        TypePool {
+            types,
+            int,
+            float,
+            bool_,
+            string,
+            unit,
+        }
     }
 
     /// Store a type in the pool and return its stable handle.
@@ -125,7 +132,10 @@ impl Analyzer {
                 variants,
             }) = instr
             {
-                enum_type_params.insert(name.clone(), type_params.iter().map(|p| p.name.clone()).collect());
+                enum_type_params.insert(
+                    name.clone(),
+                    type_params.iter().map(|p| p.name.clone()).collect(),
+                );
                 enum_variants.insert(name.clone(), variants.clone());
             }
         }
@@ -197,16 +207,12 @@ impl Analyzer {
     fn type_contains_etvar(ty: &ErrandType) -> bool {
         match ty {
             ErrandType::ETVar(_) => true,
-            ErrandType::Arrow(a, b) => {
-                Self::type_contains_etvar(a) || Self::type_contains_etvar(b)
-            }
+            ErrandType::Arrow(a, b) => Self::type_contains_etvar(a) || Self::type_contains_etvar(b),
             ErrandType::App(h, a) => {
                 Self::type_contains_etvar(h) || a.iter().any(Self::type_contains_etvar)
             }
             ErrandType::Forall(_, b) => Self::type_contains_etvar(b),
-            ErrandType::Product(ts) => {
-                ts.iter().any(Self::type_contains_etvar)
-            }
+            ErrandType::Product(ts) => ts.iter().any(Self::type_contains_etvar),
             ErrandType::Var(_) | ErrandType::Con(_) => false,
         }
     }
@@ -317,9 +323,7 @@ impl Analyzer {
                 self.analyze_instr(*operand)?;
                 Ok(self.pool.string)
             }
-            Instr::ForLoop(_) => {
-                Err(ErrandTypeError::UnsupportedOperation("ForLoop".into()))
-            }
+            Instr::ForLoop(_) => Err(ErrandTypeError::UnsupportedOperation("ForLoop".into())),
         }
     }
 
@@ -353,9 +357,13 @@ impl Analyzer {
     ///
     /// Validates that the enum and variant both exist, then returns `Con(enum_name)`.
     fn analyze_enum_variant_access(&mut self, data: &EnumVariantData) -> TypeResult<TypeIndex> {
-        let variants = self.enum_variants.get(&data.enum_name).cloned().ok_or_else(|| {
-            ErrandTypeError::UnboundVariable(format!("unknown enum `{}`", data.enum_name))
-        })?;
+        let variants = self
+            .enum_variants
+            .get(&data.enum_name)
+            .cloned()
+            .ok_or_else(|| {
+                ErrandTypeError::UnboundVariable(format!("unknown enum `{}`", data.enum_name))
+            })?;
         if !variants.iter().any(|v| v.name == data.variant) {
             return Err(ErrandTypeError::UnboundVariable(format!(
                 "unknown variant `{}` on enum `{}`",
@@ -390,9 +398,13 @@ impl Analyzer {
         &mut self,
         data: &EnumVariantConstructData,
     ) -> TypeResult<TypeIndex> {
-        let variants = self.enum_variants.get(&data.enum_name).cloned().ok_or_else(|| {
-            ErrandTypeError::UnboundVariable(format!("unknown enum `{}`", data.enum_name))
-        })?;
+        let variants = self
+            .enum_variants
+            .get(&data.enum_name)
+            .cloned()
+            .ok_or_else(|| {
+                ErrandTypeError::UnboundVariable(format!("unknown enum `{}`", data.enum_name))
+            })?;
         let variant_info = variants
             .iter()
             .find(|v| v.name == data.variant)
@@ -432,12 +444,16 @@ impl Analyzer {
         let mut ctor_ty = if variant_info.fields.is_empty() {
             ret_app
         } else {
-            variant_info.fields.iter().rev().fold(ret_app, |acc, (_, ft)| {
-                ErrandType::Arrow(
-                    Box::new(type_expr_to_errand_type_with_params(ft, &type_params)),
-                    Box::new(acc),
-                )
-            })
+            variant_info
+                .fields
+                .iter()
+                .rev()
+                .fold(ret_app, |acc, (_, ft)| {
+                    ErrandType::Arrow(
+                        Box::new(type_expr_to_errand_type_with_params(ft, &type_params)),
+                        Box::new(acc),
+                    )
+                })
         };
         for tp in type_params.iter().rev() {
             ctor_ty = ErrandType::Forall(tp.clone(), Box::new(ctor_ty));
@@ -463,8 +479,10 @@ impl Analyzer {
                     self.worklist
                         .push(WorklistEntry::TVar(evar.clone(), TyVarKind::Existential));
                     let result_evar = self.worklist.fresh_evar();
-                    self.worklist
-                        .push(WorklistEntry::TVar(result_evar.clone(), TyVarKind::Existential));
+                    self.worklist.push(WorklistEntry::TVar(
+                        result_evar.clone(),
+                        TyVarKind::Existential,
+                    ));
                     let expected_arrow = ErrandType::Arrow(
                         Box::new(self.pool.to_errand_type(*arg_ty)),
                         Box::new(ErrandType::ETVar(result_evar.clone())),
@@ -507,7 +525,11 @@ impl Analyzer {
             }
         }
 
-        let variants = self.enum_variants.get(&data.enum_name).cloned().unwrap_or_default();
+        let variants = self
+            .enum_variants
+            .get(&data.enum_name)
+            .cloned()
+            .unwrap_or_default();
 
         let mut last_ty = self.pool.unit;
         for arm in &data.arms {
@@ -517,7 +539,8 @@ impl Analyzer {
                     if let Some(variant_info) = variants.get(tag as usize) {
                         for (i, binding_name) in arm.bindings.iter().enumerate() {
                             if let Some((_, field_type)) = variant_info.fields.get(i) {
-                                let mut ty = type_expr_to_errand_type_with_params(field_type, &enum_tparams);
+                                let mut ty =
+                                    type_expr_to_errand_type_with_params(field_type, &enum_tparams);
                                 ty = self.subst_vars_in_type(&ty, &scrut_subst);
                                 let ty_idx = self.pool.intern(ty);
                                 // Register the binding as a global def so VarRef can find it.
@@ -576,7 +599,8 @@ impl Analyzer {
             arg_types.push(self.analyze_instr(arg_idx)?);
         }
 
-        let mut remaining = self.instantiate_constructor_type(&self.pool.to_errand_type(func_ty_idx))?;
+        let mut remaining =
+            self.instantiate_constructor_type(&self.pool.to_errand_type(func_ty_idx))?;
         for arg_ty in &arg_types {
             match remaining {
                 ErrandType::Arrow(param_ty, result_ty) => {
@@ -588,10 +612,13 @@ impl Analyzer {
                 }
                 ErrandType::ETVar(ref evar_name) => {
                     let evar = evar_name.clone();
-                    self.worklist.push(WorklistEntry::TVar(evar.clone(), TyVarKind::Existential));
-                    let result_evar = self.worklist.fresh_evar();
                     self.worklist
-                        .push(WorklistEntry::TVar(result_evar.clone(), TyVarKind::Existential));
+                        .push(WorklistEntry::TVar(evar.clone(), TyVarKind::Existential));
+                    let result_evar = self.worklist.fresh_evar();
+                    self.worklist.push(WorklistEntry::TVar(
+                        result_evar.clone(),
+                        TyVarKind::Existential,
+                    ));
                     let expected_arrow = ErrandType::Arrow(
                         Box::new(self.pool.to_errand_type(*arg_ty)),
                         Box::new(ErrandType::ETVar(result_evar.clone())),
@@ -685,7 +712,9 @@ impl Analyzer {
             // a downstream var decl. Then push and solve our own
             // subtyping constraint, propagating any error from THAT.
             self.drain_silently();
-            let value_et = self.worklist.expand_type(&self.pool.to_errand_type(value_ty));
+            let value_et = self
+                .worklist
+                .expand_type(&self.pool.to_errand_type(value_ty));
             self.solve_subtype(value_et, expected.clone())?;
             // `solve_subtype` may push decomposed sub-judgments onto the
             // worklist (e.g. `App<App>` decomposes per-argument). Drain
@@ -771,13 +800,16 @@ impl Analyzer {
     // ── Function type construction ────────────────────────────────────────────
 
     fn build_function_type(&mut self, params: &[Parameter], return_ty: TypeIndex) -> ErrandType {
-        params.iter().rev().fold(self.pool.to_errand_type(return_ty), |acc, param| {
-            let param_ty = match &param.type_expr {
-                Some(te) => type_expr_to_errand_type(te),
-                None => ErrandType::ETVar(format!("param_{}", param.id.name)),
-            };
-            ErrandType::Arrow(Box::new(param_ty), Box::new(acc))
-        })
+        params
+            .iter()
+            .rev()
+            .fold(self.pool.to_errand_type(return_ty), |acc, param| {
+                let param_ty = match &param.type_expr {
+                    Some(te) => type_expr_to_errand_type(te),
+                    None => ErrandType::ETVar(format!("param_{}", param.id.name)),
+                };
+                ErrandType::Arrow(Box::new(param_ty), Box::new(acc))
+            })
     }
 
     // ── Constraint solving ────────────────────────────────────────────────────
@@ -859,10 +891,8 @@ impl Analyzer {
                 let e = self.worklist.fresh_evar();
                 self.worklist
                     .push(WorklistEntry::TVar(e.clone(), TyVarKind::Existential));
-                let subbed = self.apply_substs_to_type(
-                    &body,
-                    &HashMap::from([(v, ErrandType::ETVar(e))]),
-                );
+                let subbed =
+                    self.apply_substs_to_type(&body, &HashMap::from([(v, ErrandType::ETVar(e))]));
                 self.solve_inf_app(subbed, arg_idx, result_ty)
             }
             ErrandType::ETVar(a) => {
@@ -901,7 +931,8 @@ impl Analyzer {
         let left = self.worklist.expand_type(&left);
         let right = self.worklist.expand_type(&right);
 
-        self.trace.push(format!("Sub {} <: {}", fmt_ty(&left), fmt_ty(&right)));
+        self.trace
+            .push(format!("Sub {} <: {}", fmt_ty(&left), fmt_ty(&right)));
 
         if left == right {
             return Ok(());
@@ -939,10 +970,8 @@ impl Analyzer {
             }
             (_, ErrandType::Forall(v, body)) => {
                 let fresh = self.worklist.fresh_var();
-                self.worklist.push(WorklistEntry::TVar(
-                    fresh.clone(),
-                    TyVarKind::Universal,
-                ));
+                self.worklist
+                    .push(WorklistEntry::TVar(fresh.clone(), TyVarKind::Universal));
                 let subbed = self.apply_substs_to_type(
                     body,
                     &HashMap::from([(v.clone(), ErrandType::Var(fresh))]),
@@ -955,14 +984,10 @@ impl Analyzer {
             }
             (ErrandType::Forall(v, body), _) => {
                 let fresh_e = self.worklist.fresh_evar();
-                self.worklist.push(WorklistEntry::TVar(
-                    fresh_e.clone(),
-                    TyVarKind::Marker,
-                ));
-                self.worklist.push(WorklistEntry::TVar(
-                    fresh_e.clone(),
-                    TyVarKind::Existential,
-                ));
+                self.worklist
+                    .push(WorklistEntry::TVar(fresh_e.clone(), TyVarKind::Marker));
+                self.worklist
+                    .push(WorklistEntry::TVar(fresh_e.clone(), TyVarKind::Existential));
                 let subbed = self.apply_substs_to_type(
                     body,
                     &HashMap::from([(v.clone(), ErrandType::ETVar(fresh_e))]),
@@ -997,7 +1022,8 @@ impl Analyzer {
     }
 
     fn solve_inference(&mut self, instr: Instr, ty: ErrandType) -> TypeResult<()> {
-        self.trace.push(format!("Inf {} ⊢ {}", fmt_instr(&instr), fmt_ty(&ty)));
+        self.trace
+            .push(format!("Inf {} ⊢ {}", fmt_instr(&instr), fmt_ty(&ty)));
         match instr {
             Instr::Literal(lit) => {
                 let lit_ty = self.infer_literal(&lit);
@@ -1067,9 +1093,13 @@ impl Analyzer {
                 }
                 Ok(())
             }
-            Instr::IfStatement(_) | Instr::Region(_) | Instr::ForLoop(_)
-            | Instr::EnumDecl(_) | Instr::EnumVariantAccess(_)
-            | Instr::EnumVariantConstruct(_) | Instr::Match(_) => Ok(()),
+            Instr::IfStatement(_)
+            | Instr::Region(_)
+            | Instr::ForLoop(_)
+            | Instr::EnumDecl(_)
+            | Instr::EnumVariantAccess(_)
+            | Instr::EnumVariantConstruct(_)
+            | Instr::Match(_) => Ok(()),
             Instr::Typeof(_) => {
                 // `typeof` is always typed `String`.
                 self.worklist.push(WorklistEntry::Judgment(Judgment::Sub {
@@ -1082,13 +1112,12 @@ impl Analyzer {
     }
 
     fn solve_checking(&mut self, instr: Instr, ty: ErrandType) -> TypeResult<()> {
-        self.trace.push(format!("Chk {} ⇐ {}", fmt_instr(&instr), fmt_ty(&ty)));
+        self.trace
+            .push(format!("Chk {} ⇐ {}", fmt_instr(&instr), fmt_ty(&ty)));
         if let ErrandType::Forall(var, body_ty) = &ty {
             let fresh = self.worklist.fresh_var();
-            self.worklist.push(WorklistEntry::TVar(
-                fresh.clone(),
-                TyVarKind::Universal,
-            ));
+            self.worklist
+                .push(WorklistEntry::TVar(fresh.clone(), TyVarKind::Universal));
             let substituted = self.apply_substs_to_type(
                 body_ty,
                 &HashMap::from([(var.clone(), ErrandType::Var(fresh))]),
@@ -1096,7 +1125,10 @@ impl Analyzer {
             return self.solve_checking(instr, substituted);
         }
         let inferred_evar = self.worklist.fresh_evar();
-        self.worklist.push(WorklistEntry::TVar(inferred_evar.clone(), TyVarKind::Existential));
+        self.worklist.push(WorklistEntry::TVar(
+            inferred_evar.clone(),
+            TyVarKind::Existential,
+        ));
         let inferred_ty = ErrandType::ETVar(inferred_evar);
         self.worklist.push(WorklistEntry::Judgment(Judgment::Sub {
             left: inferred_ty.clone(),
@@ -1114,7 +1146,8 @@ impl Analyzer {
     fn instantiate_left(&mut self, var: &str, ty: &ErrandType) -> TypeResult<()> {
         match ty {
             ErrandType::ETVar(b) if self.worklist.before(var, b) => {
-                self.worklist.solve_evar(b, ErrandType::ETVar(var.to_string()))?;
+                self.worklist
+                    .solve_evar(b, ErrandType::ETVar(var.to_string()))?;
                 Ok(())
             }
             ErrandType::Arrow(t1, t2) => {
@@ -1127,8 +1160,10 @@ impl Analyzer {
                         Box::new(ErrandType::ETVar(a2.clone())),
                     ),
                 )?;
-                self.worklist.push(WorklistEntry::TVar(a1.clone(), TyVarKind::Existential));
-                self.worklist.push(WorklistEntry::TVar(a2.clone(), TyVarKind::Existential));
+                self.worklist
+                    .push(WorklistEntry::TVar(a1.clone(), TyVarKind::Existential));
+                self.worklist
+                    .push(WorklistEntry::TVar(a2.clone(), TyVarKind::Existential));
                 self.worklist.push(WorklistEntry::Judgment(Judgment::Sub {
                     left: *t1.clone(),
                     right: ErrandType::ETVar(a1),
@@ -1170,10 +1205,8 @@ impl Analyzer {
             }
             ErrandType::Forall(bound, inner) => {
                 let fresh = self.worklist.fresh_var();
-                self.worklist.push(WorklistEntry::TVar(
-                    fresh.clone(),
-                    TyVarKind::Universal,
-                ));
+                self.worklist
+                    .push(WorklistEntry::TVar(fresh.clone(), TyVarKind::Universal));
                 let substituted = self.apply_substs_to_type(
                     inner,
                     &HashMap::from([(bound.clone(), ErrandType::Var(fresh))]),
@@ -1194,7 +1227,8 @@ impl Analyzer {
     fn instantiate_right(&mut self, ty: &ErrandType, var: &str) -> TypeResult<()> {
         match ty {
             ErrandType::ETVar(a) if self.worklist.before(var, a) => {
-                self.worklist.solve_evar(a, ErrandType::ETVar(var.to_string()))?;
+                self.worklist
+                    .solve_evar(a, ErrandType::ETVar(var.to_string()))?;
                 Ok(())
             }
             ErrandType::Arrow(t1, t2) => {
@@ -1207,8 +1241,10 @@ impl Analyzer {
                         Box::new(ErrandType::ETVar(a2.clone())),
                     ),
                 )?;
-                self.worklist.push(WorklistEntry::TVar(a1.clone(), TyVarKind::Existential));
-                self.worklist.push(WorklistEntry::TVar(a2.clone(), TyVarKind::Existential));
+                self.worklist
+                    .push(WorklistEntry::TVar(a1.clone(), TyVarKind::Existential));
+                self.worklist
+                    .push(WorklistEntry::TVar(a2.clone(), TyVarKind::Existential));
                 self.worklist.push(WorklistEntry::Judgment(Judgment::Sub {
                     left: ErrandType::ETVar(a1),
                     right: *t1.clone(),
@@ -1250,14 +1286,10 @@ impl Analyzer {
             }
             ErrandType::Forall(bound, inner) => {
                 let fresh_e = self.worklist.fresh_evar();
-                self.worklist.push(WorklistEntry::TVar(
-                    fresh_e.clone(),
-                    TyVarKind::Marker,
-                ));
-                self.worklist.push(WorklistEntry::TVar(
-                    fresh_e.clone(),
-                    TyVarKind::Existential,
-                ));
+                self.worklist
+                    .push(WorklistEntry::TVar(fresh_e.clone(), TyVarKind::Marker));
+                self.worklist
+                    .push(WorklistEntry::TVar(fresh_e.clone(), TyVarKind::Existential));
                 let substituted = self.apply_substs_to_type(
                     inner,
                     &HashMap::from([(bound.clone(), ErrandType::ETVar(fresh_e))]),
@@ -1283,9 +1315,7 @@ impl Analyzer {
             ErrandType::Con(_) => false,
             ErrandType::Arrow(t1, t2) => self.occurs_check(var, t1) || self.occurs_check(var, t2),
             ErrandType::Forall(_, t) => self.occurs_check(var, t),
-            ErrandType::Product(ts) => {
-                ts.iter().any(|t| self.occurs_check(var, t))
-            }
+            ErrandType::Product(ts) => ts.iter().any(|t| self.occurs_check(var, t)),
             ErrandType::App(h, args) => {
                 self.occurs_check(var, h) || args.iter().any(|t| self.occurs_check(var, t))
             }
@@ -1296,11 +1326,11 @@ impl Analyzer {
         match ty {
             ErrandType::Var(_) | ErrandType::ETVar(_) | ErrandType::Con(_) => true,
             ErrandType::Arrow(t1, t2) => self.is_monotype(t1) && self.is_monotype(t2),
-            ErrandType::Product(ts) => {
-                ts.iter().all(|t| self.is_monotype(t))
-            }
+            ErrandType::Product(ts) => ts.iter().all(|t| self.is_monotype(t)),
             ErrandType::Forall(_, _) => false,
-            ErrandType::App(h, args) => self.is_monotype(h) && args.iter().all(|t| self.is_monotype(t)),
+            ErrandType::App(h, args) => {
+                self.is_monotype(h) && args.iter().all(|t| self.is_monotype(t))
+            }
         }
     }
 
@@ -1318,7 +1348,11 @@ impl Analyzer {
         Ok(self.apply_substs_to_type(&cur, &subs))
     }
 
-    pub(crate) fn apply_substs_to_type(&self, ty: &ErrandType, subs: &HashMap<String, ErrandType>) -> ErrandType {
+    pub(crate) fn apply_substs_to_type(
+        &self,
+        ty: &ErrandType,
+        subs: &HashMap<String, ErrandType>,
+    ) -> ErrandType {
         match ty {
             ErrandType::Var(name) => subs.get(name).cloned().unwrap_or_else(|| ty.clone()),
             ErrandType::Arrow(a, b) => ErrandType::Arrow(
@@ -1368,7 +1402,10 @@ impl Analyzer {
         let mut defs: HashMap<String, TypeIndex> = HashMap::new();
 
         // Builtins: data constructors + functions
-        for (name, ty) in add_builtin_data_constructors().into_iter().chain(add_builtin_functions()) {
+        for (name, ty) in add_builtin_data_constructors()
+            .into_iter()
+            .chain(add_builtin_functions())
+        {
             let idx = pool.intern(ty);
             defs.insert(name, idx);
         }
@@ -1414,7 +1451,10 @@ impl Analyzer {
                         ErrandType::Arrow(
                             Box::new(type_expr_to_errand_type_with_params(
                                 &field.field_type,
-                                &type_params.iter().map(|p| p.name.clone()).collect::<Vec<String>>(),
+                                &type_params
+                                    .iter()
+                                    .map(|p| p.name.clone())
+                                    .collect::<Vec<String>>(),
                             )),
                             Box::new(acc),
                         )
@@ -1430,8 +1470,6 @@ impl Analyzer {
 
         defs
     }
-
-
 }
 
 // ─── Formatting helpers (private) ─────────────────────────────────────────────

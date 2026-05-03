@@ -1,32 +1,38 @@
-use crate::{cranelift_log};
+use crate::cranelift_log;
+use crate::frontend::ast::{
+    BinaryOperator, Expression, Id, Parameter, Program, TypeExpression, UnaryOperator,
+};
 use cranelift::prelude::*;
-use cranelift_frontend::{FunctionBuilder, FunctionBuilderContext, Variable};
-use cranelift_codegen::ir::{Function, InstBuilder, types, UserFuncName, BlockArg};
 use cranelift_codegen::ir::condcodes::IntCC;
-use cranelift_codegen::settings::{self, Configurable};
-use cranelift_module::{Module, Linkage, ModuleError};
+use cranelift_codegen::ir::{types, BlockArg, Function, InstBuilder, UserFuncName};
 use cranelift_codegen::ir::{AbiParam, ExternalName};
-use cranelift_codegen::ir::{Value, FuncRef};
+use cranelift_codegen::ir::{FuncRef, Value};
 use cranelift_codegen::print_errors::pretty_error;
+use cranelift_codegen::settings::{self, Configurable};
+use cranelift_frontend::{FunctionBuilder, FunctionBuilderContext, Variable};
 use cranelift_module::FuncId;
+use cranelift_module::{Linkage, Module, ModuleError};
 use cranelift_object::ObjectModule;
 use std::collections::HashMap;
 use std::error::Error;
-use crate::frontend::ast::{Program, Expression, BinaryOperator, UnaryOperator, Id, TypeExpression, Parameter};
 
-use crate::backend::structs::{Struct as BackendStruct, Field as BackendField, Type as BackendType};
-use crate::backend::built_in_methods::{emit_new, emit_printf, emit_mem_load, emit_mem_store, emit_getfield};
+use crate::backend::built_in_methods::{
+    emit_getfield, emit_mem_load, emit_mem_store, emit_new, emit_printf,
+};
+use crate::backend::structs::{
+    Field as BackendField, Struct as BackendStruct, Type as BackendType,
+};
 
 pub struct CraneliftCompiler {
     builder_ctx: FunctionBuilderContext,
     variables: HashMap<String, Variable>,
-    // TODO: The inner HashMap needs to be more complex structure that can handle supertypes and parametric types 
+    // TODO: The inner HashMap needs to be more complex structure that can handle supertypes and parametric types
     // Look at how Julia handles this for more info
     functions: HashMap<String, HashMap<Vec<TypeExpression>, FuncId>>,
     module: Option<ObjectModule>,
     function_signatures: HashMap<String, cranelift_codegen::ir::Signature>,
-    next_function_id: u32,  // Add this field
-    string_counter: u32, // Counter for unique string names
+    next_function_id: u32, // Add this field
+    string_counter: u32,   // Counter for unique string names
     isa: Option<std::sync::Arc<dyn cranelift_codegen::isa::TargetIsa>>, // Store the ISA as Arc
     // --- Add struct registry ---
     struct_registry: HashMap<String, BackendStruct>,
@@ -53,28 +59,33 @@ impl CraneliftCompiler {
             if let Expression::StructDefinition { id, fields, .. } = expr {
                 // --- Populate struct registry ---
                 let mut offset = 0;
-                let backend_fields: Vec<BackendField> = fields.iter().map(|f| {
-                    let field_type = match &f.field_type {
-                        TypeExpression::Int => BackendType::Int,
-                        TypeExpression::Int32 => BackendType::Int32,
-                        TypeExpression::Float => BackendType::Float,
-                        TypeExpression::Bool => BackendType::Bool,
-                        TypeExpression::String => BackendType::String,
-                        TypeExpression::Struct(id, _, _) => BackendType::Struct(BackendStruct::new(&id.name, vec![], 0)),
-                        TypeExpression::Void => BackendType::Int, // treat void as int for now
-                    };
-                    let field_size = match field_type {
-                        BackendType::Int => 8,
-                        BackendType::Int32 => 4,
-                        BackendType::Float => 8,
-                        BackendType::Bool => 1,
-                        BackendType::String => 8,
-                        BackendType::Struct(_) => 8, // pointer to struct
-                    };
-                    let field = BackendField::new(&f.id.name, offset, field_type);
-                    offset += field_size;
-                    field
-                }).collect();
+                let backend_fields: Vec<BackendField> = fields
+                    .iter()
+                    .map(|f| {
+                        let field_type = match &f.field_type {
+                            TypeExpression::Int => BackendType::Int,
+                            TypeExpression::Int32 => BackendType::Int32,
+                            TypeExpression::Float => BackendType::Float,
+                            TypeExpression::Bool => BackendType::Bool,
+                            TypeExpression::String => BackendType::String,
+                            TypeExpression::Struct(id, _, _) => {
+                                BackendType::Struct(BackendStruct::new(&id.name, vec![], 0))
+                            }
+                            TypeExpression::Void => BackendType::Int, // treat void as int for now
+                        };
+                        let field_size = match field_type {
+                            BackendType::Int => 8,
+                            BackendType::Int32 => 4,
+                            BackendType::Float => 8,
+                            BackendType::Bool => 1,
+                            BackendType::String => 8,
+                            BackendType::Struct(_) => 8, // pointer to struct
+                        };
+                        let field = BackendField::new(&f.id.name, offset, field_type);
+                        offset += field_size;
+                        field
+                    })
+                    .collect();
                 let struct_size = offset;
                 let backend_struct = BackendStruct::new(&id.name, backend_fields, struct_size);
                 self.struct_registry.insert(id.name.clone(), backend_struct);
@@ -98,11 +109,11 @@ impl CraneliftCompiler {
         // First pass: collect function definitions and create signatures
         self.collect_function_definitions(program)?;
         cranelift_log!("Collected function definitions");
-        
+
         // Initialize the module
         self.initialize_module()?;
         cranelift_log!("Initialized module");
-        
+
         // Second pass: compile all functions
         self.compile_all_functions(program)?;
         cranelift_log!("Compiled all functions");
@@ -139,8 +150,11 @@ impl CraneliftCompiler {
         flag_builder.set("use_colocated_libcalls", "false").unwrap();
         flag_builder.set("is_pic", "true").unwrap();
         flag_builder.set("enable_verifier", "false").unwrap();
-        flag_builder.set("enable_llvm_abi_extensions", "true").unwrap();
-        let isa = cranelift_native::builder().unwrap()
+        flag_builder
+            .set("enable_llvm_abi_extensions", "true")
+            .unwrap();
+        let isa = cranelift_native::builder()
+            .unwrap()
             .finish(settings::Flags::new(flag_builder))
             .unwrap();
 
@@ -148,21 +162,36 @@ impl CraneliftCompiler {
         self.isa = Some(isa.clone());
 
         // Create module
-        let object_builder = cranelift_object::ObjectBuilder::new(isa, "main", Box::new(|libcall| format!("{}", libcall)))
-            .map_err(|e| format!("Failed to create object builder: {}", e))?;
+        let object_builder = cranelift_object::ObjectBuilder::new(
+            isa,
+            "main",
+            Box::new(|libcall| format!("{}", libcall)),
+        )
+        .map_err(|e| format!("Failed to create object builder: {}", e))?;
         self.module = Some(cranelift_object::ObjectModule::new(object_builder));
-        
+
         // Add built-in FFI functions to the symbol table
         self.add_builtin_ffi_functions()?;
-        
+
         Ok(())
     }
 
     fn compile_all_functions(&mut self, program: &Program) -> Result<(), String> {
         // Phase 1: Declare all functions in the module (but don't define them yet)
         for expr in &program.expressions {
-            if let Expression::FunctionDefinition { id, parameters, body: _, return_type_expr, foreign } = expr {
-                cranelift_log!("[CRANELIFT] Declaring function: {} | foreign: {}", id.name, foreign);
+            if let Expression::FunctionDefinition {
+                id,
+                parameters,
+                body: _,
+                return_type_expr,
+                foreign,
+            } = expr
+            {
+                cranelift_log!(
+                    "[CRANELIFT] Declaring function: {} | foreign: {}",
+                    id.name,
+                    foreign
+                );
                 if *foreign {
                     self.declare_foreign_function_in_module(id, parameters, return_type_expr)?;
                 } else {
@@ -170,12 +199,25 @@ impl CraneliftCompiler {
                 }
             }
         }
-        
+
         // Phase 2: Compile all function bodies (now they can call each other recursively)
         for expr in &program.expressions {
-            if let Expression::FunctionDefinition { id, parameters, body, return_type_expr: _, foreign } = expr {
-                cranelift_log!("[CRANELIFT] Compiling function: {} | foreign: {}", id.name, foreign);
-                if *foreign { continue; }
+            if let Expression::FunctionDefinition {
+                id,
+                parameters,
+                body,
+                return_type_expr: _,
+                foreign,
+            } = expr
+            {
+                cranelift_log!(
+                    "[CRANELIFT] Compiling function: {} | foreign: {}",
+                    id.name,
+                    foreign
+                );
+                if *foreign {
+                    continue;
+                }
                 cranelift_log!("Compiling function body: {:?}", id);
                 self.compile_function_definition(id, parameters, body)?;
             }
@@ -184,182 +226,329 @@ impl CraneliftCompiler {
         Ok(())
     }
 
-    fn declare_function_in_module(&mut self, id: &Id, parameters: &[Parameter], return_type_expr: &Option<TypeExpression>) -> Result<(), String> {
-        let param_types: Vec<TypeExpression> = parameters.iter().map(|p| {
-            match &p.type_expr {
-                Some(TypeExpression::Struct(id, _, _)) if id.name == "String" => TypeExpression::String,
+    fn declare_function_in_module(
+        &mut self,
+        id: &Id,
+        parameters: &[Parameter],
+        return_type_expr: &Option<TypeExpression>,
+    ) -> Result<(), String> {
+        let param_types: Vec<TypeExpression> = parameters
+            .iter()
+            .map(|p| match &p.type_expr {
+                Some(TypeExpression::Struct(id, _, _)) if id.name == "String" => {
+                    TypeExpression::String
+                }
                 Some(t) => t.clone(),
                 None => TypeExpression::Int,
-            }
-        }).collect();
-        let mangled_name = format!("{}__{}", id.name, param_types.iter().map(|t| format!("{}", t)).collect::<Vec<_>>().join("_"));
-        let module = self.module.as_mut()
-            .ok_or("Module not initialized")?;
-        
+            })
+            .collect();
+        let mangled_name = format!(
+            "{}__{}",
+            id.name,
+            param_types
+                .iter()
+                .map(|t| format!("{}", t))
+                .collect::<Vec<_>>()
+                .join("_")
+        );
+        let module = self.module.as_mut().ok_or("Module not initialized")?;
+
         // Get the signature for this function
-        let signature = self.function_signatures.get(&id.name)
+        let signature = self
+            .function_signatures
+            .get(&id.name)
             .ok_or_else(|| format!("No signature found for function: {}", id.name))?
             .clone();
-        
+
         // Declare the function in the module
-        let func_id = module.declare_function(&mangled_name, cranelift_module::Linkage::Export, &signature)
+        let func_id = module
+            .declare_function(&mangled_name, cranelift_module::Linkage::Export, &signature)
             .map_err(|e| format!("Failed to declare function: {}", e))?;
-        
+
         // Store the function ID for later use
-        let entry = self.functions.entry(id.name.clone()).or_insert_with(HashMap::new);
+        let entry = self
+            .functions
+            .entry(id.name.clone())
+            .or_insert_with(HashMap::new);
         entry.insert(param_types, func_id);
-        
-        cranelift_log!("Declared function '{}' with func_id: {:?}", mangled_name, func_id);
+
+        cranelift_log!(
+            "Declared function '{}' with func_id: {:?}",
+            mangled_name,
+            func_id
+        );
         Ok(())
     }
 
-    fn declare_foreign_function_in_module(&mut self, id: &Id, parameters: &[Parameter], return_type_expr: &Option<TypeExpression>) -> Result<(), String> {
-        let param_types: Vec<TypeExpression> = parameters.iter().map(|p| {
-            match &p.type_expr {
-                Some(TypeExpression::Struct(id, _, _)) if id.name == "String" => TypeExpression::String,
+    fn declare_foreign_function_in_module(
+        &mut self,
+        id: &Id,
+        parameters: &[Parameter],
+        return_type_expr: &Option<TypeExpression>,
+    ) -> Result<(), String> {
+        let param_types: Vec<TypeExpression> = parameters
+            .iter()
+            .map(|p| match &p.type_expr {
+                Some(TypeExpression::Struct(id, _, _)) if id.name == "String" => {
+                    TypeExpression::String
+                }
                 Some(t) => t.clone(),
                 None => TypeExpression::Int,
-            }
-        }).collect();
-        let mangled_name = format!("{}__{}", id.name, param_types.iter().map(|t| format!("{}", t)).collect::<Vec<_>>().join("_"));
-        let module = self.module.as_mut()
-            .ok_or("Module not initialized")?;
-        
+            })
+            .collect();
+        let mangled_name = format!(
+            "{}__{}",
+            id.name,
+            param_types
+                .iter()
+                .map(|t| format!("{}", t))
+                .collect::<Vec<_>>()
+                .join("_")
+        );
+        let module = self.module.as_mut().ok_or("Module not initialized")?;
+
         // Get the signature for this function
-        let signature = self.function_signatures.get(&id.name)
+        let signature = self
+            .function_signatures
+            .get(&id.name)
             .ok_or_else(|| format!("No signature found for function: {}", id.name))?
             .clone();
 
         // Declare the function in the module
-        let func_id = module.declare_function(&id.name, cranelift_module::Linkage::Import, &signature)
+        let func_id = module
+            .declare_function(&id.name, cranelift_module::Linkage::Import, &signature)
             .map_err(|e| format!("Failed to declare foreign function: {}: {}", id.name, e))?;
         // Store using the mangled name in our function table
-        let entry = self.functions.entry(id.name.clone()).or_insert_with(HashMap::new);
+        let entry = self
+            .functions
+            .entry(id.name.clone())
+            .or_insert_with(HashMap::new);
         entry.insert(param_types, func_id);
-        cranelift_log!("Declared foreign function '{}' (import symbol '{}') with func_id: {:?}", mangled_name, id.name, func_id);
+        cranelift_log!(
+            "Declared foreign function '{}' (import symbol '{}') with func_id: {:?}",
+            mangled_name,
+            id.name,
+            func_id
+        );
         Ok(())
     }
 
-    fn define_function_in_module(&mut self, name: &str, func: &mut Function, parameters: &[Parameter]) -> Result<(), String> {
-        let param_types: Vec<TypeExpression> = parameters.iter().map(|p| {
-            match &p.type_expr {
-                Some(TypeExpression::Struct(id, _, _)) if id.name == "String" => TypeExpression::String,
+    fn define_function_in_module(
+        &mut self,
+        name: &str,
+        func: &mut Function,
+        parameters: &[Parameter],
+    ) -> Result<(), String> {
+        let param_types: Vec<TypeExpression> = parameters
+            .iter()
+            .map(|p| match &p.type_expr {
+                Some(TypeExpression::Struct(id, _, _)) if id.name == "String" => {
+                    TypeExpression::String
+                }
                 Some(t) => t.clone(),
                 None => TypeExpression::Int,
-            }
-        }).collect();
-        let mangled_name = format!("{}__{}", name, param_types.iter().map(|t| format!("{}", t)).collect::<Vec<_>>().join("_"));
-        let module = self.module.as_mut()
-            .ok_or("Module not initialized")?;
-        
+            })
+            .collect();
+        let mangled_name = format!(
+            "{}__{}",
+            name,
+            param_types
+                .iter()
+                .map(|t| format!("{}", t))
+                .collect::<Vec<_>>()
+                .join("_")
+        );
+        let module = self.module.as_mut().ok_or("Module not initialized")?;
+
         // Get the function ID that was already assigned during declaration
-        let func_id = self.functions.get(name)
+        let func_id = self
+            .functions
+            .get(name)
             .and_then(|overloads| overloads.get(&param_types))
-            .ok_or_else(|| format!("Function '{}' with params {:?} was not declared", name, param_types))?;
-        
+            .ok_or_else(|| {
+                format!(
+                    "Function '{}' with params {:?} was not declared",
+                    name, param_types
+                )
+            })?;
+
         // Create a context for compilation
         let mut ctx = cranelift_codegen::Context::for_function(func.clone());
-        
+
         // Enable verbose error reporting
         ctx.set_disasm(false);
-        
-        cranelift_log!("About to define function name: '{}' with func_id: {:?}", mangled_name, func_id);
-        
+
+        cranelift_log!(
+            "About to define function name: '{}' with func_id: {:?}",
+            mangled_name,
+            func_id
+        );
+
         // Define the function in the module
-        module.define_function(*func_id, &mut ctx)
-            .map_err(|e| {
-                cranelift_log!("!!Error: {:?}", e.source());
-                format!("Failed to define function '{}': {}", mangled_name, e)
-            })?;
+        module.define_function(*func_id, &mut ctx).map_err(|e| {
+            cranelift_log!("!!Error: {:?}", e.source());
+            format!("Failed to define function '{}': {}", mangled_name, e)
+        })?;
 
         cranelift_log!("Function defined: {}", mangled_name);
         Ok(())
     }
 
-    fn add_function_to_module(&mut self, name: &str, func: &mut Function, parameters: &[Parameter]) -> Result<FuncId, String> {
+    fn add_function_to_module(
+        &mut self,
+        name: &str,
+        func: &mut Function,
+        parameters: &[Parameter],
+    ) -> Result<FuncId, String> {
         cranelift_log!("=== ADDING FUNCTION TO MODULE ===");
         cranelift_log!("Function name: '{}'", name);
         cranelift_log!("Function IR name: {:?}", func.name);
-        
-        let module = self.module.as_mut()
-            .ok_or("Module not initialized")?;
-        
+
+        let module = self.module.as_mut().ok_or("Module not initialized")?;
+
         // Get the signature for this function
         let signature = if name == "main" {
             // Create function signature for main
             let mut sig = module.make_signature();
             sig.params.push(AbiParam::new(types::I64)); // Use I64 to match other functions
             sig.returns.push(AbiParam::new(types::I64)); // Use I64 to match other functions
-            // cranelift_log!("Created main signature: {:?}", sig);
+                                                         // cranelift_log!("Created main signature: {:?}", sig);
             sig
         } else {
             // Get the signature from our stored signatures
-            let sig = self.function_signatures.get(name)
+            let sig = self
+                .function_signatures
+                .get(name)
                 .ok_or_else(|| format!("No signature found for function: {}", name))?
                 .clone();
             // cranelift_log!("Retrieved signature for '{}': {:?}", name, sig);
             sig
         };
-        
+
         // cranelift_log!("About to declare function '{}' in module", name);
-        let func_id = module.declare_function(name, cranelift_module::Linkage::Export, &signature)
+        let func_id = module
+            .declare_function(name, cranelift_module::Linkage::Export, &signature)
             .map_err(|e| format!("Failed to declare function: {}", e))?;
         // cranelift_log!("Module returned func_id: {:?}", func_id);
-        
+
         // Create a context for compilation
         let mut ctx = cranelift_codegen::Context::for_function(func.clone());
-        
+
         // Enable verbose error reporting
         ctx.set_disasm(false);
-        
+
         // cranelift_log!("About to define function name: '{}' with func_id: {:?}, func: {:?}", name, func_id, func);
         // cranelift_log!("In context: {:?}", ctx.func);
         // Compile the function
-        let define_result = module.define_function(func_id, &mut ctx)
-            .map_err(|e| {
-                cranelift_log!("!!Error: {:?}", e.source());
-                // Try to get more detailed error information
-                format!("Failed to define function '{}': {}", name, e)
-            });
+        let define_result = module.define_function(func_id, &mut ctx).map_err(|e| {
+            cranelift_log!("!!Error: {:?}", e.source());
+            // Try to get more detailed error information
+            format!("Failed to define function '{}': {}", name, e)
+        });
         if let Err(e) = define_result {
             return Err(e);
         }
 
         cranelift_log!("Function defined: {}", name);
-        
+
         // Return the FuncId - we'll create FuncRefs when needed in calling contexts
         Ok(func_id)
     }
 
     fn add_builtin_ffi_functions(&mut self) -> Result<(), String> {
-        let module = self.module.as_mut()
-            .ok_or("Module not initialized")?;
-        
+        let module = self.module.as_mut().ok_or("Module not initialized")?;
+
         // Determine the target architecture and OS
         let (arch, os) = if let Some(ref isa) = self.isa {
             let triple = isa.triple();
             (triple.architecture, triple.operating_system)
         } else {
-            (cranelift_codegen::isa::TargetIsa::triple(&*cranelift_native::builder().unwrap().finish(settings::Flags::new(settings::builder())).unwrap()).architecture, cranelift_codegen::isa::TargetIsa::triple(&*cranelift_native::builder().unwrap().finish(settings::Flags::new(settings::builder())).unwrap()).operating_system)
+            (
+                cranelift_codegen::isa::TargetIsa::triple(
+                    &*cranelift_native::builder()
+                        .unwrap()
+                        .finish(settings::Flags::new(settings::builder()))
+                        .unwrap(),
+                )
+                .architecture,
+                cranelift_codegen::isa::TargetIsa::triple(
+                    &*cranelift_native::builder()
+                        .unwrap()
+                        .finish(settings::Flags::new(settings::builder()))
+                        .unwrap(),
+                )
+                .operating_system,
+            )
         };
 
-        let mut ffi_functions = if format!("{}", arch) == "aarch64" && format!("{}", os) == "darwin" {
+        let mut ffi_functions = if format!("{}", arch) == "aarch64" && format!("{}", os) == "darwin"
+        {
             vec![
                 // ("printf", vec![types::I64; 9], types::I32, cranelift_module::Linkage::Import),
-                ("malloc", vec![types::I64], types::I64, cranelift_module::Linkage::Import),
-                ("free", vec![types::I64], types::I64, cranelift_module::Linkage::Import),
-                ("strlen", vec![types::I64], types::I64, cranelift_module::Linkage::Import),
-                ("strcpy", vec![types::I64, types::I64], types::I64, cranelift_module::Linkage::Import),
-                ("strcmp", vec![types::I64, types::I64], types::I32, cranelift_module::Linkage::Import),
+                (
+                    "malloc",
+                    vec![types::I64],
+                    types::I64,
+                    cranelift_module::Linkage::Import,
+                ),
+                (
+                    "free",
+                    vec![types::I64],
+                    types::I64,
+                    cranelift_module::Linkage::Import,
+                ),
+                (
+                    "strlen",
+                    vec![types::I64],
+                    types::I64,
+                    cranelift_module::Linkage::Import,
+                ),
+                (
+                    "strcpy",
+                    vec![types::I64, types::I64],
+                    types::I64,
+                    cranelift_module::Linkage::Import,
+                ),
+                (
+                    "strcmp",
+                    vec![types::I64, types::I64],
+                    types::I32,
+                    cranelift_module::Linkage::Import,
+                ),
             ]
         } else {
             vec![
                 // ("printf", vec![types::I64, types::I32], types::I32, cranelift_module::Linkage::Import),
-                ("malloc", vec![types::I64], types::I64, cranelift_module::Linkage::Import),
-                ("free", vec![types::I64], types::I64, cranelift_module::Linkage::Import),
-                ("strlen", vec![types::I64], types::I64, cranelift_module::Linkage::Import),
-                ("strcpy", vec![types::I64, types::I64], types::I64, cranelift_module::Linkage::Import),
-                ("strcmp", vec![types::I64, types::I64], types::I32, cranelift_module::Linkage::Import),
+                (
+                    "malloc",
+                    vec![types::I64],
+                    types::I64,
+                    cranelift_module::Linkage::Import,
+                ),
+                (
+                    "free",
+                    vec![types::I64],
+                    types::I64,
+                    cranelift_module::Linkage::Import,
+                ),
+                (
+                    "strlen",
+                    vec![types::I64],
+                    types::I64,
+                    cranelift_module::Linkage::Import,
+                ),
+                (
+                    "strcpy",
+                    vec![types::I64, types::I64],
+                    types::I64,
+                    cranelift_module::Linkage::Import,
+                ),
+                (
+                    "strcmp",
+                    vec![types::I64, types::I64],
+                    types::I32,
+                    cranelift_module::Linkage::Import,
+                ),
             ]
         };
 
@@ -367,62 +556,85 @@ impl CraneliftCompiler {
         // _mem_load: (I64, I64) -> I64
         // _mem_store: (I64, I64, I64) -> ()
         {
-            let mut sig = cranelift_codegen::ir::Signature::new(cranelift_codegen::isa::CallConv::SystemV);
+            let mut sig =
+                cranelift_codegen::ir::Signature::new(cranelift_codegen::isa::CallConv::SystemV);
             sig.params.push(AbiParam::new(types::I64)); // ptr
             sig.params.push(AbiParam::new(types::I64)); // offset
             sig.returns.push(AbiParam::new(types::I64));
-            self.function_signatures.insert("_mem_load".to_string(), sig.clone());
-            self.functions.insert("_mem_load".to_string(), HashMap::new()); // No overloads for this one
+            self.function_signatures
+                .insert("_mem_load".to_string(), sig.clone());
+            self.functions
+                .insert("_mem_load".to_string(), HashMap::new()); // No overloads for this one
         }
         {
-            let mut sig = cranelift_codegen::ir::Signature::new(cranelift_codegen::isa::CallConv::SystemV);
+            let mut sig =
+                cranelift_codegen::ir::Signature::new(cranelift_codegen::isa::CallConv::SystemV);
             sig.params.push(AbiParam::new(types::I64)); // ptr
             sig.params.push(AbiParam::new(types::I64)); // offset
             sig.params.push(AbiParam::new(types::I64)); // value
-            self.function_signatures.insert("_mem_store".to_string(), sig.clone());
-            self.functions.insert("_mem_store".to_string(), HashMap::new()); // No overloads for this one
+            self.function_signatures
+                .insert("_mem_store".to_string(), sig.clone());
+            self.functions
+                .insert("_mem_store".to_string(), HashMap::new()); // No overloads for this one
         }
         // Add getfield: (I64, I64, I64) -> I64 (struct_ptr, field_symbol, struct_type_name)
         {
-            let mut sig = cranelift_codegen::ir::Signature::new(cranelift_codegen::isa::CallConv::SystemV);
+            let mut sig =
+                cranelift_codegen::ir::Signature::new(cranelift_codegen::isa::CallConv::SystemV);
             sig.params.push(AbiParam::new(types::I64)); // struct_ptr
             sig.params.push(AbiParam::new(types::I64)); // field_symbol (as pointer or int)
             sig.params.push(AbiParam::new(types::I64)); // struct_type_name (as pointer or int)
             sig.returns.push(AbiParam::new(types::I64)); // field value
-            self.function_signatures.insert("getfield".to_string(), sig.clone());
-            self.functions.insert("getfield".to_string(), HashMap::new()); // No overloads for this one
+            self.function_signatures
+                .insert("getfield".to_string(), sig.clone());
+            self.functions
+                .insert("getfield".to_string(), HashMap::new()); // No overloads for this one
         }
 
         for (name, param_types, return_type, linkage) in ffi_functions {
-            let mut sig = cranelift_codegen::ir::Signature::new(cranelift_codegen::isa::CallConv::SystemV);
+            let mut sig =
+                cranelift_codegen::ir::Signature::new(cranelift_codegen::isa::CallConv::SystemV);
             for param_type in &param_types {
                 sig.params.push(AbiParam::new(*param_type));
             }
             sig.returns.push(AbiParam::new(return_type));
-            let func_id = module.declare_function(name, linkage, &sig)
+            let func_id = module
+                .declare_function(name, linkage, &sig)
                 .map_err(|e| format!("Failed to declare FFI function '{}': {}", name, e))?;
             self.functions.insert(name.to_string(), HashMap::new()); // No overloads for this one
             self.function_signatures.insert(name.to_string(), sig);
-            cranelift_log!("Added FFI function '{}' to symbol table with ID: {:?}", name, func_id);
+            cranelift_log!(
+                "Added FFI function '{}' to symbol table with ID: {:?}",
+                name,
+                func_id
+            );
         }
         Ok(())
     }
 
     fn finalize_module(&mut self) -> Result<Vec<u8>, String> {
-        let module = self.module.take()
-            .ok_or("Module not initialized")?;
-        
+        let module = self.module.take().ok_or("Module not initialized")?;
+
         // Finalize the module
         let object_product = module.finish();
-        
+
         // Get the compiled code
-        let object_bytes = object_product.emit().map_err(|e| format!("Failed to emit object: {}", e))?;
+        let object_bytes = object_product
+            .emit()
+            .map_err(|e| format!("Failed to emit object: {}", e))?;
         Ok(object_bytes.to_vec())
     }
 
     fn collect_function_definitions(&mut self, program: &Program) -> Result<(), String> {
         for expr in &program.expressions {
-            if let Expression::FunctionDefinition { id, parameters, body: _, return_type_expr, foreign } = expr {
+            if let Expression::FunctionDefinition {
+                id,
+                parameters,
+                body: _,
+                return_type_expr,
+                foreign,
+            } = expr
+            {
                 if *foreign {
                     let signature = self.create_function_signature(parameters, return_type_expr)?;
                     self.function_signatures.insert(id.name.clone(), signature);
@@ -435,15 +647,20 @@ impl CraneliftCompiler {
         Ok(())
     }
 
-    fn create_function_signature(&self, parameters: &[Parameter], return_type_expr: &Option<TypeExpression>) -> Result<cranelift_codegen::ir::Signature, String> {
-        let mut sig = cranelift_codegen::ir::Signature::new(cranelift_codegen::isa::CallConv::SystemV);
-        
+    fn create_function_signature(
+        &self,
+        parameters: &[Parameter],
+        return_type_expr: &Option<TypeExpression>,
+    ) -> Result<cranelift_codegen::ir::Signature, String> {
+        let mut sig =
+            cranelift_codegen::ir::Signature::new(cranelift_codegen::isa::CallConv::SystemV);
+
         // Add parameters
         for param in parameters {
             let param_type = self.type_expression_to_cranelift_type(param.type_expr.as_ref())?;
             sig.params.push(AbiParam::new(param_type));
         }
-        
+
         // Add return type
         let return_type = if let Some(return_type_expr) = return_type_expr {
             self.type_expression_to_cranelift_type(Some(return_type_expr))?
@@ -451,17 +668,20 @@ impl CraneliftCompiler {
             types::I64 // Default return type
         };
         sig.returns.push(AbiParam::new(return_type));
-        
+
         Ok(sig)
     }
 
-    fn type_expression_to_cranelift_type(&self, type_expr: Option<&TypeExpression>) -> Result<types::Type, String> {
+    fn type_expression_to_cranelift_type(
+        &self,
+        type_expr: Option<&TypeExpression>,
+    ) -> Result<types::Type, String> {
         match type_expr {
             Some(TypeExpression::Int) => Ok(types::I64),
             Some(TypeExpression::Float) => Ok(types::F64),
             Some(TypeExpression::Bool) => Ok(types::I8),
             Some(TypeExpression::String) => Ok(types::I64), // Simplified: string as pointer
-            Some(TypeExpression::Void) => Ok(types::I64), // Void as I64 for now
+            Some(TypeExpression::Void) => Ok(types::I64),   // Void as I64 for now
             Some(TypeExpression::Struct(_, _, _)) => Ok(types::I64), // Simplified: struct as pointer
             Some(TypeExpression::Int32) => Ok(types::I32),
             None => Ok(types::I64), // Default type
@@ -472,27 +692,29 @@ impl CraneliftCompiler {
         cranelift_log!("=== CREATING MAIN FUNCTION ===");
         // cranelift_log!("Current next_function_id: {}", self.next_function_id);
         cranelift_log!("Available functions: {:?}", self.functions);
-        
+
         // Create a new function
-        let mut sig = cranelift_codegen::ir::Signature::new(cranelift_codegen::isa::CallConv::SystemV);
+        let mut sig =
+            cranelift_codegen::ir::Signature::new(cranelift_codegen::isa::CallConv::SystemV);
         sig.params.push(AbiParam::new(types::I64)); // Use I64 to match other functions
         sig.returns.push(AbiParam::new(types::I64)); // Use I64 to match other functions
-        
-        let mut func = Function::with_name_signature(UserFuncName::user(0, self.next_function_id), sig);
+
+        let mut func =
+            Function::with_name_signature(UserFuncName::user(0, self.next_function_id), sig);
         self.next_function_id += 1;
         cranelift_log!("Created main function with name: {:?}", func.name);
         cranelift_log!("=== END MAIN FUNCTION CREATION ===\n");
-        
+
         // Create a new FunctionBuilderContext for this compilation
         let mut local_builder_ctx = FunctionBuilderContext::new();
         let mut builder = FunctionBuilder::new(&mut func, &mut local_builder_ctx);
-        
+
         let entry_block = builder.create_block();
         builder.switch_to_block(entry_block);
         // Add the parameter to the entry block to match the function signature
         builder.append_block_param(entry_block, types::I64);
         builder.seal_block(entry_block);
-        
+
         // Compile each expression (skip function definitions as they're already compiled)
         let mut last_result = None;
         for expr in &program.expressions {
@@ -501,36 +723,53 @@ impl CraneliftCompiler {
                 _ => {
                     let result = self.compile_expression(&mut builder, expr)?;
                     last_result = Some(result);
-                },
+                }
             };
         }
-        
+
         // Return the last computed value, or 0 if no expressions were compiled
         let return_value = last_result.unwrap_or_else(|| builder.ins().iconst(types::I64, 0));
         builder.ins().return_(&[return_value]);
-        
+
         builder.finalize();
-        
+
         Ok(func)
     }
 
-    fn compile_function_definition(&mut self, id: &Id, parameters: &[Parameter], body: &Expression) -> Result<(), String> {
+    fn compile_function_definition(
+        &mut self,
+        id: &Id,
+        parameters: &[Parameter],
+        body: &Expression,
+    ) -> Result<(), String> {
         // Get the signature for this function
-        let signature = self.function_signatures.get(&id.name)
+        let signature = self
+            .function_signatures
+            .get(&id.name)
             .ok_or_else(|| format!("No signature found for function: {}", id.name))?
             .clone();
         // TODO: Should we even have a default here?
-        let param_types: Vec<TypeExpression> = parameters.iter().map(|p| {
-            match &p.type_expr {
-                Some(TypeExpression::Struct(id, _, _)) if id.name == "String" => TypeExpression::String,
+        let param_types: Vec<TypeExpression> = parameters
+            .iter()
+            .map(|p| match &p.type_expr {
+                Some(TypeExpression::Struct(id, _, _)) if id.name == "String" => {
+                    TypeExpression::String
+                }
                 Some(t) => t.clone(),
                 None => TypeExpression::Int,
-            }
-        }).collect();
+            })
+            .collect();
         // Get the function ID that was already assigned during declaration
-        let function_id = self.functions.get(&id.name)
+        let function_id = self
+            .functions
+            .get(&id.name)
             .and_then(|overloads| overloads.get(&param_types))
-            .ok_or_else(|| format!("Function '{}' with params {:?} was not declared", id.name, param_types))?;
+            .ok_or_else(|| {
+                format!(
+                    "Function '{}' with params {:?} was not declared",
+                    id.name, param_types
+                )
+            })?;
 
         cranelift_log!("=== COMPILING FUNCTION DEFINITION ===");
         cranelift_log!("Function name: '{}'", id.name);
@@ -539,52 +778,52 @@ impl CraneliftCompiler {
         // Create a new function
         let mut func = Function::with_name_signature(
             UserFuncName::user(0, function_id.index() as u32),
-            signature.clone()
+            signature.clone(),
         );
-        
+
         // Create a new FunctionBuilderContext for this function
         let mut local_builder_ctx = FunctionBuilderContext::new();
         let mut builder = FunctionBuilder::new(&mut func, &mut local_builder_ctx);
-        
+
         let entry_block = builder.create_block();
         builder.switch_to_block(entry_block);
-        
+
         // Add block parameters for function parameters first
         for param in parameters {
             let param_type = self.type_expression_to_cranelift_type(param.type_expr.as_ref())?;
             builder.append_block_param(entry_block, param_type);
         }
-        
+
         // Now seal the block after adding all parameters
         builder.seal_block(entry_block);
-        
+
         // Declare parameters as variables
         let mut param_vars = HashMap::new();
         for (i, param) in parameters.iter().enumerate() {
             let param_type = self.type_expression_to_cranelift_type(param.type_expr.as_ref())?;
             let var = Variable::new(i);
             builder.declare_var(var, param_type);
-            
+
             // Get the parameter value from the function parameters
             let param_value = builder.block_params(entry_block)[i];
             builder.def_var(var, param_value);
-            
+
             param_vars.insert(param.id.name.clone(), var);
             // cranelift_log!("Function parameter '{}' mapped to variable {:?} with value {:?}", param.id.name, var, param_value);
         }
-        
+
         // Temporarily replace the global variables with function parameters
         // cranelift_log!("Before replacing variables: {:?}", self.variables.keys().collect::<Vec<_>>());
         let original_variables = std::mem::replace(&mut self.variables, param_vars);
         // cranelift_log!("After replacing variables: {:?}", self.variables.keys().collect::<Vec<_>>());
-        
+
         cranelift_log!("Compiling body: {:?}", body);
         // Compile the function body
         let result = self.compile_expression(&mut builder, body);
-        
+
         // Restore the original variables
         self.variables = original_variables;
-        
+
         // Handle the result - the desugarer ensures every function has a return statement
         match result {
             Ok(_) => {
@@ -593,19 +832,17 @@ impl CraneliftCompiler {
             }
             Err(e) => return Err(e),
         }
-        
+
         // Ensure all blocks are sealed before finalizing
         builder.finalize();
-        
+
         // Debug: Print the function IR before adding to module
         cranelift_log!("Function '{}' IR before module addition:", id.name);
         cranelift_log!("{}", func);
-        
 
-        
         // Define the function in the module (it's already declared)
         self.define_function_in_module(&id.name, &mut func, parameters)?;
-        
+
         cranelift_log!("=== FUNCTION MODULE REGISTRATION ===");
         cranelift_log!("Function name: '{}'", id.name);
         cranelift_log!("Function signature: {:?}", signature);
@@ -613,11 +850,8 @@ impl CraneliftCompiler {
         cranelift_log!("Current functions map: {:?}", self.functions);
         cranelift_log!("=== END FUNCTION DEFINITION ===\n");
 
-        
         Ok(())
     }
-
-    
 
     pub fn write_object_to_file(&self, object_bytes: &[u8], filename: &str) -> Result<(), String> {
         std::fs::write(filename, object_bytes)
@@ -625,7 +859,11 @@ impl CraneliftCompiler {
         Ok(())
     }
 
-    fn compile_expression(&mut self, builder: &mut FunctionBuilder, expr: &Expression) -> Result<Value, String> {
+    fn compile_expression(
+        &mut self,
+        builder: &mut FunctionBuilder,
+        expr: &Expression,
+    ) -> Result<Value, String> {
         match expr {
             Expression::Int(n) => {
                 // cranelift_log!("Compiling int: {:?}", n);
@@ -638,48 +876,51 @@ impl CraneliftCompiler {
                 // cranelift_log!("result: {:?}", result);
                 Ok(result)
             }
-            Expression::Boolean(b) => {
-                Ok(builder.ins().iconst(types::I8, *b as i64))
-            }
+            Expression::Boolean(b) => Ok(builder.ins().iconst(types::I8, *b as i64)),
             Expression::String(s) => {
                 cranelift_log!("Compiling string literal: '{}'", s);
-                
+
                 // For now, let's use a simple approach - create a static string
                 // This is a temporary workaround until we fix the data object approach
 
                 let static_string = format!("{}{}", s.as_str(), '\0');
                 let static_string = static_string.as_str();
-                cranelift_log!("static_string: {:?} : {:?}", static_string, std::any::type_name_of_val(static_string));
+                cranelift_log!(
+                    "static_string: {:?} : {:?}",
+                    static_string,
+                    std::any::type_name_of_val(static_string)
+                );
 
                 let string_literal = static_string;
-                
+
                 // Create a data object for the string
-                let module = self.module.as_mut()
-                    .ok_or("Module not initialized")?;
-                
+                let module = self.module.as_mut().ok_or("Module not initialized")?;
+
                 // Create a unique name for this string using a counter
                 self.string_counter += 1;
                 let string_name = format!("static_str_{}", self.string_counter);
-                
+
                 // Create the string data
                 let string_data = string_literal.as_bytes().to_vec();
-                
+
                 // Declare the data object in the module
-                let data_id = module.declare_data(&string_name, cranelift_module::Linkage::Local, false, false)
+                let data_id = module
+                    .declare_data(&string_name, cranelift_module::Linkage::Local, false, false)
                     .map_err(|e| format!("Failed to declare string data: {}", e))?;
-                
+
                 // Define the data object
                 let mut data_desc = cranelift_module::DataDescription::new();
                 data_desc.define(string_data.into_boxed_slice());
-                module.define_data(data_id, &data_desc)
+                module
+                    .define_data(data_id, &data_desc)
                     .map_err(|e| format!("Failed to define string data: {}", e))?;
-                
+
                 // Create a global symbol reference
                 let symbol = module.declare_data_in_func(data_id, &mut builder.func);
-                
+
                 // Load the address of the string using global_value
                 let addr = builder.ins().global_value(types::I64, symbol);
-                
+
                 Ok(addr)
             }
             Expression::Identifier { id, type_expr } => {
@@ -692,29 +933,33 @@ impl CraneliftCompiler {
                     Err(format!("Undefined variable: {}", id.name))
                 }
             }
-            Expression::BinaryOp { operator, left, right } => {
+            Expression::BinaryOp {
+                operator,
+                left,
+                right,
+            } => {
                 match operator {
                     BinaryOperator::Assignment => {
                         // Handle variable assignment - don't compile left side as expression
                         if let Expression::Identifier { id, .. } = left.as_ref() {
                             let rhs = self.compile_expression(builder, right)?;
-                            
+
                             // Get the variable count before borrowing
                             let var_count = self.variables.len();
-                            
+
                             let var = self.variables.entry(id.name.clone()).or_insert_with(|| {
                                 let var = Variable::new(var_count);
                                 builder.declare_var(var, types::I64);
                                 var
                             });
-                            
+
                             // Convert rhs to I64 if needed
                             let rhs_i64 = if builder.func.dfg.value_type(rhs) == types::I32 {
                                 builder.ins().uextend(types::I64, rhs)
                             } else {
                                 rhs
                             };
-                            
+
                             builder.def_var(*var, rhs_i64);
                             Ok(rhs_i64)
                         } else {
@@ -725,27 +970,23 @@ impl CraneliftCompiler {
                         // For non-assignment operators, compile both sides
                         let lhs = self.compile_expression(builder, left)?;
                         let rhs = self.compile_expression(builder, right)?;
-                        
+
                         match operator {
                             BinaryOperator::Add => {
                                 // cranelift_log!("Compiling add: {:?}, {:?}", lhs, rhs);
                                 // Assume I64 for now, we can add type checking later
                                 Ok(builder.ins().iadd(lhs, rhs))
                             }
-                            BinaryOperator::Subtract => {
-                                Ok(builder.ins().isub(lhs, rhs))
-                            }
-                            BinaryOperator::Multiply => {
-                                Ok(builder.ins().imul(lhs, rhs))
-                            }
-                            BinaryOperator::Divide => {
-                                Ok(builder.ins().sdiv(lhs, rhs))
-                            }
+                            BinaryOperator::Subtract => Ok(builder.ins().isub(lhs, rhs)),
+                            BinaryOperator::Multiply => Ok(builder.ins().imul(lhs, rhs)),
+                            BinaryOperator::Divide => Ok(builder.ins().sdiv(lhs, rhs)),
                             BinaryOperator::LessThanEqual => {
                                 Ok(builder.ins().icmp(IntCC::UnsignedLessThanOrEqual, lhs, rhs))
                             }
                             BinaryOperator::GreaterThanEqual => {
-                                Ok(builder.ins().icmp(IntCC::UnsignedGreaterThanOrEqual, lhs, rhs))
+                                Ok(builder
+                                    .ins()
+                                    .icmp(IntCC::UnsignedGreaterThanOrEqual, lhs, rhs))
                             }
                             BinaryOperator::GreaterThan => {
                                 Ok(builder.ins().icmp(IntCC::UnsignedGreaterThan, lhs, rhs))
@@ -753,27 +994,21 @@ impl CraneliftCompiler {
                             BinaryOperator::LessThan => {
                                 Ok(builder.ins().icmp(IntCC::UnsignedLessThan, lhs, rhs))
                             }
-                            BinaryOperator::Equal => {
-                                Ok(builder.ins().icmp(IntCC::Equal, lhs, rhs))
-                            }
+                            BinaryOperator::Equal => Ok(builder.ins().icmp(IntCC::Equal, lhs, rhs)),
                             BinaryOperator::NotEqual => {
                                 Ok(builder.ins().icmp(IntCC::NotEqual, lhs, rhs))
                             }
-                            _ => Err(format!("Unsupported binary operator: {:?}", operator))
+                            _ => Err(format!("Unsupported binary operator: {:?}", operator)),
                         }
                     }
                 }
             }
             Expression::UnaryOp { operator, operand } => {
                 let operand_val = self.compile_expression(builder, operand)?;
-                
+
                 match operator {
-                    UnaryOperator::Negate => {
-                        Ok(builder.ins().ineg(operand_val))
-                    }
-                    UnaryOperator::Not => {
-                        Ok(builder.ins().bnot(operand_val))
-                    }
+                    UnaryOperator::Negate => Ok(builder.ins().ineg(operand_val)),
+                    UnaryOperator::Not => Ok(builder.ins().bnot(operand_val)),
                 }
             }
             Expression::FunctionCall { id, arguments } => {
@@ -793,11 +1028,17 @@ impl CraneliftCompiler {
                         Expression::Boolean(_) => Some(TypeExpression::Bool),
                         Expression::String(_) => Some(TypeExpression::String),
                         Expression::Identifier { type_expr, .. } => type_expr.clone(),
-                        Expression::FunctionCall { id, .. } if id.name == "as_ptr" => Some(TypeExpression::Int),
-                        Expression::FunctionCall { id, .. } if id.name == "as_string" => Some(TypeExpression::String),
+                        Expression::FunctionCall { id, .. } if id.name == "as_ptr" => {
+                            Some(TypeExpression::Int)
+                        }
+                        Expression::FunctionCall { id, .. } if id.name == "as_string" => {
+                            Some(TypeExpression::String)
+                        }
                         _ => None,
                     };
-                    if let Some(t) = ty { arg_types.push(t); }
+                    if let Some(t) = ty {
+                        arg_types.push(t);
+                    }
                 }
                 // Special-case built-ins
                 if id.name == "new" {
@@ -810,9 +1051,14 @@ impl CraneliftCompiler {
                         Expression::Identifier { id, .. } => &id.name,
                         _ => return Err("First argument to 'new' must be a type name (symbol, string, or identifier)".to_string()),
                     };
-                    let struct_info = self.struct_registry.get(type_name)
-                        .ok_or_else(|| format!("Type '{}' not found in struct registry", type_name))?;
-                    let malloc_func = if let Some(id) = self.functions.get("malloc").and_then(|m| m.values().next().copied()) {
+                    let struct_info = self.struct_registry.get(type_name).ok_or_else(|| {
+                        format!("Type '{}' not found in struct registry", type_name)
+                    })?;
+                    let malloc_func = if let Some(id) = self
+                        .functions
+                        .get("malloc")
+                        .and_then(|m| m.values().next().copied())
+                    {
                         let module = self.module.as_mut().unwrap();
                         let func_ptr: *mut _ = &mut *builder.func;
                         Some((id, module, func_ptr))
@@ -823,11 +1069,16 @@ impl CraneliftCompiler {
                         builder,
                         struct_info,
                         &compiled_args,
-                        malloc_func.map(|(id, module, func_ptr)| (id, module, unsafe { &mut *func_ptr })),
+                        malloc_func
+                            .map(|(id, module, func_ptr)| (id, module, unsafe { &mut *func_ptr })),
                         true, // Legacy codegen: assume non-leaf to avoid red zone issues
                     ));
                 } else if id.name == "printf" {
-                    let printf_func = if let Some(id) = self.functions.get("printf").and_then(|m| m.values().next().copied()) {
+                    let printf_func = if let Some(id) = self
+                        .functions
+                        .get("printf")
+                        .and_then(|m| m.values().next().copied())
+                    {
                         let module = self.module.as_mut().unwrap();
                         let func_ptr: *mut _ = &mut *builder.func;
                         Some((id, module, func_ptr))
@@ -837,7 +1088,8 @@ impl CraneliftCompiler {
                     return Ok(emit_printf(
                         builder,
                         &compiled_args,
-                        printf_func.map(|(id, module, func_ptr)| (id, module, unsafe { &mut *func_ptr })),
+                        printf_func
+                            .map(|(id, module, func_ptr)| (id, module, unsafe { &mut *func_ptr })),
                     ));
                 } else if id.name == "_mem_load" {
                     if compiled_args.len() != 2 {
@@ -846,9 +1098,16 @@ impl CraneliftCompiler {
                     return Ok(emit_mem_load(builder, compiled_args[0], compiled_args[1]));
                 } else if id.name == "_mem_store" {
                     if compiled_args.len() != 3 {
-                        return Err("_mem_store expects 3 arguments (pointer, offset, value)".to_string());
+                        return Err(
+                            "_mem_store expects 3 arguments (pointer, offset, value)".to_string()
+                        );
                     }
-                    emit_mem_store(builder, compiled_args[0], compiled_args[1], compiled_args[2]);
+                    emit_mem_store(
+                        builder,
+                        compiled_args[0],
+                        compiled_args[1],
+                        compiled_args[2],
+                    );
                     return Ok(compiled_args[2]); // Return the stored value for now
                 } else if id.name == "getfield" {
                     if compiled_args.len() != 3 {
@@ -858,12 +1117,19 @@ impl CraneliftCompiler {
                     let field_symbol = match &arguments[1] {
                         Expression::Symbol(s) => s.as_str(),
                         Expression::String(s) => s.as_str(),
-                        _ => return Err("Second argument to getfield must be a symbol or string".to_string()),
+                        _ => {
+                            return Err("Second argument to getfield must be a symbol or string"
+                                .to_string())
+                        }
                     };
                     let struct_type_name = match &arguments[2] {
                         Expression::Symbol(s) => s.as_str(),
                         Expression::String(s) => s.as_str(),
-                        _ => return Err("Third argument to getfield must be a symbol or string".to_string()),
+                        _ => {
+                            return Err(
+                                "Third argument to getfield must be a symbol or string".to_string()
+                            )
+                        }
                     };
                     return emit_getfield(
                         builder,
@@ -880,7 +1146,11 @@ impl CraneliftCompiler {
                     let func_name = match &arguments[0] {
                         Expression::String(s) => s.as_str(),
                         Expression::Symbol(s) => s.as_str(),
-                        _ => return Err("First argument to 'ffi' must be a string or symbol".to_string()),
+                        _ => {
+                            return Err(
+                                "First argument to 'ffi' must be a string or symbol".to_string()
+                            )
+                        }
                     };
                     // Compile the rest of the arguments
                     let ffi_args: Vec<Value> = compiled_args.iter().skip(1).cloned().collect();
@@ -912,7 +1182,11 @@ impl CraneliftCompiler {
                 // Lookup user-defined overloaded functions
                 if let Some(overloads) = self.functions.get(&id.name) {
                     if let Some(func_id) = overloads.get(&arg_types) {
-                        let func_ref = self.module.as_mut().unwrap().declare_func_in_func(*func_id, &mut builder.func);
+                        let func_ref = self
+                            .module
+                            .as_mut()
+                            .unwrap()
+                            .declare_func_in_func(*func_id, &mut builder.func);
                         let call_inst = builder.ins().call(func_ref, &compiled_args);
                         let results = builder.inst_results(call_inst);
                         if let Some(&return_value) = results.first() {
@@ -923,7 +1197,11 @@ impl CraneliftCompiler {
                     } else if arg_types.is_empty() && !overloads.is_empty() {
                         // No param types: pick the first available overload
                         if let Some((_, func_id)) = overloads.iter().next() {
-                            let func_ref = self.module.as_mut().unwrap().declare_func_in_func(*func_id, &mut builder.func);
+                            let func_ref = self
+                                .module
+                                .as_mut()
+                                .unwrap()
+                                .declare_func_in_func(*func_id, &mut builder.func);
                             let call_inst = builder.ins().call(func_ref, &compiled_args);
                             let results = builder.inst_results(call_inst);
                             if let Some(&return_value) = results.first() {
@@ -934,11 +1212,18 @@ impl CraneliftCompiler {
                         }
                     }
                 }
-                Err(format!("Function not found: {} with params {:?}", id.name, arg_types))
+                Err(format!(
+                    "Function not found: {} with params {:?}",
+                    id.name, arg_types
+                ))
             }
-            Expression::If { condition, then_branch, else_branch } => {
+            Expression::If {
+                condition,
+                then_branch,
+                else_branch,
+            } => {
                 let cond_val = self.compile_expression(builder, condition)?;
-                
+
                 // Create blocks for then, else, and merge
                 let then_block = builder.create_block();
                 let else_block = builder.create_block();
@@ -946,23 +1231,29 @@ impl CraneliftCompiler {
                 builder.append_block_param(merge_block, types::I64);
 
                 // Branch based on condition
-                builder.ins().brif(cond_val, then_block, &[], else_block, &[]);
+                builder
+                    .ins()
+                    .brif(cond_val, then_block, &[], else_block, &[]);
 
                 // Compile then branch
                 builder.switch_to_block(then_block);
                 // cranelift_log!("Compiling then branch");
                 let then_val = self.compile_expression(builder, then_branch)?;
                 // cranelift_log!("Then branch compiled to: {:?}", then_val);
-                
+
                 // Check if the last instruction is a return - if so, don't add a jump
-                let should_add_jump = if let Some(last_inst) = builder.func.layout.last_inst(then_block) {
-                    builder.func.dfg.insts[last_inst].opcode() != cranelift_codegen::ir::Opcode::Return
-                } else {
-                    true
-                };
-                
+                let should_add_jump =
+                    if let Some(last_inst) = builder.func.layout.last_inst(then_block) {
+                        builder.func.dfg.insts[last_inst].opcode()
+                            != cranelift_codegen::ir::Opcode::Return
+                    } else {
+                        true
+                    };
+
                 if should_add_jump {
-                    builder.ins().jump(merge_block, &[BlockArg::Value(then_val)]);
+                    builder
+                        .ins()
+                        .jump(merge_block, &[BlockArg::Value(then_val)]);
                     // cranelift_log!("Jumped to merge block");
                 } else {
                     // cranelift_log!("Skipping jump due to return instruction");
@@ -978,16 +1269,20 @@ impl CraneliftCompiler {
                     builder.ins().iconst(types::I64, 0)
                 };
                 // cranelift_log!("Else branch compiled to: {:?}", else_val);
-                
+
                 // Check if the last instruction is a return - if so, don't add a jump
-                let should_add_jump = if let Some(last_inst) = builder.func.layout.last_inst(else_block) {
-                    builder.func.dfg.insts[last_inst].opcode() != cranelift_codegen::ir::Opcode::Return
-                } else {
-                    true
-                };
-                
+                let should_add_jump =
+                    if let Some(last_inst) = builder.func.layout.last_inst(else_block) {
+                        builder.func.dfg.insts[last_inst].opcode()
+                            != cranelift_codegen::ir::Opcode::Return
+                    } else {
+                        true
+                    };
+
                 if should_add_jump {
-                    builder.ins().jump(merge_block, &[BlockArg::Value(else_val)]);
+                    builder
+                        .ins()
+                        .jump(merge_block, &[BlockArg::Value(else_val)]);
                 } else {
                     // cranelift_log!("Skipping jump due to return instruction");
                 }
@@ -996,7 +1291,7 @@ impl CraneliftCompiler {
                 // Merge block
                 builder.switch_to_block(merge_block);
                 builder.seal_block(merge_block);
-                
+
                 // For now, return the then value (this is a simplified approach)
                 // TODO: In a proper implementation, you'd need to handle the merge differently
                 Ok(builder.block_params(merge_block)[0])
@@ -1005,26 +1300,28 @@ impl CraneliftCompiler {
                 let loop_block = builder.create_block();
                 let body_block = builder.create_block();
                 let exit_block = builder.create_block();
-                
+
                 // Jump to loop condition
                 builder.ins().jump(loop_block, &[]);
-                
+
                 // Loop condition
                 builder.switch_to_block(loop_block);
                 let cond_val = self.compile_expression(builder, condition)?;
-                builder.ins().brif(cond_val, body_block, &[], exit_block, &[]);
+                builder
+                    .ins()
+                    .brif(cond_val, body_block, &[], exit_block, &[]);
                 builder.seal_block(loop_block);
-                
+
                 // Loop body
                 builder.switch_to_block(body_block);
                 self.compile_expression(builder, body)?;
                 builder.ins().jump(loop_block, &[]);
                 builder.seal_block(body_block);
-                
+
                 // Exit block
                 builder.switch_to_block(exit_block);
                 builder.seal_block(exit_block);
-                
+
                 Ok(builder.ins().iconst(types::I64, 0))
             }
             Expression::Block(expressions) => {
@@ -1034,14 +1331,22 @@ impl CraneliftCompiler {
                     // Patch: If the function signature expects i32, cast result to i32
                     let func_sig = &builder.func.signature;
                     if let Some(abi) = func_sig.returns.get(0) {
-                        if abi.value_type == types::I32 && builder.func.dfg.value_type(result) != types::I32 {
+                        if abi.value_type == types::I32
+                            && builder.func.dfg.value_type(result) != types::I32
+                        {
                             result = builder.ins().ireduce(types::I32, result);
                         }
                     }
                     // Check if the last instruction in the current block is a return
                     // If so, we should stop processing further expressions
-                    if let Some(last_inst) = builder.func.layout.last_inst(builder.current_block().unwrap()) {
-                        if builder.func.dfg.insts[last_inst].opcode() == cranelift_codegen::ir::Opcode::Return {
+                    if let Some(last_inst) = builder
+                        .func
+                        .layout
+                        .last_inst(builder.current_block().unwrap())
+                    {
+                        if builder.func.dfg.insts[last_inst].opcode()
+                            == cranelift_codegen::ir::Opcode::Return
+                        {
                             // We've hit a return statement, so we're done with this block
                             break;
                         }
@@ -1055,7 +1360,13 @@ impl CraneliftCompiler {
                 // In a real implementation, you'd call a print function
                 Ok(value)
             }
-            Expression::FunctionDefinition { id, parameters, body, return_type_expr, foreign } => {
+            Expression::FunctionDefinition {
+                id,
+                parameters,
+                body,
+                return_type_expr,
+                foreign,
+            } => {
                 if *foreign {
                     // Function definitions should be compiled during the "compile all functions" phase
                     // When we encounter them during main expression compilation, we should skip them
@@ -1078,7 +1389,9 @@ impl CraneliftCompiler {
                 // Patch: If the function signature expects i32, cast value to i32
                 let func_sig = &builder.func.signature;
                 if let Some(abi) = func_sig.returns.get(0) {
-                    if abi.value_type == types::I32 && builder.func.dfg.value_type(value) != types::I32 {
+                    if abi.value_type == types::I32
+                        && builder.func.dfg.value_type(value) != types::I32
+                    {
                         value = builder.ins().ireduce(types::I32, value);
                     }
                 }
@@ -1098,17 +1411,19 @@ impl CraneliftCompiler {
                 self.string_counter += 1;
                 let string_name = format!("static_sym_{}", self.string_counter);
                 let string_data = string_literal.as_bytes().to_vec();
-                let data_id = module.declare_data(&string_name, cranelift_module::Linkage::Local, false, false)
+                let data_id = module
+                    .declare_data(&string_name, cranelift_module::Linkage::Local, false, false)
                     .map_err(|e| format!("Failed to declare symbol data: {}", e))?;
                 let mut data_desc = cranelift_module::DataDescription::new();
                 data_desc.define(string_data.into_boxed_slice());
-                module.define_data(data_id, &data_desc)
+                module
+                    .define_data(data_id, &data_desc)
                     .map_err(|e| format!("Failed to define symbol data: {}", e))?;
                 let symbol = module.declare_data_in_func(data_id, &mut builder.func);
                 let addr = builder.ins().global_value(types::I64, symbol);
                 Ok(addr)
             }
-            _ => Err(format!("Unsupported expression type: {:?}", expr))
+            _ => Err(format!("Unsupported expression type: {:?}", expr)),
         }
     }
-} 
+}

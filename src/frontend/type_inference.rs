@@ -1,6 +1,6 @@
-use crate::{type_inference_log};
+use super::ast::{BinaryOperator, Expression, Id, Parameter, Program, TypeExpression};
+use crate::type_inference_log;
 use std::collections::HashMap;
-use super::ast::{Expression, Program, BinaryOperator, TypeExpression, Id, Parameter};
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Type {
@@ -22,8 +22,8 @@ pub enum Type {
     },
     Union(Vec<Type>),
     Unknown(usize), // Type variable for inference
-    Any, // Top type
-    None, // Bottom type
+    Any,            // Top type
+    None,           // Bottom type
 }
 
 #[derive(Debug, Clone)]
@@ -44,7 +44,10 @@ impl From<TypeExpression> for Type {
             TypeExpression::Struct(id, fields, generic_args) => match (fields, generic_args) {
                 (Some(fields), None) => Type::Struct {
                     name: id.name.clone(),
-                    fields: fields.iter().map(|field| (field.name().to_string(), Type::from(field.clone()))).collect(),
+                    fields: fields
+                        .iter()
+                        .map(|field| (field.name().to_string(), Type::from(field.clone())))
+                        .collect(),
                 },
                 _ => Type::Struct {
                     name: id.name.clone(),
@@ -65,12 +68,15 @@ impl From<Type> for TypeExpression {
             Type::String => TypeExpression::String,
             Type::Unit => TypeExpression::Void,
             Type::Function { .. } => TypeExpression::Void, // TODO: Handle function types
-            Type::Overloaded(ref overloads) => overloads.first().map(|t| TypeExpression::from(t.clone())).unwrap_or(TypeExpression::Void),
+            Type::Overloaded(ref overloads) => overloads
+                .first()
+                .map(|t| TypeExpression::from(t.clone()))
+                .unwrap_or(TypeExpression::Void),
             Type::Struct { name, .. } => TypeExpression::Struct(Id { name }, None, None),
             Type::Union(_) => TypeExpression::Int, // TODO: Handle union types
             Type::Unknown(_) => TypeExpression::Int, // TODO: Handle type variables
-            Type::Any => TypeExpression::Int, // TODO: Handle any type
-            Type::None => TypeExpression::Void, // TODO: Handle bottom type
+            Type::Any => TypeExpression::Int,      // TODO: Handle any type
+            Type::None => TypeExpression::Void,    // TODO: Handle bottom type
         }
     }
 }
@@ -136,7 +142,12 @@ impl TypeEnvironment {
 
     /// Update the return type of a function overload that matches the given param_types.
     /// Preserves overload sets instead of overwriting with set_type.
-    fn update_function_overload_return_type(&mut self, name: String, param_types: Vec<Type>, return_type: Type) {
+    fn update_function_overload_return_type(
+        &mut self,
+        name: String,
+        param_types: Vec<Type>,
+        return_type: Type,
+    ) {
         let refined = Type::Function {
             parameters: param_types.clone(),
             return_type: Box::new(return_type),
@@ -188,27 +199,41 @@ impl TypeEnvironment {
                     Type::String
                 } else {
                     match self.get_type(&id.name) {
-                        Some(Type::Function { parameters: _, return_type }) => *return_type.clone(),
+                        Some(Type::Function {
+                            parameters: _,
+                            return_type,
+                        }) => *return_type.clone(),
                         Some(Type::Overloaded(overloads)) => {
-                            let arg_types: Vec<Type> = arguments.iter()
+                            let arg_types: Vec<Type> = arguments
+                                .iter()
                                 .map(|a| self.type_from_expr(a.clone()))
                                 .collect();
                             // Find overload whose parameters match argument types
                             for overload in overloads {
-                                if let Type::Function { parameters, return_type } = overload {
+                                if let Type::Function {
+                                    parameters,
+                                    return_type,
+                                } = overload
+                                {
                                     if parameters.len() == arg_types.len()
-                                        && parameters.iter().zip(&arg_types).all(|(p, a)| p == a || *p == Type::Any)
+                                        && parameters
+                                            .iter()
+                                            .zip(&arg_types)
+                                            .all(|(p, a)| p == a || *p == Type::Any)
                                     {
                                         return *return_type.clone();
                                     }
                                 }
                             }
                             // Fallback: first overload's return type
-                            overloads.first()
-                                .and_then(|o| if let Type::Function { return_type, .. } = o {
-                                    Some(*return_type.clone())
-                                } else {
-                                    None
+                            overloads
+                                .first()
+                                .and_then(|o| {
+                                    if let Type::Function { return_type, .. } = o {
+                                        Some(*return_type.clone())
+                                    } else {
+                                        None
+                                    }
                                 })
                                 .unwrap_or(Type::Any)
                         }
@@ -217,17 +242,19 @@ impl TypeEnvironment {
                     }
                 }
             }
-            Expression::Block(exprs) => {
-                exprs
-                    .last()
-                    .map(|e| self.type_from_expr(*e.clone()))
-                    .unwrap_or(Type::Unit)
-            }
+            Expression::Block(exprs) => exprs
+                .last()
+                .map(|e| self.type_from_expr(*e.clone()))
+                .unwrap_or(Type::Unit),
             Expression::Return(expr) => expr
                 .as_ref()
                 .map(|e| self.type_from_expr(*e.clone()))
                 .unwrap_or(Type::Unit),
-            Expression::BinaryOp { operator, left, right } => {
+            Expression::BinaryOp {
+                operator,
+                left,
+                right,
+            } => {
                 let left_ty = self.type_from_expr(*left);
                 let right_ty = self.type_from_expr(*right);
                 match operator {
@@ -279,9 +306,11 @@ impl TypeInferencer {
 
         type_inference_log!("------ Collected declarations ------");
         type_inference_log!("------ Environment: {:?}", self.env);
-        
+
         // Second pass: infer types for all expressions
-        let typed_expressions = program.expressions.iter()
+        let typed_expressions = program
+            .expressions
+            .iter()
             .map(|expr| self.infer_expression(expr))
             .collect::<Result<Vec<_>, _>>()?;
 
@@ -294,15 +323,24 @@ impl TypeInferencer {
         type_inference_log!("------ Solved constraints ------");
         type_inference_log!("------ Environment: {:?}", self.env);
 
-        Ok(Program { expressions: typed_expressions })
+        Ok(Program {
+            expressions: typed_expressions,
+        })
     }
 
     fn collect_declarations(&mut self, program: &Program) -> Result<(), String> {
         for expr in &program.expressions {
             match expr {
-                Expression::FunctionDefinition { id, parameters, body, return_type_expr, foreign: _ } => {
+                Expression::FunctionDefinition {
+                    id,
+                    parameters,
+                    body,
+                    return_type_expr,
+                    foreign: _,
+                } => {
                     // Use explicit parameter types when available for overload resolution
-                    let param_types: Vec<Type> = parameters.iter()
+                    let param_types: Vec<Type> = parameters
+                        .iter()
                         .map(|p| match &p.type_expr {
                             Some(te) => Type::from(te.clone()),
                             None => self.env.fresh_type_var(),
@@ -312,31 +350,28 @@ impl TypeInferencer {
                         Some(ty) => Type::from(ty.clone()),
                         None => self.env.fresh_type_var(),
                     };
-                    
+
                     self.env.add_function_overload(
                         id.name.clone(),
                         Type::Function {
                             parameters: param_types,
                             return_type: Box::new(return_type),
-                        }
+                        },
                     );
                 }
                 Expression::StructDefinition { id, fields, .. } => {
                     let mut field_types = HashMap::new();
                     for field in fields {
                         let field_type = Type::from(field.field_type.clone());
-                        field_types.insert(
-                            field.id.name.clone(),
-                            field_type
-                        );
+                        field_types.insert(field.id.name.clone(), field_type);
                     }
-                    
+
                     self.env.set_type(
                         id.name.clone(),
                         Type::Struct {
                             name: id.name.clone(),
                             fields: field_types,
-                        }
+                        },
                     );
                 }
                 Expression::EnumDefinition { id, variants, .. } => {
@@ -353,10 +388,7 @@ impl TypeInferencer {
                 }
                 Expression::Identifier { id, type_expr } => {
                     if let Some(ty) = type_expr {
-                        self.env.set_type(
-                            id.name.clone(), 
-                            Type::from(ty.clone())
-                        );
+                        self.env.set_type(id.name.clone(), Type::from(ty.clone()));
                     }
                 }
                 /* // This is not needed, because in this pass we are only adding types to the environment not assigning them to expressions
@@ -381,10 +413,18 @@ impl TypeInferencer {
             Expression::Boolean(_) => Ok(expr.clone()),
             Expression::String(_) => Ok(expr.clone()),
             Expression::Identifier { id, type_expr } => {
-                type_inference_log!("Typing | Identifier: {:?} with type_expr {:?}", id.name, type_expr);
+                type_inference_log!(
+                    "Typing | Identifier: {:?} with type_expr {:?}",
+                    id.name,
+                    type_expr
+                );
                 type_inference_log!("Type environment: {:?}", self.env);
                 let env_type = self.env.get_type(&id.name);
-                type_inference_log!("Typing | Identifier: {:?} with env_type {:?}", id.name, env_type);
+                type_inference_log!(
+                    "Typing | Identifier: {:?} with env_type {:?}",
+                    id.name,
+                    env_type
+                );
                 if let Some(id_type_expr) = type_expr {
                     match env_type {
                         Some(ty) => {
@@ -399,8 +439,12 @@ impl TypeInferencer {
                             }
                         }
                         None => {
-                            type_inference_log!("Typing | Missed type for identifier: {:?} in initial pass", id.name);
-                            self.env.set_type(id.name.clone(), Type::from(id_type_expr.clone()));
+                            type_inference_log!(
+                                "Typing | Missed type for identifier: {:?} in initial pass",
+                                id.name
+                            );
+                            self.env
+                                .set_type(id.name.clone(), Type::from(id_type_expr.clone()));
                             return Ok(Expression::Identifier {
                                 id: id.clone(),
                                 type_expr: Some(id_type_expr.clone()),
@@ -411,17 +455,27 @@ impl TypeInferencer {
                     match env_type {
                         Some(ty) => {
                             // Always return identifier with type_expr set from environment if available
-                            return Ok(Expression::Identifier { id: id.clone(), type_expr: Some(TypeExpression::from(ty.clone())) });
+                            return Ok(Expression::Identifier {
+                                id: id.clone(),
+                                type_expr: Some(TypeExpression::from(ty.clone())),
+                            });
                         }
                         None => {
                             let ty = self.env.fresh_type_var();
                             self.env.set_type(id.name.clone(), ty.clone());
-                            return Ok(Expression::Identifier { id: id.clone(), type_expr: Some(TypeExpression::from(ty.clone())) });
+                            return Ok(Expression::Identifier {
+                                id: id.clone(),
+                                type_expr: Some(TypeExpression::from(ty.clone())),
+                            });
                         }
                     }
                 }
             }
-            Expression::BinaryOp { operator, left, right } => {
+            Expression::BinaryOp {
+                operator,
+                left,
+                right,
+            } => {
                 let left_expr = self.infer_expression(left)?;
                 let right_expr = self.infer_expression(right)?;
                 // Special handling for Assignment: update the left identifier's type annotation in the AST
@@ -435,7 +489,11 @@ impl TypeInferencer {
                         }
                         type_inference_log!("Type environment: {:?}", self.env);
                         // Update the left_expr to have the correct type annotation
-                        type_inference_log!("Typing | Assignment: {:?} := {:?}", id.name, &right_type);
+                        type_inference_log!(
+                            "Typing | Assignment: {:?} := {:?}",
+                            id.name,
+                            &right_type
+                        );
                         let left_expr = Expression::Identifier {
                             id: id.clone(),
                             type_expr: Some(TypeExpression::from(right_type)),
@@ -449,21 +507,22 @@ impl TypeInferencer {
                 }
                 // --- Existing logic for other BinaryOperators ---
                 match operator {
-                    BinaryOperator::Add | BinaryOperator::Subtract 
-                    | BinaryOperator::Multiply | BinaryOperator::Divide => {
+                    BinaryOperator::Add
+                    | BinaryOperator::Subtract
+                    | BinaryOperator::Multiply
+                    | BinaryOperator::Divide => {
                         // Numeric operations - both operands must be numeric
-                        let numeric_types: Vec<Type> = 
-                            vec![Type::Int, Type::Float];
+                        let numeric_types: Vec<Type> = vec![Type::Int, Type::Float];
                         if let Some(left_type) = self.env.get_type(&format!("{:?}", left)) {
                             self.env.add_constraint(TypeConstraint::Subset(
                                 left_type.clone(),
-                                Type::Union(numeric_types.clone())
+                                Type::Union(numeric_types.clone()),
                             ));
                         }
                         if let Some(right_type) = self.env.get_type(&format!("{:?}", right)) {
                             self.env.add_constraint(TypeConstraint::Subset(
                                 right_type.clone(),
-                                Type::Union(numeric_types)
+                                Type::Union(numeric_types),
                             ));
                         }
                     }
@@ -471,11 +530,11 @@ impl TypeInferencer {
                         // Equality operations - operands must be of the same type
                         if let (Some(left_type), Some(right_type)) = (
                             self.env.get_type(&format!("{:?}", left)),
-                            self.env.get_type(&format!("{:?}", right))
+                            self.env.get_type(&format!("{:?}", right)),
                         ) {
                             self.env.add_constraint(TypeConstraint::Equal(
                                 left_type.clone(),
-                                right_type.clone()
+                                right_type.clone(),
                             ));
                         }
                     }
@@ -489,8 +548,13 @@ impl TypeInferencer {
             }
             Expression::FunctionCall { id, arguments } => {
                 // Infer types for arguments and set type_expr if missing
-                type_inference_log!("Typing | FunctionCall: {:?} with args {:?}", id.name, arguments);
-                let typed_args = arguments.iter()
+                type_inference_log!(
+                    "Typing | FunctionCall: {:?} with args {:?}",
+                    id.name,
+                    arguments
+                );
+                let typed_args = arguments
+                    .iter()
                     .map(|arg| self.infer_expression(arg))
                     .collect::<Result<Vec<_>, _>>()?;
                 // Special handling for getfield: try to infer the field type
@@ -498,7 +562,9 @@ impl TypeInferencer {
                     // First argument: struct instance
                     // Second argument: field symbol
                     if let Expression::Identifier { id: struct_id, .. } = &typed_args[0] {
-                        if let Some(Type::Struct { name: _, fields }) = self.env.get_type(&struct_id.name) {
+                        if let Some(Type::Struct { name: _, fields }) =
+                            self.env.get_type(&struct_id.name)
+                        {
                             if let Expression::Symbol(field_name) = &typed_args[1] {
                                 if let Some(field_ty) = fields.get(field_name) {
                                     // Attach the type as a type_expr to the getfield call
@@ -519,7 +585,13 @@ impl TypeInferencer {
                     arguments: typed_args,
                 })
             }
-            Expression::FunctionDefinition { id, parameters, body, return_type_expr, foreign } => {
+            Expression::FunctionDefinition {
+                id,
+                parameters,
+                body,
+                return_type_expr,
+                foreign,
+            } => {
                 let mut typed_params = Vec::new();
                 for param in parameters {
                     let param_type = match &param.type_expr {
@@ -541,7 +613,8 @@ impl TypeInferencer {
                 // so that callers (e.g. b = add_one(a)) see the correct type.
                 // Use update_function_overload_return_type to preserve overload sets instead of
                 // overwriting (which would cause add_one(a::Point) to wrongly return Int).
-                let param_types: Vec<Type> = typed_params.iter()
+                let param_types: Vec<Type> = typed_params
+                    .iter()
                     .map(|p| Type::from(p.type_expr.as_ref().unwrap().clone()))
                     .collect();
                 self.env.update_function_overload_return_type(
@@ -586,11 +659,11 @@ impl TypeInferencer {
     fn solve_constraints(&mut self) -> Result<(), String> {
         // Simple constraint solver that handles basic type equality and subset constraints
         // In a real implementation, this would be more sophisticated
-        
+
         let mut changed = true;
         while changed {
             changed = false;
-            
+
             // Take ownership of constraints temporarily
             let constraints = std::mem::take(&mut self.env.constraints);
             for constraint in constraints {
@@ -615,7 +688,7 @@ impl TypeInferencer {
                 }
             }
         }
-        
+
         Ok(())
     }
 
@@ -628,23 +701,35 @@ impl TypeInferencer {
             }
             (Type::Unknown(var), _) => {
                 // Unify type variable with a concrete type
-                // TODO: 
+                // TODO:
                 // Check for circular references
                 // Update the environment to replace the variable with the concrete type
                 Ok(())
             }
             (_, Type::Unknown(var)) => {
                 // Unify concrete type with a type variable
-                // TODO: 
+                // TODO:
                 // Check for circular references
                 // Update the environment to replace the variable with the concrete type
                 Ok(())
             }
-            (Type::Int, Type::Int) | (Type::Float, Type::Float) | (Type::Bool, Type::Bool) | (Type::String, Type::String) => {
+            (Type::Int, Type::Int)
+            | (Type::Float, Type::Float)
+            | (Type::Bool, Type::Bool)
+            | (Type::String, Type::String) => {
                 // Trivial unification for primitive types
                 Ok(())
             }
-            (Type::Function { parameters: params1, return_type: ret1 }, Type::Function { parameters: params2, return_type: ret2 }) => {
+            (
+                Type::Function {
+                    parameters: params1,
+                    return_type: ret1,
+                },
+                Type::Function {
+                    parameters: params2,
+                    return_type: ret2,
+                },
+            ) => {
                 // Unify function types
                 if params1.len() != params2.len() {
                     return Err("Function parameter lengths do not match".to_string());
@@ -654,7 +739,16 @@ impl TypeInferencer {
                 }
                 self.unify(ret1, ret2)
             }
-            (Type::Struct { name: name1, fields: fields1 }, Type::Struct { name: name2, fields: fields2 }) if name1 == name2 => {
+            (
+                Type::Struct {
+                    name: name1,
+                    fields: fields1,
+                },
+                Type::Struct {
+                    name: name2,
+                    fields: fields2,
+                },
+            ) if name1 == name2 => {
                 // Unify struct types
                 for (key, field1) in fields1 {
                     if let Some(field2) = fields2.get(key) {
@@ -685,7 +779,10 @@ impl TypeInferencer {
     fn subset(&mut self, s1: &Type, s2: &Type) -> Result<(), String> {
         match (s1, s2) {
             (Type::Union(s1), Type::Union(s2)) => {
-                if !s1.iter().all(|t1| s2.iter().any(|t2| t1.is_compatible_with(t2))) {
+                if !s1
+                    .iter()
+                    .all(|t1| s2.iter().any(|t2| t1.is_compatible_with(t2)))
+                {
                     return Err(format!("Type {:?} is not a subset of {:?}", s1, s2));
                 }
                 Ok(())
@@ -701,7 +798,8 @@ impl TypeInferencer {
     }
 
     fn is_subset(&self, s1: &[Type], s2: &[Type]) -> bool {
-        s1.iter().all(|t1| s2.iter().any(|t2| t1.is_compatible_with(t2)))
+        s1.iter()
+            .all(|t1| s2.iter().any(|t2| t1.is_compatible_with(t2)))
     }
 }
 
@@ -710,28 +808,34 @@ impl Type {
     fn is_numeric(&self) -> bool {
         matches!(self, Type::Int | Type::Float)
     }
-    
+
     fn is_compatible_with(&self, other: &Type) -> bool {
         match (self, other) {
-            (Type::Union(s1), Type::Union(s2)) => {
-                s1.iter().any(|t1| s2.iter().any(|t2| t1.is_compatible_with(t2)))
+            (Type::Union(s1), Type::Union(s2)) => s1
+                .iter()
+                .any(|t1| s2.iter().any(|t2| t1.is_compatible_with(t2))),
+            (Type::Union(s), t) | (t, Type::Union(s)) => {
+                s.iter().any(|st| st.is_compatible_with(t))
             }
-            (Type::Union(s), t) | (t, Type::Union(s)) => s.iter().any(|st| st.is_compatible_with(t)),
             (t1, t2) => t1 == t2,
         }
     }
 
     fn is_subset(&self, other: &[Type]) -> bool {
         match self {
-            Type::Union(types) => types.iter().all(|t| other.iter().any(|o| t.is_compatible_with(o))),
-            _ => other.iter().any(|t| self.is_compatible_with(t))
+            Type::Union(types) => types
+                .iter()
+                .all(|t| other.iter().any(|o| t.is_compatible_with(o))),
+            _ => other.iter().any(|t| self.is_compatible_with(t)),
         }
     }
 
     fn is_disjoint(&self, other: &[Type]) -> bool {
         match self {
-            Type::Union(types) => !types.iter().any(|t| other.iter().any(|o| t.is_compatible_with(o))),
-            _ => !other.iter().any(|t| self.is_compatible_with(t))
+            Type::Union(types) => !types
+                .iter()
+                .any(|t| other.iter().any(|o| t.is_compatible_with(o))),
+            _ => !other.iter().any(|t| self.is_compatible_with(t)),
         }
     }
 }

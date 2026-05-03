@@ -23,7 +23,7 @@ pub enum Expression {
     FunctionCall {
         // TODO: Change to expression to allow functions to return functions
         // e.g. should be able to call `my_fn()()` which currently fails
-        id: Id, 
+        id: Id,
         arguments: Vec<Expression>,
     },
     FunctionDefinition {
@@ -184,7 +184,6 @@ pub struct MatchCase {
     pub body: Box<Expression>,
 }
 
-
 /// A single generic argument. Const generics are not implemented yet (parser rejects them).
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub enum GenericArg {
@@ -244,7 +243,6 @@ impl TypeExpression {
     }
 }
 
-
 use std::fmt;
 
 impl fmt::Display for Expression {
@@ -260,56 +258,137 @@ impl fmt::Display for Expression {
                 None => write!(f, "{}::Any", id.name),
             },
             Expression::UnaryOp { operator, operand } => write!(f, "({:?} {})", operator, operand),
-            Expression::BinaryOp { operator, left, right } => write!(f, "({} {:?} {})", left, operator, right),
+            Expression::BinaryOp {
+                operator,
+                left,
+                right,
+            } => write!(f, "({} {:?} {})", left, operator, right),
             Expression::FunctionCall { id, arguments } => {
                 let args: Vec<String> = arguments.iter().map(|arg| format!("{}", arg)).collect();
                 write!(f, "{}({})", id.name, args.join(", "))
-            },
-            Expression::FunctionDefinition { id, parameters, body, return_type_expr, foreign } => {
-                let params: Vec<String> = parameters.iter().map(|param| format!("{}", param)).collect();
+            }
+            Expression::FunctionDefinition {
+                id,
+                parameters,
+                body,
+                return_type_expr,
+                foreign,
+            } => {
+                let params: Vec<String> = parameters
+                    .iter()
+                    .map(|param| format!("{}", param))
+                    .collect();
                 let body_str = format!("{}", *body);
                 let fn_kw = if *foreign { "foreign fn" } else { "fn" };
                 match return_type_expr {
-                    Some(return_type_expr) => write!(f, "{} {}({}) -> {} {{ {} }}", fn_kw, id.name, params.join(", "), return_type_expr.name(), body_str),
-                    None => write!(f, "{} {}({}) {{ {} }}", fn_kw, id.name, params.join(", "), body_str),
+                    Some(return_type_expr) => write!(
+                        f,
+                        "{} {}({}) -> {} {{ {} }}",
+                        fn_kw,
+                        id.name,
+                        params.join(", "),
+                        return_type_expr.name(),
+                        body_str
+                    ),
+                    None => write!(
+                        f,
+                        "{} {}({}) {{ {} }}",
+                        fn_kw,
+                        id.name,
+                        params.join(", "),
+                        body_str
+                    ),
                 }
-            },
-            Expression::StructDefinition { id, fields, type_params } => {
-                let fields_str: Vec<String> = fields.iter().map(|field| format!("{}", field.id.name)).collect();
+            }
+            Expression::StructDefinition {
+                id,
+                fields,
+                type_params,
+            } => {
+                let fields_str: Vec<String> = fields
+                    .iter()
+                    .map(|field| format!("{}", field.id.name))
+                    .collect();
                 let tp = if type_params.is_empty() {
                     String::new()
                 } else {
-                    format!("<{}>", type_params.iter().map(|p| p.name.clone()).collect::<Vec<String>>().join(", "))
+                    format!(
+                        "<{}>",
+                        type_params
+                            .iter()
+                            .map(|p| p.name.clone())
+                            .collect::<Vec<String>>()
+                            .join(", ")
+                    )
                 };
-                write!(f, "struct {}{} {{ {} }}", id.name, tp, fields_str.join(", "))
-            },
-            Expression::EnumDefinition { id, variants, type_params } => {
-                let variants_str: Vec<String> = variants.iter().map(|v| {
-                    if v.fields.is_empty() {
-                        v.name.clone()
-                    } else if v.is_tuple {
-                        let types: Vec<String> = v.fields.iter().map(|f| f.field_type.name()).collect();
-                        format!("{}::({})", v.name, types.join(", "))
-                    } else {
-                        let fields: Vec<String> = v.fields.iter().map(|f| format!("{}::{}", f.id.name, f.field_type.name())).collect();
-                        format!("{}::{{ {} }}", v.name, fields.join(", "))
-                    }
-                }).collect();
+                write!(
+                    f,
+                    "struct {}{} {{ {} }}",
+                    id.name,
+                    tp,
+                    fields_str.join(", ")
+                )
+            }
+            Expression::EnumDefinition {
+                id,
+                variants,
+                type_params,
+            } => {
+                let variants_str: Vec<String> = variants
+                    .iter()
+                    .map(|v| {
+                        if v.fields.is_empty() {
+                            v.name.clone()
+                        } else if v.is_tuple {
+                            let types: Vec<String> =
+                                v.fields.iter().map(|f| f.field_type.name()).collect();
+                            format!("{}::({})", v.name, types.join(", "))
+                        } else {
+                            let fields: Vec<String> = v
+                                .fields
+                                .iter()
+                                .map(|f| format!("{}::{}", f.id.name, f.field_type.name()))
+                                .collect();
+                            format!("{}::{{ {} }}", v.name, fields.join(", "))
+                        }
+                    })
+                    .collect();
                 let tp = if type_params.is_empty() {
                     String::new()
                 } else {
-                    format!("<{}>", type_params.iter().map(|p| p.name.clone()).collect::<Vec<String>>().join(", "))
+                    format!(
+                        "<{}>",
+                        type_params
+                            .iter()
+                            .map(|p| p.name.clone())
+                            .collect::<Vec<String>>()
+                            .join(", ")
+                    )
                 };
-                write!(f, "enum {}{} {{ {} }}", id.name, tp, variants_str.join(", "))
-            },
+                write!(
+                    f,
+                    "enum {}{} {{ {} }}",
+                    id.name,
+                    tp,
+                    variants_str.join(", ")
+                )
+            }
             Expression::EnumVariantAccess { enum_name, variant } => {
                 write!(f, "{}::{}", enum_name, variant)
-            },
-            Expression::EnumVariantConstruct { enum_name, variant, args } => {
+            }
+            Expression::EnumVariantConstruct {
+                enum_name,
+                variant,
+                args,
+            } => {
                 let args_str: Vec<String> = args.iter().map(|a| format!("{}", a)).collect();
                 write!(f, "{}::{}({})", enum_name, variant, args_str.join(", "))
-            },
-            Expression::If { condition, then_branch, else_branch } => {
+            }
+            Expression::If {
+                condition,
+                then_branch,
+                else_branch,
+            } => {
                 let else_str = if let Some(else_branch) = else_branch {
                     format!(" else {}", else_branch)
                 } else {
@@ -317,39 +396,60 @@ impl fmt::Display for Expression {
                 };
                 write!(f, "if {} {{ {} }}{}", condition, then_branch, else_str)?;
                 Ok(())
-            },
-            Expression::While { condition, body } => write!(f, "while {} {{ {} }}", condition, body),
-            Expression::For { iterator, range, body } => write!(f, "for {} in {} {{ {} }}", iterator.name, range, body),
+            }
+            Expression::While { condition, body } => {
+                write!(f, "while {} {{ {} }}", condition, body)
+            }
+            Expression::For {
+                iterator,
+                range,
+                body,
+            } => write!(f, "for {} in {} {{ {} }}", iterator.name, range, body),
             Expression::Block(expressions) => {
-                let block_str: Vec<String> = expressions.iter().map(|expr| format!("{}", expr)).collect();
+                let block_str: Vec<String> =
+                    expressions.iter().map(|expr| format!("{}", expr)).collect();
                 write!(f, "{{ {} }}", block_str.join("; "))
-            },
-            Expression::Return(expr) => write!(f, "return {}", expr.as_ref().map_or("".to_string(), |e| format!("{}", e))),
+            }
+            Expression::Return(expr) => write!(
+                f,
+                "return {}",
+                expr.as_ref().map_or("".to_string(), |e| format!("{}", e))
+            ),
             Expression::Print(expr) => write!(f, "print({})", expr),
             Expression::Match { value, cases } => {
-                let cases_str: Vec<String> = cases.iter().map(|case| {
-                    let pat = match &case.pattern {
-                        MatchPattern::Wildcard => "_".to_string(),
-                        MatchPattern::EnumVariant { enum_name, variant, bindings } => {
-                            if bindings.is_empty() {
-                                format!("{}::{}", enum_name, variant)
-                            } else {
-                                format!("{}::{}({})", enum_name, variant, bindings.join(", "))
+                let cases_str: Vec<String> = cases
+                    .iter()
+                    .map(|case| {
+                        let pat = match &case.pattern {
+                            MatchPattern::Wildcard => "_".to_string(),
+                            MatchPattern::EnumVariant {
+                                enum_name,
+                                variant,
+                                bindings,
+                            } => {
+                                if bindings.is_empty() {
+                                    format!("{}::{}", enum_name, variant)
+                                } else {
+                                    format!("{}::{}({})", enum_name, variant, bindings.join(", "))
+                                }
                             }
-                        }
-                    };
-                    format!("{} => {}", pat, case.body)
-                }).collect();
+                        };
+                        format!("{} => {}", pat, case.body)
+                    })
+                    .collect();
                 write!(f, "match {} {{ {} }}", value, cases_str.join("; "))
-            },
-            //Expression::VariableAssignment { id, value } => write!(f, "{} = {}", id.name, value),
+            } //Expression::VariableAssignment { id, value } => write!(f, "{} = {}", id.name, value),
         }
     }
 }
 
 impl fmt::Display for Program {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
-        let expressions_str: Vec<String> = self.expressions.iter().map(|expr| format!("{}", expr)).collect();
+        let expressions_str: Vec<String> = self
+            .expressions
+            .iter()
+            .map(|expr| format!("{}", expr))
+            .collect();
         write!(f, "{{ {} }}", expressions_str.join("; "))
     }
 }
@@ -370,7 +470,6 @@ impl fmt::Display for FieldDefinition {
     }
 }
 
-
 impl fmt::Display for TypeExpression {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         match self {
@@ -387,4 +486,4 @@ impl fmt::Display for TypeExpression {
             ),
         }
     }
-} 
+}

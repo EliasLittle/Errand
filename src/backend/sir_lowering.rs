@@ -12,8 +12,8 @@ use cranelift_codegen::ir::condcodes::IntCC;
 use cranelift_codegen::ir::{AbiParam, BlockArg, Function, InstBuilder, UserFuncName, Value};
 use cranelift_codegen::settings::{self, Configurable};
 use cranelift_frontend::{FunctionBuilder, FunctionBuilderContext};
-use cranelift_module::{Linkage, Module};
 use cranelift_module::FuncId;
+use cranelift_module::{Linkage, Module};
 use cranelift_object::ObjectModule;
 
 use crate::backend::built_in_methods::{
@@ -22,7 +22,9 @@ use crate::backend::built_in_methods::{
 use crate::backend::preir::{instr_index, Instr, LiteralPl};
 use crate::backend::sir::{SIREnumLayout, SIRFunctionInfo, SIRModule, SIR};
 use crate::backend::sir_gen::errand_type_name;
-use crate::backend::structs::{Field as BackendField, Struct as BackendStruct, Type as BackendType};
+use crate::backend::structs::{
+    Field as BackendField, Struct as BackendStruct, Type as BackendType,
+};
 use crate::backend::worklist::ErrandType;
 use crate::frontend::ast::{BinaryOperator, UnaryOperator};
 
@@ -86,9 +88,9 @@ impl SIRLoweringPass {
             .functions
             .iter()
             .flat_map(|(name, overloads)| {
-                overloads.iter().map(move |(key, info)| {
-                    (name.clone(), key.clone(), info.clone())
-                })
+                overloads
+                    .iter()
+                    .map(move |(key, info)| (name.clone(), key.clone(), info.clone()))
             })
             .collect();
 
@@ -142,7 +144,11 @@ impl SIRLoweringPass {
     }
 
     /// Allocate `size` bytes on the stack and return a pointer (i64) to the slot.
-    fn alloca_bytes(&self, size: i64, builder: &mut FunctionBuilder) -> cranelift_codegen::ir::Value {
+    fn alloca_bytes(
+        &self,
+        size: i64,
+        builder: &mut FunctionBuilder,
+    ) -> cranelift_codegen::ir::Value {
         let slot = builder.create_sized_stack_slot(StackSlotData::new(
             StackSlotKind::ExplicitSlot,
             size as u32,
@@ -158,7 +164,9 @@ impl SIRLoweringPass {
         flag_builder.set("use_colocated_libcalls", "false").unwrap();
         flag_builder.set("is_pic", "true").unwrap();
         flag_builder.set("enable_verifier", "false").unwrap();
-        flag_builder.set("enable_llvm_abi_extensions", "true").unwrap();
+        flag_builder
+            .set("enable_llvm_abi_extensions", "true")
+            .unwrap();
 
         let isa = cranelift_native::builder()
             .unwrap()
@@ -190,9 +198,8 @@ impl SIRLoweringPass {
         ];
         let module = self.module.as_mut().ok_or("Module not initialised")?;
         for (name, param_types, ret_type) in builtins {
-            let mut sig = cranelift_codegen::ir::Signature::new(
-                cranelift_codegen::isa::CallConv::SystemV,
-            );
+            let mut sig =
+                cranelift_codegen::ir::Signature::new(cranelift_codegen::isa::CallConv::SystemV);
             for pt in &param_types {
                 sig.params.push(AbiParam::new(*pt));
             }
@@ -223,7 +230,11 @@ impl SIRLoweringPass {
                     format!("__{}_{}", name, type_keys.join("_"))
                 };
                 let sym = mangled.as_str();
-                let linkage = if info.is_foreign { Linkage::Import } else { Linkage::Export };
+                let linkage = if info.is_foreign {
+                    Linkage::Import
+                } else {
+                    Linkage::Export
+                };
 
                 let module = self.module.as_mut().ok_or("Module not initialised")?;
                 let func_id = match module.declare_function(sym, linkage, &sig) {
@@ -291,22 +302,43 @@ impl SIRLoweringPass {
         };
 
         // Compute the mangled key the same way declare_all_functions does.
-        let type_keys: Vec<String> =
-            info.params.iter().map(|(_, ty)| errand_type_name(ty)).collect();
+        let type_keys: Vec<String> = info
+            .params
+            .iter()
+            .map(|(_, ty)| errand_type_name(ty))
+            .collect();
         let mangled = if type_keys.is_empty() {
             format!("__{}__", name)
         } else {
             format!("__{}_{}", name, type_keys.join("_"))
         };
 
-        let sig = match self.func_sigs.get(&mangled).or_else(|| self.func_sigs.get(name)) {
+        let sig = match self
+            .func_sigs
+            .get(&mangled)
+            .or_else(|| self.func_sigs.get(name))
+        {
             Some(s) => s.clone(),
-            None => return Err(format!("No signature for function '{}' (mangled: '{}')", name, mangled)),
+            None => {
+                return Err(format!(
+                    "No signature for function '{}' (mangled: '{}')",
+                    name, mangled
+                ))
+            }
         };
 
-        let func_id = match self.func_ids.get(&mangled).or_else(|| self.func_ids.get(name)) {
+        let func_id = match self
+            .func_ids
+            .get(&mangled)
+            .or_else(|| self.func_ids.get(name))
+        {
             Some(&id) => id,
-            None => return Err(format!("Function '{}' (mangled: '{}') not declared in module", name, mangled)),
+            None => {
+                return Err(format!(
+                    "Function '{}' (mangled: '{}') not declared in module",
+                    name, mangled
+                ))
+            }
         };
 
         let func_idx = self.next_func_idx;
@@ -346,7 +378,14 @@ impl SIRLoweringPass {
             if nested.contains(&i) {
                 continue;
             }
-            self.emit_instr(i, &sir, &mut builder, &mut value_map, &mut var_map, &mut var_counter)?;
+            self.emit_instr(
+                i,
+                &sir,
+                &mut builder,
+                &mut value_map,
+                &mut var_map,
+                &mut var_counter,
+            )?;
             if block_is_terminated(&builder) {
                 break;
             }
@@ -801,9 +840,12 @@ impl SIRLoweringPass {
                 let field_layouts = variant_layout.fields.clone();
                 for (i, field) in field_layouts.iter().enumerate() {
                     let arg_idx = data.arg_indices[i] as usize;
-                    let field_val = self.emit_instr(arg_idx, sir, builder, value_map, var_map, var_counter)?;
+                    let field_val =
+                        self.emit_instr(arg_idx, sir, builder, value_map, var_map, var_counter)?;
                     let offset = 8 + field.byte_offset as i32;
-                    builder.ins().store(MemFlags::new(), field_val, enum_ptr, offset);
+                    builder
+                        .ins()
+                        .store(MemFlags::new(), field_val, enum_ptr, offset);
                 }
 
                 enum_ptr
@@ -821,12 +863,19 @@ impl SIRLoweringPass {
                 // For simple (unit-only) enums the scrutinee IS the i64 tag.
                 // For mixed enums it is a pointer; load the tag from byte 0.
                 let scrutinee_val = self.emit_instr(
-                    data.scrutinee as usize, sir, builder, value_map, var_map, var_counter,
+                    data.scrutinee as usize,
+                    sir,
+                    builder,
+                    value_map,
+                    var_map,
+                    var_counter,
                 )?;
                 let tag_val = if enum_layout.is_simple {
                     scrutinee_val
                 } else {
-                    builder.ins().load(types::I64, MemFlags::new(), scrutinee_val, 0)
+                    builder
+                        .ins()
+                        .load(types::I64, MemFlags::new(), scrutinee_val, 0)
                 };
 
                 // Create one Cranelift block per arm, one check block per arm, a
@@ -836,14 +885,20 @@ impl SIRLoweringPass {
                 let no_match_block = builder.create_block();
 
                 let arm_blocks: Vec<_> = data.arms.iter().map(|_| builder.create_block()).collect();
-                let check_blocks: Vec<_> = (0..data.arms.len()).map(|_| builder.create_block()).collect();
+                let check_blocks: Vec<_> = (0..data.arms.len())
+                    .map(|_| builder.create_block())
+                    .collect();
 
                 // Jump from current block to the first check block.
                 builder.ins().jump(check_blocks[0], &[]);
 
                 for (i, arm) in data.arms.iter().enumerate() {
                     let arm_block = arm_blocks[i];
-                    let next = if i + 1 < data.arms.len() { check_blocks[i + 1] } else { no_match_block };
+                    let next = if i + 1 < data.arms.len() {
+                        check_blocks[i + 1]
+                    } else {
+                        no_match_block
+                    };
 
                     // ── Check block ───────────────────────────────────────────
                     builder.switch_to_block(check_blocks[i]);
@@ -869,9 +924,13 @@ impl SIRLoweringPass {
                                     if let Some(field) = variant_layout.fields.get(field_idx) {
                                         let byte_off = 8 + field.byte_offset as i32;
                                         let field_val = builder.ins().load(
-                                            types::I64, MemFlags::new(), scrutinee_val, byte_off,
+                                            types::I64,
+                                            MemFlags::new(),
+                                            scrutinee_val,
+                                            byte_off,
                                         );
-                                        let var = if let Some(&existing) = var_map.get(binding_name) {
+                                        let var = if let Some(&existing) = var_map.get(binding_name)
+                                        {
                                             existing
                                         } else {
                                             let v = Variable::new(*var_counter);
@@ -888,7 +947,12 @@ impl SIRLoweringPass {
                     }
 
                     let arm_val = self.emit_region_body(
-                        arm.body as usize, sir, builder, value_map, var_map, var_counter,
+                        arm.body as usize,
+                        sir,
+                        builder,
+                        value_map,
+                        var_map,
+                        var_counter,
                     )?;
                     if !block_is_terminated(builder) {
                         builder.ins().jump(merge_block, &[BlockArg::Value(arm_val)]);
@@ -908,7 +972,9 @@ impl SIRLoweringPass {
             }
 
             // ─── Declarations (handled in collection pass; skipped here) ────────
-            Instr::FuncDecl(_) | Instr::StructDecl(_) | Instr::EnumDecl(_) => builder.ins().iconst(types::I64, 0),
+            Instr::FuncDecl(_) | Instr::StructDecl(_) | Instr::EnumDecl(_) => {
+                builder.ins().iconst(types::I64, 0)
+            }
 
             // SIR generation rewrites every `Typeof` into a `Literal(Symbol)`
             // before this point, so reaching here indicates a compiler bug.
@@ -953,8 +1019,7 @@ impl SIRLoweringPass {
             if value_map[return_loc].is_none() && !block_is_terminated(builder) {
                 self.emit_instr(return_loc, sir, builder, value_map, var_map, var_counter)?;
             }
-            Ok(value_map[return_loc]
-                .unwrap_or_else(|| builder.ins().iconst(types::I64, 0)))
+            Ok(value_map[return_loc].unwrap_or_else(|| builder.ins().iconst(types::I64, 0)))
         } else {
             // Not a Region — emit the instruction directly.
             self.emit_instr(region_idx, sir, builder, value_map, var_map, var_counter)
@@ -985,7 +1050,10 @@ impl SIRLoweringPass {
                 if let Some(&var) = var_map.get(&data.name) {
                     Ok(builder.use_var(var))
                 } else {
-                    Err(format!("Undefined variable in loop condition: {}", data.name))
+                    Err(format!(
+                        "Undefined variable in loop condition: {}",
+                        data.name
+                    ))
                 }
             }
             Instr::BinOp(ref data) => {
@@ -1063,10 +1131,8 @@ impl SIRLoweringPass {
                         Instr::Literal(LiteralPl::Symbol(s))
                         | Instr::Literal(LiteralPl::String(s)) => s.clone(),
                         _ => {
-                            return Err(
-                                "First argument to 'new' must be a symbol/string type name"
-                                    .to_string(),
-                            )
+                            return Err("First argument to 'new' must be a symbol/string type name"
+                                .to_string())
                         }
                     };
                 let struct_info = self
@@ -1086,7 +1152,13 @@ impl SIRLoweringPass {
                         self.is_non_leaf,
                     )
                 } else {
-                    emit_new(builder, &struct_info, &compiled_args, None, self.is_non_leaf)
+                    emit_new(
+                        builder,
+                        &struct_info,
+                        &compiled_args,
+                        None,
+                        self.is_non_leaf,
+                    )
                 };
                 Ok(val)
             }
@@ -1118,7 +1190,12 @@ impl SIRLoweringPass {
                 if compiled_args.len() != 3 {
                     return Err("_mem_store expects 3 arguments".to_string());
                 }
-                emit_mem_store(builder, compiled_args[0], compiled_args[1], compiled_args[2]);
+                emit_mem_store(
+                    builder,
+                    compiled_args[0],
+                    compiled_args[1],
+                    compiled_args[2],
+                );
                 Ok(compiled_args[2])
             }
 
@@ -1127,13 +1204,15 @@ impl SIRLoweringPass {
                     return Err("getfield expects 3 arguments".to_string());
                 }
                 let field_sym = match &sir.instructions[arg_indices[1] as usize].instr {
-                    Instr::Literal(LiteralPl::Symbol(s))
-                    | Instr::Literal(LiteralPl::String(s)) => s.clone(),
+                    Instr::Literal(LiteralPl::Symbol(s)) | Instr::Literal(LiteralPl::String(s)) => {
+                        s.clone()
+                    }
                     _ => return Err("Second argument to getfield must be a symbol".to_string()),
                 };
                 let type_name = match &sir.instructions[arg_indices[2] as usize].instr {
-                    Instr::Literal(LiteralPl::Symbol(s))
-                    | Instr::Literal(LiteralPl::String(s)) => s.clone(),
+                    Instr::Literal(LiteralPl::Symbol(s)) | Instr::Literal(LiteralPl::String(s)) => {
+                        s.clone()
+                    }
                     _ => return Err("Third argument to getfield must be a symbol".to_string()),
                 };
                 let registry = self.struct_registry.clone();
@@ -1145,20 +1224,17 @@ impl SIRLoweringPass {
                     return Err("'ffi' requires a function name argument".to_string());
                 }
                 let func_name = match &sir.instructions[arg_indices[0] as usize].instr {
-                    Instr::Literal(LiteralPl::Symbol(s))
-                    | Instr::Literal(LiteralPl::String(s)) => s.clone(),
+                    Instr::Literal(LiteralPl::Symbol(s)) | Instr::Literal(LiteralPl::String(s)) => {
+                        s.clone()
+                    }
                     _ => return Err("First argument to 'ffi' must be a string/symbol".to_string()),
                 };
                 let ffi_args: Vec<Value> = compiled_args.iter().skip(1).cloned().collect();
                 let module = self.module.as_mut().unwrap();
                 let func_ptr: *mut _ = &mut *builder.func;
-                Ok(emit_ffi(
-                    builder,
-                    &func_name,
-                    &ffi_args,
-                    module,
-                    unsafe { &mut *func_ptr },
-                ))
+                Ok(emit_ffi(builder, &func_name, &ffi_args, module, unsafe {
+                    &mut *func_ptr
+                }))
             }
 
             "as_ptr" | "as_string" => {
@@ -1174,9 +1250,12 @@ impl SIRLoweringPass {
                     .iter()
                     .map(|&idx| sir_type_key(sir.instructions[idx as usize].ty.as_ref()))
                     .collect();
-                let func_id = self
-                    .resolve_func_id(name, &arg_type_keys)
-                    .ok_or_else(|| format!("Function not found: {} (arg types: {:?})", name, arg_type_keys))?;
+                let func_id = self.resolve_func_id(name, &arg_type_keys).ok_or_else(|| {
+                    format!(
+                        "Function not found: {} (arg types: {:?})",
+                        name, arg_type_keys
+                    )
+                })?;
                 let func_ref = self
                     .module
                     .as_mut()
@@ -1373,7 +1452,12 @@ fn mark_nested_deps_children(sir: &SIR, idx: usize, nested: &mut HashSet<usize>)
 /// if/while/for bodies). Used to determine if a function is non-leaf for stack
 /// allocation (avoid red zone corruption).
 fn sir_contains_calls(sir: &SIR) -> bool {
-    fn contains_calls_in_range(sir: &SIR, start: usize, end: usize, seen: &mut HashSet<usize>) -> bool {
+    fn contains_calls_in_range(
+        sir: &SIR,
+        start: usize,
+        end: usize,
+        seen: &mut HashSet<usize>,
+    ) -> bool {
         for i in start..end.min(sir.instructions.len()) {
             if seen.contains(&i) {
                 continue;
@@ -1382,15 +1466,30 @@ fn sir_contains_calls(sir: &SIR) -> bool {
             match &sir.instructions[i].instr {
                 Instr::FnCall(_) => return true,
                 Instr::Region(data) => {
-                    if contains_calls_in_range(sir, data.instr_start as usize, data.instr_end as usize, seen) {
+                    if contains_calls_in_range(
+                        sir,
+                        data.instr_start as usize,
+                        data.instr_end as usize,
+                        seen,
+                    ) {
                         return true;
                     }
-                    if contains_calls_in_range(sir, data.return_loc as usize, data.return_loc as usize + 1, seen) {
+                    if contains_calls_in_range(
+                        sir,
+                        data.return_loc as usize,
+                        data.return_loc as usize + 1,
+                        seen,
+                    ) {
                         return true;
                     }
                 }
                 Instr::IfStatement(d) => {
-                    if contains_calls_in_range(sir, d.then_branch as usize, d.then_branch as usize + 1, seen) {
+                    if contains_calls_in_range(
+                        sir,
+                        d.then_branch as usize,
+                        d.then_branch as usize + 1,
+                        seen,
+                    ) {
                         return true;
                     }
                     if let Some(e) = d.else_branch {
@@ -1400,7 +1499,12 @@ fn sir_contains_calls(sir: &SIR) -> bool {
                     }
                 }
                 Instr::WhileLoop(d) => {
-                    if contains_calls_in_range(sir, d.condition as usize, d.condition as usize + 1, seen) {
+                    if contains_calls_in_range(
+                        sir,
+                        d.condition as usize,
+                        d.condition as usize + 1,
+                        seen,
+                    ) {
                         return true;
                     }
                     if contains_calls_in_range(sir, d.body as usize, d.body as usize + 1, seen) {
@@ -1417,7 +1521,12 @@ fn sir_contains_calls(sir: &SIR) -> bool {
                 }
                 Instr::Match(d) => {
                     for arm in &d.arms {
-                        if contains_calls_in_range(sir, arm.body as usize, arm.body as usize + 1, seen) {
+                        if contains_calls_in_range(
+                            sir,
+                            arm.body as usize,
+                            arm.body as usize + 1,
+                            seen,
+                        ) {
                             return true;
                         }
                     }
@@ -1476,7 +1585,9 @@ fn emit_binop(op: BinaryOperator, lhs: Value, rhs: Value, builder: &mut Function
             builder.ins().uextend(types::I64, r)
         }
         BinaryOperator::GreaterThanEqual => {
-            let r = builder.ins().icmp(IntCC::UnsignedGreaterThanOrEqual, lhs, rhs);
+            let r = builder
+                .ins()
+                .icmp(IntCC::UnsignedGreaterThanOrEqual, lhs, rhs);
             builder.ins().uextend(types::I64, r)
         }
         BinaryOperator::Equal => {

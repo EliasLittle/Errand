@@ -2,16 +2,21 @@ use std::collections::hash_map::Entry;
 use std::collections::{HashMap, HashSet};
 
 use crate::backend::analysis::Analyzer;
-use crate::backend::errand_builtins::{type_expr_to_errand_type, type_expr_to_errand_type_with_params};
-use crate::backend::preir::{
-    BinOpPl, EnumData, EnumVariantConstructData, FnCallPl, ForLoopData, IfStatementData, Instr,
-    LiteralPl, MatchArmData, MatchData, RegionData, ReturnData, StructData, UnOpPl, VarDeclData,
-    FuncData, instr_index,
+use crate::backend::errand_builtins::{
+    type_expr_to_errand_type, type_expr_to_errand_type_with_params,
 };
-use crate::backend::sir::{SIR, SIREnumLayout, SIREnumVariantLayout, SIRFunctionInfo, SIRInstr, SIRModule, SIRStructField, SIRStructLayout};
+use crate::backend::preir::PreIR;
+use crate::backend::preir::{
+    instr_index, BinOpPl, EnumData, EnumVariantConstructData, FnCallPl, ForLoopData, FuncData,
+    IfStatementData, Instr, LiteralPl, MatchArmData, MatchData, RegionData, ReturnData, StructData,
+    UnOpPl, VarDeclData,
+};
+use crate::backend::sir::{
+    SIREnumLayout, SIREnumVariantLayout, SIRFunctionInfo, SIRInstr, SIRModule, SIRStructField,
+    SIRStructLayout, SIR,
+};
 use crate::backend::worklist::ErrandType;
 use crate::frontend::ast::{GenericArg, Id, Parameter, Program, TypeExpression};
-use crate::backend::preir::PreIR;
 
 /// Generates SIR from PreIR in a single interleaved pass: each instruction is
 /// typed via `Analyzer` and emitted simultaneously.
@@ -24,7 +29,10 @@ pub struct SirGen {
 
 impl SirGen {
     fn new(analyzer: Analyzer) -> Self {
-        SirGen { analyzer, preir_to_sir: HashMap::new() }
+        SirGen {
+            analyzer,
+            preir_to_sir: HashMap::new(),
+        }
     }
 
     /// Build a complete `SIRModule` from a `PreIR`.
@@ -79,13 +87,22 @@ impl SirGen {
                         .map(|f| {
                             let ty = type_expr_to_errand_type(&f.field_type);
                             let size = errand_type_size(&ty);
-                            let field =
-                                SIRStructField { name: f.id.name.clone(), ty, byte_offset: offset };
+                            let field = SIRStructField {
+                                name: f.id.name.clone(),
+                                ty,
+                                byte_offset: offset,
+                            };
                             offset += size;
                             field
                         })
                         .collect();
-                    Some((sd.name.clone(), SIRStructLayout { fields, total_size: offset }))
+                    Some((
+                        sd.name.clone(),
+                        SIRStructLayout {
+                            fields,
+                            total_size: offset,
+                        },
+                    ))
                 } else {
                     None
                 }
@@ -132,17 +149,23 @@ impl SirGen {
                 .or_else(|| meta.return_type.as_ref().map(type_expr_to_errand_type))
                 .unwrap_or_else(|| ErrandType::Con("Void".into()));
 
-            let type_key: Vec<String> =
-                params.iter().map(|(_, ty)| errand_type_name(ty)).collect();
+            let type_key: Vec<String> = params.iter().map(|(_, ty)| errand_type_name(ty)).collect();
 
             let info = SIRFunctionInfo {
                 params,
                 return_type,
                 is_foreign: meta.is_foreign,
-                body: if meta.is_foreign { None } else { Some(func_sir) },
+                body: if meta.is_foreign {
+                    None
+                } else {
+                    Some(func_sir)
+                },
             };
 
-            functions.entry(meta.name).or_default().insert(type_key, info);
+            functions
+                .entry(meta.name)
+                .or_default()
+                .insert(type_key, info);
         }
 
         // Collect enum layouts from EnumDecl instructions, computing tagged-union sizes.
@@ -157,24 +180,49 @@ impl SirGen {
                         return None;
                     }
                     let mut max_payload = 0usize;
-                    let variant_layouts: Vec<SIREnumVariantLayout> = ed.variants.iter().map(|v| {
-                        let mut payload_offset = 0usize;
-                        let fields: Vec<SIRStructField> = v.fields.iter().map(|(field_name, field_type)| {
-                            let ty = type_expr_to_errand_type(field_type);
-                            let size = errand_type_size(&ty);
-                            let f = SIRStructField { name: field_name.clone(), ty, byte_offset: payload_offset };
-                            payload_offset += size;
-                            f
-                        }).collect();
-                        let payload_size = payload_offset;
-                        if payload_size > max_payload { max_payload = payload_size; }
-                        SIREnumVariantLayout { name: v.name.clone(), fields, payload_size }
-                    }).collect();
+                    let variant_layouts: Vec<SIREnumVariantLayout> = ed
+                        .variants
+                        .iter()
+                        .map(|v| {
+                            let mut payload_offset = 0usize;
+                            let fields: Vec<SIRStructField> = v
+                                .fields
+                                .iter()
+                                .map(|(field_name, field_type)| {
+                                    let ty = type_expr_to_errand_type(field_type);
+                                    let size = errand_type_size(&ty);
+                                    let f = SIRStructField {
+                                        name: field_name.clone(),
+                                        ty,
+                                        byte_offset: payload_offset,
+                                    };
+                                    payload_offset += size;
+                                    f
+                                })
+                                .collect();
+                            let payload_size = payload_offset;
+                            if payload_size > max_payload {
+                                max_payload = payload_size;
+                            }
+                            SIREnumVariantLayout {
+                                name: v.name.clone(),
+                                fields,
+                                payload_size,
+                            }
+                        })
+                        .collect();
 
                     let is_simple = variant_layouts.iter().all(|v| v.fields.is_empty());
                     // total_size = 8 bytes for tag + max payload; 0 when is_simple (bare int).
                     let total_size = if is_simple { 0 } else { 8 + max_payload };
-                    Some((ed.name.clone(), SIREnumLayout { variants: variant_layouts, total_size, is_simple }))
+                    Some((
+                        ed.name.clone(),
+                        SIREnumLayout {
+                            variants: variant_layouts,
+                            total_size,
+                            is_simple,
+                        },
+                    ))
                 } else {
                     None
                 }
@@ -293,7 +341,9 @@ impl SirGen {
             ),
             ErrandType::App(h, args) => ErrandType::App(
                 Box::new(Self::subst_errand_type(h, subst)),
-                args.iter().map(|a| Self::subst_errand_type(a, subst)).collect(),
+                args.iter()
+                    .map(|a| Self::subst_errand_type(a, subst))
+                    .collect(),
             ),
             ErrandType::Forall(v, b) => {
                 if subst.contains_key(v) {
@@ -303,7 +353,9 @@ impl SirGen {
                 }
             }
             ErrandType::Product(ts) => ErrandType::Product(
-                ts.iter().map(|t| Self::subst_errand_type(t, subst)).collect(),
+                ts.iter()
+                    .map(|t| Self::subst_errand_type(t, subst))
+                    .collect(),
             ),
             _ => ty.clone(),
         }
@@ -389,7 +441,15 @@ impl SirGen {
         }
         let mut subst = HashMap::new();
         for (field, arg) in sd.fields.iter().zip(arg_tys.iter()) {
-            Self::unify_field_type_with_arg_ty(&field.field_type, arg, &sd.type_params.iter().map(|p| p.name.clone()).collect::<Vec<String>>(), &mut subst)?;
+            Self::unify_field_type_with_arg_ty(
+                &field.field_type,
+                arg,
+                &sd.type_params
+                    .iter()
+                    .map(|p| p.name.clone())
+                    .collect::<Vec<String>>(),
+                &mut subst,
+            )?;
         }
         if subst.len() != sd.type_params.len() {
             return None;
@@ -413,7 +473,11 @@ impl SirGen {
         s
     }
 
-    fn apply_subst_to_sir_body(sir: &mut SIR, subst: &HashMap<String, ErrandType>, analyzer: &Analyzer) {
+    fn apply_subst_to_sir_body(
+        sir: &mut SIR,
+        subst: &HashMap<String, ErrandType>,
+        analyzer: &Analyzer,
+    ) {
         for si in &mut sir.instructions {
             if let Some(ty) = si.ty.take() {
                 let expanded = analyzer.expand_type(&ty);
@@ -546,7 +610,12 @@ impl SirGen {
             };
 
             let mut shapes: HashMap<Vec<String>, Vec<ErrandType>> = HashMap::new();
-            Self::gather_all_generic_ctor_call_shapes(module, &fname, |t| self.analyzer.expand_type(t), &mut shapes);
+            Self::gather_all_generic_ctor_call_shapes(
+                module,
+                &fname,
+                |t| self.analyzer.expand_type(t),
+                &mut shapes,
+            );
 
             let mut new_overloads: Vec<(Vec<String>, SIRFunctionInfo)> = Vec::new();
             for (arg_keys, arg_tys) in shapes {
@@ -692,7 +761,10 @@ impl SirGen {
     /// Resets the index map so local indices start at 0.
     fn emit_body_sir(&mut self, root_idx: instr_index) -> Result<SIR, String> {
         self.preir_to_sir.clear();
-        let mut sir = SIR { instructions: Vec::new(), return_loc: 0 };
+        let mut sir = SIR {
+            instructions: Vec::new(),
+            return_loc: 0,
+        };
         let local_root = self.analyze_and_emit(root_idx, &mut sir)?;
         sir.return_loc = local_root;
         Ok(sir)
@@ -702,20 +774,24 @@ impl SirGen {
     /// skipping top-level declarations (they have their own entry points).
     fn emit_region_sir(&mut self, region_data: &RegionData) -> Result<SIR, String> {
         self.preir_to_sir.clear();
-        let mut sir = SIR { instructions: Vec::new(), return_loc: 0 };
+        let mut sir = SIR {
+            instructions: Vec::new(),
+            return_loc: 0,
+        };
 
         // Instructions that belong to match arm body Regions are deferred so
         // they are emitted lazily inside their Region's SIR range. This ensures
         // that binding variables (e.g. `x`, `y` from `Message::Move(x, y)`)
         // have SIR indices that fall inside the arm body Region's range, which
         // is required for the lowering pass to correctly mark them as nested.
-        let arm_owned = self.collect_arm_owned_preir(
-            region_data.instr_start, region_data.instr_end,
-        );
+        let arm_owned =
+            self.collect_arm_owned_preir(region_data.instr_start, region_data.instr_end);
 
         for i in region_data.instr_start..region_data.instr_end {
             match self.analyzer.preir.get_instruction(i) {
-                Some(Instr::FuncDecl(_)) | Some(Instr::StructDecl(_)) | Some(Instr::EnumDecl(_)) => continue,
+                Some(Instr::FuncDecl(_))
+                | Some(Instr::StructDecl(_))
+                | Some(Instr::EnumDecl(_)) => continue,
                 _ => {}
             }
             if arm_owned.contains(&i) {
@@ -724,7 +800,11 @@ impl SirGen {
             self.analyze_and_emit(i, &mut sir)?;
         }
 
-        sir.return_loc = self.preir_to_sir.get(&region_data.return_loc).copied().unwrap_or(0);
+        sir.return_loc = self
+            .preir_to_sir
+            .get(&region_data.return_loc)
+            .copied()
+            .unwrap_or(0);
         Ok(sir)
     }
 
@@ -797,8 +877,14 @@ impl SirGen {
 
         // Declarations nested inside a body: analyze only, don't emit into
         // this SIR (they are independent entry points at the module level).
-        if matches!(instr, Instr::FuncDecl(_) | Instr::StructDecl(_) | Instr::EnumDecl(_)) {
-            let _ = self.analyzer.analyze_instr(global_idx).map_err(|e| format!("{e:?}"));
+        if matches!(
+            instr,
+            Instr::FuncDecl(_) | Instr::StructDecl(_) | Instr::EnumDecl(_)
+        ) {
+            let _ = self
+                .analyzer
+                .analyze_instr(global_idx)
+                .map_err(|e| format!("{e:?}"));
             return Ok(-1);
         }
 
@@ -830,7 +916,10 @@ impl SirGen {
             .ok();
 
         let local_idx = sir.instructions.len() as instr_index;
-        sir.instructions.push(SIRInstr { instr: remapped, ty });
+        sir.instructions.push(SIRInstr {
+            instr: remapped,
+            ty,
+        });
         self.preir_to_sir.insert(global_idx, local_idx);
 
         Ok(local_idx)
@@ -853,7 +942,9 @@ impl SirGen {
 
         for i in rd.instr_start..rd.instr_end {
             match self.analyzer.preir.get_instruction(i) {
-                Some(Instr::FuncDecl(_)) | Some(Instr::StructDecl(_)) | Some(Instr::EnumDecl(_)) => {
+                Some(Instr::FuncDecl(_))
+                | Some(Instr::StructDecl(_))
+                | Some(Instr::EnumDecl(_)) => {
                     let _ = self.analyzer.analyze_instr(i);
                     continue;
                 }
@@ -866,8 +957,11 @@ impl SirGen {
         }
 
         let new_end = sir.instructions.len() as instr_index;
-        let new_return_loc =
-            self.preir_to_sir.get(&rd.return_loc).copied().unwrap_or(new_start);
+        let new_return_loc = self
+            .preir_to_sir
+            .get(&rd.return_loc)
+            .copied()
+            .unwrap_or(new_start);
 
         let remapped_region = Instr::Region(RegionData {
             instr_start: new_start,
@@ -885,7 +979,10 @@ impl SirGen {
             .ok();
 
         let local_idx = sir.instructions.len() as instr_index;
-        sir.instructions.push(SIRInstr { instr: remapped_region, ty });
+        sir.instructions.push(SIRInstr {
+            instr: remapped_region,
+            ty,
+        });
         self.preir_to_sir.insert(global_idx, local_idx);
 
         Ok(local_idx)
@@ -906,11 +1003,13 @@ impl SirGen {
                 for idx in data.arg_indices {
                     arg_indices.push(self.analyze_and_emit(idx, sir)?);
                 }
-                Ok(Instr::EnumVariantConstruct(crate::backend::preir::EnumVariantConstructData {
-                    enum_name: data.enum_name,
-                    variant: data.variant,
-                    arg_indices,
-                }))
+                Ok(Instr::EnumVariantConstruct(
+                    crate::backend::preir::EnumVariantConstructData {
+                        enum_name: data.enum_name,
+                        variant: data.variant,
+                        arg_indices,
+                    },
+                ))
             }
 
             Instr::Match(data) => {
@@ -918,7 +1017,9 @@ impl SirGen {
 
                 // Obtain variant info so we can register binding variable types
                 // into global_defs before emitting each arm body.
-                let variants: Vec<_> = self.analyzer.enum_variants
+                let variants: Vec<_> = self
+                    .analyzer
+                    .enum_variants
                     .get(&data.enum_name)
                     .cloned()
                     .unwrap_or_default();
@@ -956,11 +1057,11 @@ impl SirGen {
                                             field_type,
                                             &enum_tparams,
                                         );
-                                        ty = self
-                                            .analyzer
-                                            .apply_substs_to_type(&ty, &scrut_subst);
+                                        ty = self.analyzer.apply_substs_to_type(&ty, &scrut_subst);
                                         let ty_idx = self.analyzer.pool.intern(ty);
-                                        self.analyzer.global_defs.insert(binding_name.clone(), ty_idx);
+                                        self.analyzer
+                                            .global_defs
+                                            .insert(binding_name.clone(), ty_idx);
                                     }
                                 }
                             }
@@ -991,13 +1092,20 @@ impl SirGen {
 
             Instr::UnOp(data) => {
                 let operand = self.analyze_and_emit(data.operand, sir)?;
-                Ok(Instr::UnOp(UnOpPl { op: data.op, operand }))
+                Ok(Instr::UnOp(UnOpPl {
+                    op: data.op,
+                    operand,
+                }))
             }
 
             Instr::BinOp(data) => {
                 let left = self.analyze_and_emit(data.left, sir)?;
                 let right = self.analyze_and_emit(data.right, sir)?;
-                Ok(Instr::BinOp(BinOpPl { op: data.op, left, right }))
+                Ok(Instr::BinOp(BinOpPl {
+                    op: data.op,
+                    left,
+                    right,
+                }))
             }
 
             Instr::FnCall(data) => {
@@ -1005,7 +1113,10 @@ impl SirGen {
                 for arg_idx in data.arguments {
                     arguments.push(self.analyze_and_emit(arg_idx, sir)?);
                 }
-                Ok(Instr::FnCall(FnCallPl { name: data.name, arguments }))
+                Ok(Instr::FnCall(FnCallPl {
+                    name: data.name,
+                    arguments,
+                }))
             }
 
             Instr::Typeof(operand) => {
@@ -1032,26 +1143,41 @@ impl SirGen {
             Instr::IfStatement(data) => {
                 let condition = self.analyze_and_emit(data.condition, sir)?;
                 let then_branch = self.analyze_and_emit(data.then_branch, sir)?;
-                let else_branch = data.else_branch
+                let else_branch = data
+                    .else_branch
                     .map(|e| self.analyze_and_emit(e, sir))
                     .transpose()?;
-                Ok(Instr::IfStatement(IfStatementData { condition, then_branch, else_branch }))
+                Ok(Instr::IfStatement(IfStatementData {
+                    condition,
+                    then_branch,
+                    else_branch,
+                }))
             }
 
             Instr::WhileLoop(data) => {
                 let condition = self.analyze_and_emit(data.condition, sir)?;
                 let body = self.analyze_and_emit(data.body, sir)?;
-                Ok(Instr::WhileLoop(crate::backend::preir::WhileLoopData { condition, body }))
+                Ok(Instr::WhileLoop(crate::backend::preir::WhileLoopData {
+                    condition,
+                    body,
+                }))
             }
 
             Instr::ForLoop(data) => {
                 let range = self.analyze_and_emit(data.range, sir)?;
                 let body = self.analyze_and_emit(data.body, sir)?;
-                Ok(Instr::ForLoop(ForLoopData { iterator: data.iterator, range, body }))
+                Ok(Instr::ForLoop(ForLoopData {
+                    iterator: data.iterator,
+                    range,
+                    body,
+                }))
             }
 
             Instr::Return(data) => {
-                let value = data.value.map(|v| self.analyze_and_emit(v, sir)).transpose()?;
+                let value = data
+                    .value
+                    .map(|v| self.analyze_and_emit(v, sir))
+                    .transpose()?;
                 Ok(Instr::Return(ReturnData { value }))
             }
 
@@ -1079,7 +1205,13 @@ fn primitive_name_to_type_expr(n: &str) -> Result<TypeExpression, String> {
         "Float" => TypeExpression::Float,
         "String" => TypeExpression::String,
         "Void" => TypeExpression::Void,
-        other => TypeExpression::Struct(Id { name: other.to_string() }, None, None),
+        other => TypeExpression::Struct(
+            Id {
+                name: other.to_string(),
+            },
+            None,
+            None,
+        ),
     })
 }
 
@@ -1112,7 +1244,10 @@ fn subst_type_expr(te: &TypeExpression, m: &HashMap<String, TypeExpression>) -> 
     }
 }
 
-fn parse_mangled_struct(m: &str, defs: &[StructData]) -> Option<(StructData, HashMap<String, TypeExpression>)> {
+fn parse_mangled_struct(
+    m: &str,
+    defs: &[StructData],
+) -> Option<(StructData, HashMap<String, TypeExpression>)> {
     for sd in defs {
         let prefix = format!("{}__", sd.name);
         if !m.starts_with(&prefix) {
@@ -1132,7 +1267,10 @@ fn parse_mangled_struct(m: &str, defs: &[StructData]) -> Option<(StructData, Has
     None
 }
 
-fn build_struct_layout_subst(sd: &StructData, subst: &HashMap<String, TypeExpression>) -> Result<SIRStructLayout, String> {
+fn build_struct_layout_subst(
+    sd: &StructData,
+    subst: &HashMap<String, TypeExpression>,
+) -> Result<SIRStructLayout, String> {
     let mut offset = 0usize;
     let mut fields = Vec::new();
     for f in &sd.fields {
@@ -1152,7 +1290,10 @@ fn build_struct_layout_subst(sd: &StructData, subst: &HashMap<String, TypeExpres
     })
 }
 
-fn parse_mangled_enum(m: &str, defs: &[EnumData]) -> Option<(EnumData, HashMap<String, TypeExpression>)> {
+fn parse_mangled_enum(
+    m: &str,
+    defs: &[EnumData],
+) -> Option<(EnumData, HashMap<String, TypeExpression>)> {
     for ed in defs {
         let prefix = format!("{}__", ed.name);
         if !m.starts_with(&prefix) {
@@ -1172,7 +1313,10 @@ fn parse_mangled_enum(m: &str, defs: &[EnumData]) -> Option<(EnumData, HashMap<S
     None
 }
 
-fn build_enum_layout_subst(ed: &EnumData, subst: &HashMap<String, TypeExpression>) -> Result<SIREnumLayout, String> {
+fn build_enum_layout_subst(
+    ed: &EnumData,
+    subst: &HashMap<String, TypeExpression>,
+) -> Result<SIREnumLayout, String> {
     let mut max_payload = 0usize;
     let variant_layouts: Vec<SIREnumVariantLayout> = ed
         .variants
@@ -1207,11 +1351,7 @@ fn build_enum_layout_subst(ed: &EnumData, subst: &HashMap<String, TypeExpression
         })
         .collect();
     let is_simple = variant_layouts.iter().all(|v| v.fields.is_empty());
-    let total_size = if is_simple {
-        0
-    } else {
-        8 + max_payload
-    };
+    let total_size = if is_simple { 0 } else { 8 + max_payload };
     Ok(SIREnumLayout {
         variants: variant_layouts,
         total_size,

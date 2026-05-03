@@ -1,13 +1,17 @@
-use crate::{compiler_debug};
-use crate::frontend::ast::{Expression, Program, BinaryOperator, UnaryOperator, Id, Parameter, FieldDefinition, TypeExpression};
 use crate::backend::environment::Environment;
-use std::collections::HashMap;
+use crate::compiler_debug;
+use crate::frontend::ast::{
+    BinaryOperator, Expression, FieldDefinition, Id, Parameter, Program, TypeExpression,
+    UnaryOperator,
+};
 use std::any::Any;
+use std::cell::RefCell;
+use std::collections::HashMap;
 use std::error::Error;
 use std::fmt;
 use std::rc::Rc;
-use std::cell::RefCell;
 
+/// DEPRECATED: This is no longer used, it is only here for historical reference
 
 #[derive(Debug)]
 pub enum ControlFlow<R, E> {
@@ -46,7 +50,11 @@ impl Callable for Function {
     fn call(&self, interpreter: &mut Interpreter, arguments: Vec<Value>) -> Result<Value, String> {
         compiler_debug!("Int.call| Function: {} | {:?}", self.name, self.parameters);
         if arguments.len() != self.arity() {
-            return Err(format!("Incorrect number of arguments: expected {}, got {}", self.arity(), arguments.len()));
+            return Err(format!(
+                "Incorrect number of arguments: expected {}, got {}",
+                self.arity(),
+                arguments.len()
+            ));
         }
 
         interpreter.in_function = true;
@@ -57,12 +65,13 @@ impl Callable for Function {
         for (param, arg) in self.parameters.iter().zip(arguments) {
             env.borrow_mut().define(param.clone(), arg);
         }
-        compiler_debug!("Int.call| Environment after defining arguments: [{}]", env.borrow());
+        compiler_debug!(
+            "Int.call| Environment after defining arguments: [{}]",
+            env.borrow()
+        );
 
         let result = match self.body.clone() {
-            Expression::Block(expressions) => {
-                interpreter.eval_block(&expressions, env)
-            },
+            Expression::Block(expressions) => interpreter.eval_block(&expressions, env),
             // Parser should ensure that the body is a block
             _ => return Err(format!("Function body is not a block: {:?}", self.body)),
         };
@@ -97,10 +106,16 @@ impl Callable for Type {
 
     fn call(&self, interpreter: &mut Interpreter, arguments: Vec<Value>) -> Result<Value, String> {
         if arguments.len() != self.arity() {
-            return Err(format!("Incorrect number of arguments: expected {}, got {}", self.arity(), arguments.len()));
+            return Err(format!(
+                "Incorrect number of arguments: expected {}, got {}",
+                self.arity(),
+                arguments.len()
+            ));
         }
 
-        let fields = self.fields.iter()
+        let fields = self
+            .fields
+            .iter()
             .enumerate()
             .map(|(index, (key, _))| {
                 let value = arguments[index].clone();
@@ -152,10 +167,17 @@ impl Value {
             Value::Float(_) => TypeExpression::Float,
             Value::Boolean(_) => TypeExpression::Bool,
             Value::String(_) => TypeExpression::String,
-            Value::Function(f) =>  f.return_type_expr.clone().unwrap_or(TypeExpression::Void),
+            Value::Function(f) => f.return_type_expr.clone().unwrap_or(TypeExpression::Void),
             Value::Type(t) => TypeExpression::Struct(
-                Id { name: t.name.clone() }, 
-                Some(t.fields.iter().map(|(k, v)| Value::Type(*v.clone()).to_type_expr()).collect()),
+                Id {
+                    name: t.name.clone(),
+                },
+                Some(
+                    t.fields
+                        .iter()
+                        .map(|(k, v)| Value::Type(*v.clone()).to_type_expr())
+                        .collect(),
+                ),
                 None,
             ),
             Value::Instance(i) => Value::Type(i.of_type.clone()).to_type_expr(),
@@ -206,8 +228,17 @@ impl From<Value> for Expression {
             Value::Boolean(b) => Expression::Boolean(b),
             Value::String(s) => Expression::String(s),
             Value::Function(f) => Expression::FunctionDefinition {
-                id: Id { name: f.name.clone() },
-                parameters: f.parameters.iter().map(|p| Parameter { id: Id { name: p.clone() }, type_expr: None }).collect(),
+                id: Id {
+                    name: f.name.clone(),
+                },
+                parameters: f
+                    .parameters
+                    .iter()
+                    .map(|p| Parameter {
+                        id: Id { name: p.clone() },
+                        type_expr: None,
+                    })
+                    .collect(),
                 body: Box::new(f.body.clone()),
                 return_type_expr: None,
                 foreign: false,
@@ -215,12 +246,21 @@ impl From<Value> for Expression {
             Value::Type(t) => Expression::StructDefinition {
                 id: Id { name: t.name },
                 type_params: vec![],
-                fields: t.fields.iter().map(|(k, v)| FieldDefinition { 
-                    id: Id { name: k.clone() }, 
-                    field_type: Value::Type(*v.clone()).to_type_expr() // Recursively convert Value to Expression
-                }).collect(),
+                fields: t
+                    .fields
+                    .iter()
+                    .map(|(k, v)| FieldDefinition {
+                        id: Id { name: k.clone() },
+                        field_type: Value::Type(*v.clone()).to_type_expr(), // Recursively convert Value to Expression
+                    })
+                    .collect(),
             },
-            Value::Instance(i) => Expression::Identifier{ id: Id { name: "_".to_string() }, type_expr: Some(Value::Type(i.of_type).to_type_expr()) }, // TODO: Fix this, it is not an identifier
+            Value::Instance(i) => Expression::Identifier {
+                id: Id {
+                    name: "_".to_string(),
+                },
+                type_expr: Some(Value::Type(i.of_type).to_type_expr()),
+            }, // TODO: Fix this, it is not an identifier
             Value::Unit => Expression::Block(vec![]), // Represent Unit as empty block
         }
     }
@@ -261,45 +301,76 @@ impl Interpreter {
 
     fn eval_expression(&mut self, expr: &Expression) -> Result<Value, ControlFlow<Value, String>> {
         let result = match expr {
-            Expression::Int(_) | Expression::Float(_) | Expression::Boolean(_) | Expression::String(_) | Expression::Symbol(_) => self.eval_literal(expr),
+            Expression::Int(_)
+            | Expression::Float(_)
+            | Expression::Boolean(_)
+            | Expression::String(_)
+            | Expression::Symbol(_) => self.eval_literal(expr),
             Expression::Identifier { id, type_expr } => self.eval_identifier(id, type_expr),
             Expression::UnaryOp { operator, operand } => self.eval_unary_op(operator, operand),
-            Expression::BinaryOp { operator, left, right } => self.eval_binary_op(operator, left, right),
+            Expression::BinaryOp {
+                operator,
+                left,
+                right,
+            } => self.eval_binary_op(operator, left, right),
             Expression::FunctionCall { id, arguments } => self.eval_call(id, arguments),
-            Expression::FunctionDefinition { id, parameters, body, return_type_expr, foreign: _ } => self.eval_function_definition(id, parameters, body, return_type_expr),
-            Expression::StructDefinition { id, fields, .. } => self.eval_struct_definition(id, fields),
-            Expression::If { condition, then_branch, else_branch } => self.eval_if(condition, then_branch, else_branch),
+            Expression::FunctionDefinition {
+                id,
+                parameters,
+                body,
+                return_type_expr,
+                foreign: _,
+            } => self.eval_function_definition(id, parameters, body, return_type_expr),
+            Expression::StructDefinition { id, fields, .. } => {
+                self.eval_struct_definition(id, fields)
+            }
+            Expression::If {
+                condition,
+                then_branch,
+                else_branch,
+            } => self.eval_if(condition, then_branch, else_branch),
             Expression::While { condition, body } => self.eval_while(condition, body),
             Expression::Block(expressions) => {
                 let env = Environment::new(Rc::clone(&self.environment));
                 compiler_debug!("Int.eval.expr.block| New level: {}", env.borrow());
                 self.eval_block(expressions, env)
-            },
+            }
             Expression::Return(expr) => self.eval_return(expr),
             Expression::Print(expr) => self.eval_print(expr),
             //Expression::VariableAssignment { id, value } => self.eval_variable_assignment(id, value),
-            Expression::For { iterator, range, body } => Err(ControlFlow::Err("For loops not implemented in interpreter, please desugar".to_string())),
+            Expression::For {
+                iterator,
+                range,
+                body,
+            } => Err(ControlFlow::Err(
+                "For loops not implemented in interpreter, please desugar".to_string(),
+            )),
             Expression::EnumDefinition { .. } => Ok(Value::Unit),
-    Expression::EnumVariantAccess { .. } => Err(ControlFlow::Err(
-        "EnumVariantAccess not supported in interpreter; use the compiler".to_string(),
-    )),
-    Expression::EnumVariantConstruct { .. } => Err(ControlFlow::Err(
-        "EnumVariantConstruct not supported in interpreter; use the compiler".to_string(),
-    )),
-    Expression::Match { .. } => Err(ControlFlow::Err(
-        "Match not supported in interpreter; use the compiler".to_string(),
-    )),
+            Expression::EnumVariantAccess { .. } => Err(ControlFlow::Err(
+                "EnumVariantAccess not supported in interpreter; use the compiler".to_string(),
+            )),
+            Expression::EnumVariantConstruct { .. } => Err(ControlFlow::Err(
+                "EnumVariantConstruct not supported in interpreter; use the compiler".to_string(),
+            )),
+            Expression::Match { .. } => Err(ControlFlow::Err(
+                "Match not supported in interpreter; use the compiler".to_string(),
+            )),
         };
         compiler_debug!("Int.eval.expr| Result: {:?}", result);
         result
     }
 
-    fn eval_identifier(&self, id: &Id, type_expr: &Option<TypeExpression>) -> Result<Value, ControlFlow<Value, String>> {
+    fn eval_identifier(
+        &self,
+        id: &Id,
+        type_expr: &Option<TypeExpression>,
+    ) -> Result<Value, ControlFlow<Value, String>> {
         // Print the current environment for debugging
         compiler_debug!("Int.eval.identifier| Identifier: {}", id.name);
         //compiler_debug!("Int.eval| Current environment: {}", self.environment);
-        
-        self.environment.borrow()
+
+        self.environment
+            .borrow()
             .get(&id.name)
             .ok_or_else(|| ControlFlow::Err(format!("Undefined variable: {}", id.name)))
     }
@@ -311,18 +382,27 @@ impl Interpreter {
             Expression::Boolean(b) => Ok(Value::Boolean(*b)),
             Expression::String(s) => Ok(Value::String(s.clone())),
             Expression::Symbol(s) => Ok(Value::String(s.clone())),
-            _ => Err(ControlFlow::Err(format!("Cannot convert expression to value: {:?}", expr)))
+            _ => Err(ControlFlow::Err(format!(
+                "Cannot convert expression to value: {:?}",
+                expr
+            ))),
         }
     }
 
-    fn eval_unary_op(&mut self, operator: &UnaryOperator, operand: &Expression) -> Result<Value, ControlFlow<Value, String>> {
+    fn eval_unary_op(
+        &mut self,
+        operator: &UnaryOperator,
+        operand: &Expression,
+    ) -> Result<Value, ControlFlow<Value, String>> {
         let operand_val = self.eval_expression(operand)?;
         match operator {
             UnaryOperator::Not => {
                 if let Value::Boolean(b) = operand_val {
                     Ok(Value::Boolean(!b))
                 } else {
-                    Err(ControlFlow::Err("Cannot apply 'not' to non-boolean value".to_string()))
+                    Err(ControlFlow::Err(
+                        "Cannot apply 'not' to non-boolean value".to_string(),
+                    ))
                 }
             }
             UnaryOperator::Negate => {
@@ -331,13 +411,20 @@ impl Interpreter {
                 } else if let Value::Float(n) = operand_val {
                     Ok(Value::Float(-n))
                 } else {
-                    Err(ControlFlow::Err("Cannot negate non-numeric value".to_string()))
+                    Err(ControlFlow::Err(
+                        "Cannot negate non-numeric value".to_string(),
+                    ))
                 }
             }
         }
     }
 
-    fn handle_div_by_zero(&self, operator: &BinaryOperator, left: &Value, right: &Value) -> Result<Value, ControlFlow<Value, String>> {
+    fn handle_div_by_zero(
+        &self,
+        operator: &BinaryOperator,
+        left: &Value,
+        right: &Value,
+    ) -> Result<Value, ControlFlow<Value, String>> {
         match (left, right) {
             (Value::Int(l), Value::Int(r)) => {
                 if *r == 0 {
@@ -367,11 +454,18 @@ impl Interpreter {
                     Ok(Value::Float(l / *r as f64))
                 }
             }
-            _ => Err(ControlFlow::Err("Invalid operands for division".to_string()))
+            _ => Err(ControlFlow::Err(
+                "Invalid operands for division".to_string(),
+            )),
         }
     }
 
-    fn eval_binary_op(&mut self, operator: &BinaryOperator, left: &Expression, right: &Expression) -> Result<Value, ControlFlow<Value, String>> {
+    fn eval_binary_op(
+        &mut self,
+        operator: &BinaryOperator,
+        left: &Expression,
+        right: &Expression,
+    ) -> Result<Value, ControlFlow<Value, String>> {
         let left_val = self.eval_expression(left)?;
         let right_val = self.eval_expression(right)?;
 
@@ -379,65 +473,147 @@ impl Interpreter {
             (BinaryOperator::Assignment, left_val, right_val) => {
                 if let Expression::Identifier { id, type_expr } = left {
                     let distance = self.local_scope.get(&id.name).unwrap();
-                    compiler_debug!("Int.eval.bin_op| Assigning {:?} = {:?} at {:?} distance to [{}]", id.name, right_val, distance, self.environment.borrow());
-                    self.environment.borrow_mut().assign(*distance, id.name.clone(), right_val.clone());
+                    compiler_debug!(
+                        "Int.eval.bin_op| Assigning {:?} = {:?} at {:?} distance to [{}]",
+                        id.name,
+                        right_val,
+                        distance,
+                        self.environment.borrow()
+                    );
+                    self.environment.borrow_mut().assign(
+                        *distance,
+                        id.name.clone(),
+                        right_val.clone(),
+                    );
                     Ok(right_val.clone())
                 } else {
-                    Err(ControlFlow::Err("Left operand is not an identifier".to_string()))
+                    Err(ControlFlow::Err(
+                        "Left operand is not an identifier".to_string(),
+                    ))
                 }
             }
             // TODO: Refactor to better handle mix of int and float
             (BinaryOperator::Add, Value::Int(l), Value::Int(r)) => Ok(Value::Int(l + r)),
             (BinaryOperator::Add, Value::Float(l), Value::Float(r)) => Ok(Value::Float(l + r)),
-            (BinaryOperator::Add, Value::Int(l), Value::Float(r)) => Ok(Value::Float(*l as f64 + r)),
-            (BinaryOperator::Add, Value::Float(l), Value::Int(r)) => Ok(Value::Float(l + *r as f64)),
-            (BinaryOperator::Add, Value::String(l), Value::String(r)) => Ok(Value::String(l.to_owned() + r)),
+            (BinaryOperator::Add, Value::Int(l), Value::Float(r)) => {
+                Ok(Value::Float(*l as f64 + r))
+            }
+            (BinaryOperator::Add, Value::Float(l), Value::Int(r)) => {
+                Ok(Value::Float(l + *r as f64))
+            }
+            (BinaryOperator::Add, Value::String(l), Value::String(r)) => {
+                Ok(Value::String(l.to_owned() + r))
+            }
             (BinaryOperator::Subtract, Value::Int(l), Value::Int(r)) => Ok(Value::Int(l - r)),
             (BinaryOperator::Subtract, Value::Float(l), Value::Float(r)) => Ok(Value::Float(l - r)),
-            (BinaryOperator::Subtract, Value::Int(l), Value::Float(r)) => Ok(Value::Float(*l as f64 - r)),
-            (BinaryOperator::Subtract, Value::Float(l), Value::Int(r)) => Ok(Value::Float(l - *r as f64)),
+            (BinaryOperator::Subtract, Value::Int(l), Value::Float(r)) => {
+                Ok(Value::Float(*l as f64 - r))
+            }
+            (BinaryOperator::Subtract, Value::Float(l), Value::Int(r)) => {
+                Ok(Value::Float(l - *r as f64))
+            }
             (BinaryOperator::Multiply, Value::Int(l), Value::Int(r)) => Ok(Value::Int(l * r)),
             (BinaryOperator::Multiply, Value::Float(l), Value::Float(r)) => Ok(Value::Float(l * r)),
-            (BinaryOperator::Multiply, Value::Int(l), Value::Float(r)) => Ok(Value::Float(*l as f64 * r)),
-            (BinaryOperator::Multiply, Value::Float(l), Value::Int(r)) => Ok(Value::Float(l * *r as f64)),
-            (BinaryOperator::Divide, Value::Int(l), Value::Int(r)) => self.handle_div_by_zero(operator, &left_val, &right_val),
-            (BinaryOperator::Divide, Value::Float(l), Value::Float(r)) => self.handle_div_by_zero(operator, &left_val, &right_val),
-            (BinaryOperator::Divide, Value::Int(l), Value::Float(r)) => self.handle_div_by_zero(operator, &left_val, &right_val),
-            (BinaryOperator::Divide, Value::Float(l), Value::Int(r)) => self.handle_div_by_zero(operator, &left_val, &right_val),
+            (BinaryOperator::Multiply, Value::Int(l), Value::Float(r)) => {
+                Ok(Value::Float(*l as f64 * r))
+            }
+            (BinaryOperator::Multiply, Value::Float(l), Value::Int(r)) => {
+                Ok(Value::Float(l * *r as f64))
+            }
+            (BinaryOperator::Divide, Value::Int(l), Value::Int(r)) => {
+                self.handle_div_by_zero(operator, &left_val, &right_val)
+            }
+            (BinaryOperator::Divide, Value::Float(l), Value::Float(r)) => {
+                self.handle_div_by_zero(operator, &left_val, &right_val)
+            }
+            (BinaryOperator::Divide, Value::Int(l), Value::Float(r)) => {
+                self.handle_div_by_zero(operator, &left_val, &right_val)
+            }
+            (BinaryOperator::Divide, Value::Float(l), Value::Int(r)) => {
+                self.handle_div_by_zero(operator, &left_val, &right_val)
+            }
             // TODO: Implement eval_equality to get better comparison results
             // Arguments can be of different types, so we need to implement a better comparison
-            (BinaryOperator::Equal, l, r) => Ok(Value::Boolean(format!("{:?}", l) == format!("{:?}", r))),
-            (BinaryOperator::NotEqual, l, r) => Ok(Value::Boolean(format!("{:?}", l) != format!("{:?}", r))),
+            (BinaryOperator::Equal, l, r) => {
+                Ok(Value::Boolean(format!("{:?}", l) == format!("{:?}", r)))
+            }
+            (BinaryOperator::NotEqual, l, r) => {
+                Ok(Value::Boolean(format!("{:?}", l) != format!("{:?}", r)))
+            }
             (BinaryOperator::LessThan, Value::Int(l), Value::Int(r)) => Ok(Value::Boolean(l < r)),
-            (BinaryOperator::LessThan, Value::Float(l), Value::Float(r)) => Ok(Value::Boolean(l < r)),
-            (BinaryOperator::LessThan, Value::Int(l), Value::Float(r)) => Ok(Value::Boolean((*l as f64) < *r)),
-            (BinaryOperator::LessThan, Value::Float(l), Value::Int(r)) => Ok(Value::Boolean(*l < (*r as f64))),
-            (BinaryOperator::LessThanEqual, Value::Int(l), Value::Int(r)) => Ok(Value::Boolean(l <= r)),
-            (BinaryOperator::LessThanEqual, Value::Float(l), Value::Float(r)) => Ok(Value::Boolean(l <= r)),
-            (BinaryOperator::LessThanEqual, Value::Int(l), Value::Float(r)) => Ok(Value::Boolean((*l as f64) <= *r)),
-            (BinaryOperator::LessThanEqual, Value::Float(l), Value::Int(r)) => Ok(Value::Boolean(*l <= (*r as f64))),
-            (BinaryOperator::GreaterThan, Value::Int(l), Value::Int(r)) => Ok(Value::Boolean(l > r)),
-            (BinaryOperator::GreaterThan, Value::Float(l), Value::Float(r)) => Ok(Value::Boolean(l > r)),
-            (BinaryOperator::GreaterThan, Value::Int(l), Value::Float(r)) => Ok(Value::Boolean((*l as f64) > *r)),
-            (BinaryOperator::GreaterThan, Value::Float(l), Value::Int(r)) => Ok(Value::Boolean(*l > (*r as f64))),
-            (BinaryOperator::GreaterThanEqual, Value::Int(l), Value::Int(r)) => Ok(Value::Boolean(l >= r)),
-            (BinaryOperator::GreaterThanEqual, Value::Float(l), Value::Float(r)) => Ok(Value::Boolean(l >= r)),
-            (BinaryOperator::GreaterThanEqual, Value::Int(l), Value::Float(r)) => Ok(Value::Boolean((*l as f64) >= *r)),
-            (BinaryOperator::GreaterThanEqual, Value::Float(l), Value::Int(r)) => Ok(Value::Boolean(*l >= (*r as f64))),
+            (BinaryOperator::LessThan, Value::Float(l), Value::Float(r)) => {
+                Ok(Value::Boolean(l < r))
+            }
+            (BinaryOperator::LessThan, Value::Int(l), Value::Float(r)) => {
+                Ok(Value::Boolean((*l as f64) < *r))
+            }
+            (BinaryOperator::LessThan, Value::Float(l), Value::Int(r)) => {
+                Ok(Value::Boolean(*l < (*r as f64)))
+            }
+            (BinaryOperator::LessThanEqual, Value::Int(l), Value::Int(r)) => {
+                Ok(Value::Boolean(l <= r))
+            }
+            (BinaryOperator::LessThanEqual, Value::Float(l), Value::Float(r)) => {
+                Ok(Value::Boolean(l <= r))
+            }
+            (BinaryOperator::LessThanEqual, Value::Int(l), Value::Float(r)) => {
+                Ok(Value::Boolean((*l as f64) <= *r))
+            }
+            (BinaryOperator::LessThanEqual, Value::Float(l), Value::Int(r)) => {
+                Ok(Value::Boolean(*l <= (*r as f64)))
+            }
+            (BinaryOperator::GreaterThan, Value::Int(l), Value::Int(r)) => {
+                Ok(Value::Boolean(l > r))
+            }
+            (BinaryOperator::GreaterThan, Value::Float(l), Value::Float(r)) => {
+                Ok(Value::Boolean(l > r))
+            }
+            (BinaryOperator::GreaterThan, Value::Int(l), Value::Float(r)) => {
+                Ok(Value::Boolean((*l as f64) > *r))
+            }
+            (BinaryOperator::GreaterThan, Value::Float(l), Value::Int(r)) => {
+                Ok(Value::Boolean(*l > (*r as f64)))
+            }
+            (BinaryOperator::GreaterThanEqual, Value::Int(l), Value::Int(r)) => {
+                Ok(Value::Boolean(l >= r))
+            }
+            (BinaryOperator::GreaterThanEqual, Value::Float(l), Value::Float(r)) => {
+                Ok(Value::Boolean(l >= r))
+            }
+            (BinaryOperator::GreaterThanEqual, Value::Int(l), Value::Float(r)) => {
+                Ok(Value::Boolean((*l as f64) >= *r))
+            }
+            (BinaryOperator::GreaterThanEqual, Value::Float(l), Value::Int(r)) => {
+                Ok(Value::Boolean(*l >= (*r as f64)))
+            }
             // TODO: Move these, to take advantage of short-circuiting
-            (BinaryOperator::And, Value::Boolean(l), Value::Boolean(r)) => Ok(Value::Boolean(*l && *r)),
-            (BinaryOperator::Or, Value::Boolean(l), Value::Boolean(r)) => Ok(Value::Boolean(*l || *r)),
-            _ => Err(ControlFlow::Err(format!("Invalid operation {:?} between {:?} and {:?}", operator, left_val, right_val)))
+            (BinaryOperator::And, Value::Boolean(l), Value::Boolean(r)) => {
+                Ok(Value::Boolean(*l && *r))
+            }
+            (BinaryOperator::Or, Value::Boolean(l), Value::Boolean(r)) => {
+                Ok(Value::Boolean(*l || *r))
+            }
+            _ => Err(ControlFlow::Err(format!(
+                "Invalid operation {:?} between {:?} and {:?}",
+                operator, left_val, right_val
+            ))),
         }
     }
 
-    fn eval_call(&mut self, id: &Id, arguments: &[Expression]) -> Result<Value, ControlFlow<Value, String>> {
+    fn eval_call(
+        &mut self,
+        id: &Id,
+        arguments: &[Expression],
+    ) -> Result<Value, ControlFlow<Value, String>> {
         compiler_debug!("Int.eval.call| Call: {}", id.name);
-        let ident = self.environment.borrow()
+        let ident = self
+            .environment
+            .borrow()
             .get(&id.name)
             .ok_or_else(|| ControlFlow::Err(format!("Undefined function: {}", id.name)))?;
 
-        let args = arguments.iter()
+        let args = arguments
+            .iter()
             .map(|arg| self.eval_expression(arg))
             .collect::<Result<Vec<_>, _>>()?;
 
@@ -445,11 +621,20 @@ impl Interpreter {
         match ident {
             Value::Function(f) => f.call(self, args).map_err(ControlFlow::Err),
             Value::Type(t) => t.call(self, args).map_err(ControlFlow::Err),
-            _ => Err(ControlFlow::Err(format!("Value is not callable: {:?}", ident))),
+            _ => Err(ControlFlow::Err(format!(
+                "Value is not callable: {:?}",
+                ident
+            ))),
         }
     }
 
-    fn eval_function_definition(&mut self, id: &Id, parameters: &[Parameter], body: &Expression, return_type_expr: &Option<TypeExpression>) -> Result<Value, ControlFlow<Value, String>> {
+    fn eval_function_definition(
+        &mut self,
+        id: &Id,
+        parameters: &[Parameter],
+        body: &Expression,
+        return_type_expr: &Option<TypeExpression>,
+    ) -> Result<Value, ControlFlow<Value, String>> {
         compiler_debug!("Int.eval.fn_def| Function definition: {}", id.name);
         let function = Function {
             name: id.name.clone(),
@@ -460,25 +645,43 @@ impl Interpreter {
         };
 
         let callable_function = Value::Function(function);
-        self.environment.borrow_mut().define(id.name.clone(), callable_function);
-        compiler_debug!("Int.eval.fn_def| Environment after function definition: {}", self.environment.borrow());
+        self.environment
+            .borrow_mut()
+            .define(id.name.clone(), callable_function);
+        compiler_debug!(
+            "Int.eval.fn_def| Environment after function definition: {}",
+            self.environment.borrow()
+        );
         Ok(Value::Unit)
     }
 
-    fn eval_struct_definition(&mut self, id: &Id, fields: &[FieldDefinition]) -> Result<Value, ControlFlow<Value, String>> {
+    fn eval_struct_definition(
+        &mut self,
+        id: &Id,
+        fields: &[FieldDefinition],
+    ) -> Result<Value, ControlFlow<Value, String>> {
         let type_name = id.name.clone();
         let mut field_map = HashMap::new();
 
         for field in fields {
-            let field_type = self.environment.borrow()
+            let field_type = self
+                .environment
+                .borrow()
                 .get(&field.field_type.name())
-                .ok_or_else(|| ControlFlow::Err(format!("Undefined type: {}", field.field_type.name())))?;
+                .ok_or_else(|| {
+                    ControlFlow::Err(format!("Undefined type: {}", field.field_type.name()))
+                })?;
 
             match field_type {
                 Value::Type(t) => {
                     field_map.insert(field.id.name.clone(), Box::new(t.clone()));
                 }
-                _ => return Err(ControlFlow::Err(format!("{} is not a valid Type", field.field_type.name()))),
+                _ => {
+                    return Err(ControlFlow::Err(format!(
+                        "{} is not a valid Type",
+                        field.field_type.name()
+                    )))
+                }
             }
         }
 
@@ -488,11 +691,18 @@ impl Interpreter {
         };
 
         let callable_type = Value::Type(type_def);
-        self.environment.borrow_mut().define(id.name.clone(), callable_type);
+        self.environment
+            .borrow_mut()
+            .define(id.name.clone(), callable_type);
         Ok(Value::Unit)
     }
 
-    fn eval_if(&mut self, condition: &Expression, then_branch: &Expression, else_branch: &Option<Box<Expression>>) -> Result<Value, ControlFlow<Value, String>> {
+    fn eval_if(
+        &mut self,
+        condition: &Expression,
+        then_branch: &Expression,
+        else_branch: &Option<Box<Expression>>,
+    ) -> Result<Value, ControlFlow<Value, String>> {
         let cond_val = self.eval_expression(condition)?;
         match cond_val {
             Value::Boolean(true) => self.eval_expression(then_branch),
@@ -504,12 +714,21 @@ impl Interpreter {
                 }
             }
             // Assume values are truthy
-            Value::Int(_) | Value::Float(_) | Value::String(_) | Value::Function(_) | Value::Type(_) | Value::Instance(_) => self.eval_expression(then_branch),
+            Value::Int(_)
+            | Value::Float(_)
+            | Value::String(_)
+            | Value::Function(_)
+            | Value::Type(_)
+            | Value::Instance(_) => self.eval_expression(then_branch),
             Value::Unit => Err(ControlFlow::Err("Condition must be a boolean".to_string())),
         }
     }
 
-    fn eval_while(&mut self, condition: &Expression, body: &Expression) -> Result<Value, ControlFlow<Value, String>> {
+    fn eval_while(
+        &mut self,
+        condition: &Expression,
+        body: &Expression,
+    ) -> Result<Value, ControlFlow<Value, String>> {
         compiler_debug!("Int.eval.while| Entering while loop");
         //let while_env = Environment::new(Some(Box::new(self.environment.clone())));
         //let old_env = std::mem::replace(&mut self.environment, while_env);
@@ -524,7 +743,11 @@ impl Interpreter {
         result
     }
 
-    fn eval_block(&mut self, expressions: &[Box<Expression>], env: Rc<RefCell<Environment>>) -> Result<Value, ControlFlow<Value, String>> {
+    fn eval_block(
+        &mut self,
+        expressions: &[Box<Expression>],
+        env: Rc<RefCell<Environment>>,
+    ) -> Result<Value, ControlFlow<Value, String>> {
         let old_env = std::mem::replace(&mut self.environment, env);
 
         compiler_debug!("Int.eval.block| Env: {}", self.environment.borrow());
@@ -537,7 +760,10 @@ impl Interpreter {
         result
     }
 
-    fn eval_inner_block(&mut self, expressions: &[Box<Expression>]) -> Result<Value, ControlFlow<Value, String>> {
+    fn eval_inner_block(
+        &mut self,
+        expressions: &[Box<Expression>],
+    ) -> Result<Value, ControlFlow<Value, String>> {
         let mut result = Value::Unit;
         for expr in expressions {
             result = self.eval_expression(expr)?;
@@ -545,19 +771,22 @@ impl Interpreter {
         Ok(result)
     }
 
-    fn eval_return(&mut self, expr: &Option<Box<Expression>>) -> Result<Value, ControlFlow<Value, String>> {
+    fn eval_return(
+        &mut self,
+        expr: &Option<Box<Expression>>,
+    ) -> Result<Value, ControlFlow<Value, String>> {
         if !self.in_function {
-            return Err(ControlFlow::Err("Return statement outside of function".to_string()));
+            return Err(ControlFlow::Err(
+                "Return statement outside of function".to_string(),
+            ));
         }
 
         match expr {
             Some(e) => {
                 let value = self.eval_expression(e)?;
                 Err(ControlFlow::Return(value))
-            },
-            None => {
-                Err(ControlFlow::Return(Value::Unit))
             }
+            None => Err(ControlFlow::Return(Value::Unit)),
         }
     }
 
