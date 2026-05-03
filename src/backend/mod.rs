@@ -1,10 +1,7 @@
 pub mod analysis;
 pub mod built_in_methods;
-pub mod bytecode;
 pub mod cranelift_compiler;
-pub mod environment;
 pub mod errand_builtins;
-pub mod interpreter;
 pub mod ir_lowering;
 pub mod preir;
 pub mod preir_gen;
