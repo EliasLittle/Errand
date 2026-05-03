@@ -1,4 +1,3 @@
-use crate::lexer_log;
 use std::fmt;
 use std::io::Write;
 use std::mem::Discriminant;
@@ -298,6 +297,13 @@ impl Lexer {
     }
 
     fn read_block_comment(&mut self) -> Result<Token, String> {
+        let span = tracing::debug_span!(
+            "lexer.read_block_comment",
+            line = self.line,
+            column = self.column
+        );
+        let _guard = span.enter();
+
         let start_line = self.line;
         let start_column = self.column;
         let mut header = String::new();
@@ -309,8 +315,8 @@ impl Lexer {
         // Read the header
         while self.peek_n(3) != ['-', '-', '+'] {
             if self.current_char == '\n' || self.current_char == '\0' {
-                lexer_log!("Header: {}", header);
-                lexer_log!("Current char: {}", self.current_char);
+                tracing::debug!(%header, "block comment: header incomplete before newline/EOF");
+                tracing::debug!(current = %self.current_char, "block comment: lexer position");
                 return Err("Invalid block comment: header not properly terminated.".to_string());
             }
             header.push(self.current_char);
@@ -374,7 +380,16 @@ impl Lexer {
     }
 
     fn read_comment(&mut self) -> Result<Token, String> {
-        if self.is_block_comment() {
+        let is_block = self.is_block_comment();
+        let span = tracing::debug_span!(
+            "lexer.read_comment",
+            line = self.line,
+            column = self.column,
+            block = is_block
+        );
+        let _guard = span.enter();
+
+        if is_block {
             self.read_block_comment()
         } else {
             self.read_inline_comment()
@@ -459,6 +474,10 @@ impl Lexer {
     }
 
     fn read_string(&mut self) -> Result<Token, String> {
+        let span =
+            tracing::debug_span!("lexer.read_string", line = self.line, column = self.column);
+        let _guard = span.enter();
+
         let start_line = self.line;
         let start_column = self.column;
         let mut string = String::new();
@@ -625,7 +644,10 @@ impl Lexer {
     }
 
     pub fn lex(&mut self, file_path: &str) -> Result<Vec<Token>, String> {
-        lexer_log!("Starting to lex the file");
+        let span = tracing::info_span!("lexer.lex", file = %file_path);
+        let _guard = span.enter();
+
+        tracing::debug!("lex: start");
 
         // Reset scan position (buffer unchanged; `lex` may be called again).
         self.current = 0;
@@ -642,7 +664,7 @@ impl Lexer {
         while !self.is_end_of_file() {
             match self.read_token() {
                 Ok(token) => {
-                    lexer_log!("{}", token); // Debug print statement
+                    tracing::trace!(token = %token, "lex: token");
                     tokens.push(token);
                 }
                 Err(e) => return Err(e),
@@ -665,9 +687,12 @@ impl Lexer {
     }
 
     pub fn print_tokens(&self, tokens: &[Token]) {
-        lexer_log!("Printing tokens...");
+        let span = tracing::debug_span!("lexer.print_tokens", count = tokens.len());
+        let _guard = span.enter();
+
+        tracing::debug!("print_tokens: start");
         for token in tokens {
-            lexer_log!("{}", token);
+            tracing::trace!(token = %token, "print_tokens");
         }
     }
 }
