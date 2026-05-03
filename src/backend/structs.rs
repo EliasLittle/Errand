@@ -38,7 +38,11 @@ impl Field {
 
 impl Struct {
     pub fn new(name: &str, fields: Vec<Field>, size: usize) -> Self {
-        let name_to_index = fields.iter().enumerate().map(|(i, f)| (f.name.clone(), i)).collect();
+        let name_to_index = fields
+            .iter()
+            .enumerate()
+            .map(|(i, f)| (f.name.clone(), i))
+            .collect();
         Struct {
             name: name.to_string(),
             fields,

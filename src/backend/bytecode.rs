@@ -15,4 +15,4 @@ impl Bytecode {
             instructions: Vec::new(),
         }
     }
-} 
+}

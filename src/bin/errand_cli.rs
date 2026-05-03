@@ -1,8 +1,8 @@
-use Errand::{compiler_info};
-use clap::{Parser, Subcommand, Arg, ValueEnum};
-use std::process::Command;
-use std::path::Path;
+use clap::{Arg, Parser, Subcommand, ValueEnum};
 use std::fs;
+use std::path::Path;
+use std::process::Command;
+use Errand::compiler_info;
 
 #[derive(Parser)]
 #[command(author, version, about, long_about = None)]
@@ -66,7 +66,11 @@ fn main() {
                 std::process::exit(1);
             }
         }
-        Commands::Compile { file, arch, release } => {
+        Commands::Compile {
+            file,
+            arch,
+            release,
+        } => {
             if let Err(e) = build_compiler(arch, *release) {
                 eprintln!("Error: {}", e);
                 std::process::exit(1);
@@ -76,7 +80,11 @@ fn main() {
                 std::process::exit(1);
             }
         }
-        Commands::Run { file, arch, release } => {
+        Commands::Run {
+            file,
+            arch,
+            release,
+        } => {
             if let Err(e) = build_compiler(arch, *release) {
                 eprintln!("Error: {}", e);
                 std::process::exit(1);
@@ -106,11 +114,11 @@ fn main() {
 fn build_compiler(arch: &Option<Arch>, release: bool) -> Result<(), String> {
     compiler_info!("Building Errand compiler...");
     let mut build_args = vec!["build".to_string()];
-    
+
     if release {
         build_args.push("--release".to_string());
     }
-    
+
     match arch {
         Some(Arch::Arm) => {
             build_args.push("--target".to_string());
@@ -122,7 +130,7 @@ fn build_compiler(arch: &Option<Arch>, release: bool) -> Result<(), String> {
         }
         None => {}
     }
-    
+
     compiler_info!("Running cargo build with args: {:?}", build_args);
     let status = Command::new("cargo")
         .args(&build_args)
@@ -131,7 +139,7 @@ fn build_compiler(arch: &Option<Arch>, release: bool) -> Result<(), String> {
     if !status.success() {
         return Err("Failed to build Errand compiler".to_string());
     }
-    
+
     compiler_info!("Errand compiler built successfully!");
     Ok(())
 }
@@ -141,7 +149,7 @@ fn compile_file(file: &str, arch: &Option<Arch>, release: bool) -> Result<(), St
         return Err(format!("File '{}' not found", file));
     }
     let base_name = Path::new(file).file_stem().unwrap().to_string_lossy();
-    
+
     // Use the compiled Errand binary to compile the source file
     compiler_info!("Compiling {}...", file);
     let errand_binary = match (arch, release) {
@@ -152,11 +160,11 @@ fn compile_file(file: &str, arch: &Option<Arch>, release: bool) -> Result<(), St
         (None, true) => "target/release/Errand",
         (None, false) => "target/debug/Errand",
     };
-    
+
     // Build the command with new argument structure
     let mut cmd = Command::new(errand_binary);
     cmd.arg(file); // File is now a positional argument
-    
+
     // Add architecture flag if specified
     match arch {
         Some(Arch::Arm) => {
@@ -167,19 +175,19 @@ fn compile_file(file: &str, arch: &Option<Arch>, release: bool) -> Result<(), St
         }
         None => {}
     }
-    
+
     // Add output flag
     cmd.arg("-o").arg(&*base_name);
-    
+
     // Emit executable by default (no need to specify --emit=exe)
-    
+
     let status = cmd
         .status()
         .map_err(|e| format!("Failed to run Errand compiler: {}", e))?;
     if !status.success() {
         return Err("Compilation failed".to_string());
     }
-    
+
     compiler_info!("Success! Executable created: {}", base_name);
     Ok(())
 }
@@ -193,11 +201,15 @@ fn parse_to_ast(file: &str) -> Result<(), String> {
     }
     let source = fs::read_to_string(file).map_err(|e| format!("Failed to read file: {}", e))?;
     let mut lexer = Lexer::new(&source);
-    let tokens = lexer.lex(file).map_err(|e| format!("Lexing failed: {}", e))?;
+    let tokens = lexer
+        .lex(file)
+        .map_err(|e| format!("Lexing failed: {}", e))?;
     let mut parser = Parser::new(tokens);
-    let ast = parser.parse().map_err(|errs| format!("Parsing failed: {:?}", errs))?;
+    let ast = parser
+        .parse()
+        .map_err(|errs| format!("Parsing failed: {:?}", errs))?;
     let ast_file = format!("{}.ast", file);
     fs::write(&ast_file, format!("{}", ast)).map_err(|e| format!("Failed to write AST: {}", e))?;
     compiler_info!("AST written to: {}", ast_file);
     Ok(())
-} 
+}

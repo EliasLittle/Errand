@@ -1,5 +1,5 @@
-use log::{Level, LevelFilter, Metadata, Record};
 use colored::*;
+use log::{Level, LevelFilter, Metadata, Record};
 use std::sync::atomic::{AtomicUsize, Ordering};
 
 /// Custom log levels for the Errand compiler
@@ -108,7 +108,7 @@ impl CompilerLogger {
     fn should_log(&self, record: &Record) -> bool {
         let current_level = Self::get_level();
         let record_level = self.parse_level_from_target(record.target());
-        
+
         if record_level > current_level {
             return false;
         }
@@ -119,7 +119,9 @@ impl CompilerLogger {
         }
 
         // Check if the module is in the enabled list
-        self.enabled_modules.iter().any(|module| record.target().starts_with(module))
+        self.enabled_modules
+            .iter()
+            .any(|module| record.target().starts_with(module))
     }
 
     fn parse_level_from_target(&self, target: &str) -> CompilerLogLevel {
@@ -175,7 +177,10 @@ impl log::Log for CompilerLogger {
 }
 
 /// Initialize the compiler logger
-pub fn init_logger(level: CompilerLogLevel, modules: Option<Vec<String>>) -> Result<(), log::SetLoggerError> {
+pub fn init_logger(
+    level: CompilerLogLevel,
+    modules: Option<Vec<String>>,
+) -> Result<(), log::SetLoggerError> {
     let logger = CompilerLogger::new().with_modules(modules.unwrap_or_default());
     CompilerLogger::set_level(level);
     log::set_boxed_logger(Box::new(logger))?;

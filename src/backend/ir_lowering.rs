@@ -1,7 +1,7 @@
-use crate::frontend::ast::Program;
 use crate::backend::cranelift_compiler::CraneliftCompiler;
-use crate::backend::sir_lowering::SIRLoweringPass;
 use crate::backend::sir::SIRModule;
+use crate::backend::sir_lowering::SIRLoweringPass;
+use crate::frontend::ast::Program;
 use cranelift_codegen::ir::Function;
 
 // This is a wrapper for lowering IR to machine code.
@@ -32,12 +32,12 @@ impl IRLoweringPass {
         // This method is now deprecated since we handle compilation in compile_program
         // For backward compatibility, we'll create a simple wrapper
         let mut compiler = CraneliftCompiler::new();
-        
+
         // Create a simple program with just the main function
         let program = Program {
             expressions: vec![], // Empty since we're just compiling the main function
         };
-        
+
         // Use the new compilation approach
         compiler.compile_program(&program)
     }
@@ -54,4 +54,4 @@ impl IRLoweringPass {
         // Future LLVM IR lowering
         Err("LLVM IR lowering not yet implemented".to_string())
     }
-} 
+}

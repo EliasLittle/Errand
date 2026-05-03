@@ -197,25 +197,24 @@ impl Resolver {
                     self.resolve_expr(&case.body)?;
                 }
                 Ok(())
-            }
-            // Expression::VariableAssignment { id, value } => {
-            //     compiler_debug!("Res.resolve_expr.var_assign| Variable assignment: {:?}, value: {:?}", id.name, value);
-            //     // Check if the variable is already declared
-            //     if self.locals.contains_key(&id.name) {
-            //         compiler_debug!("Res.resolve_expr.var_assign| Variable already declared: {:?}", id.name);
-            //         // If declared, resolve the value for assignment
-            //         self.resolve_expr(value)?;
-            //         self.resolve_local(id)?;
-            //     } else {
-            //         compiler_debug!("Res.resolve_expr.var_assign| Variable not declared: {:?}", id.name);
-            //         // If not declared, declare and initialize
-            //         self.declare(id)?;
-            //         self.resolve_expr(value)?;
-            //         self.define(id);
-            //         self.resolve_local(id)?;
-            //     }
-            //     Ok(())
-            // },
+            } // Expression::VariableAssignment { id, value } => {
+              //     compiler_debug!("Res.resolve_expr.var_assign| Variable assignment: {:?}, value: {:?}", id.name, value);
+              //     // Check if the variable is already declared
+              //     if self.locals.contains_key(&id.name) {
+              //         compiler_debug!("Res.resolve_expr.var_assign| Variable already declared: {:?}", id.name);
+              //         // If declared, resolve the value for assignment
+              //         self.resolve_expr(value)?;
+              //         self.resolve_local(id)?;
+              //     } else {
+              //         compiler_debug!("Res.resolve_expr.var_assign| Variable not declared: {:?}", id.name);
+              //         // If not declared, declare and initialize
+              //         self.declare(id)?;
+              //         self.resolve_expr(value)?;
+              //         self.define(id);
+              //         self.resolve_local(id)?;
+              //     }
+              //     Ok(())
+              // },
         }
     }
 

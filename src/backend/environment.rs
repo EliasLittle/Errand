@@ -1,15 +1,15 @@
-use crate::{compiler_debug};
-use std::collections::HashMap; // Add this import for HashMap
 use crate::backend::interpreter::Value;
-use std::fmt; // Add this import for formatting
+use crate::compiler_debug;
 use std::cell::RefCell;
+use std::collections::HashMap; // Add this import for HashMap
+use std::fmt; // Add this import for formatting
 use std::rc::Rc;
 
 #[derive(Debug, Clone)]
 pub struct Environment {
     global_env: Option<Rc<RefCell<Environment>>>, // Mutable global environment
     parent_env: Option<Rc<RefCell<Environment>>>, // Mutable parent environment
-    values: HashMap<String, Value>, // Map from string to Value
+    values: HashMap<String, Value>,               // Map from string to Value
     depth: usize,
 }
 
@@ -63,25 +63,31 @@ impl Environment {
 
     pub fn get(&self, name: &str) -> Option<Value> {
         self.values.get(name).cloned().or_else(|| {
-            self.parent_env.as_ref().and_then(|parent| {
-                parent.borrow().get(name)
-            })
+            self.parent_env
+                .as_ref()
+                .and_then(|parent| parent.borrow().get(name))
         })
     }
 
     pub fn exists(&self, name: &str) -> bool {
-        self.values.contains_key(name) || 
-        self.parent_env.as_ref().map_or(false, |parent| {
-            parent.borrow().exists(name)
-        })
+        self.values.contains_key(name)
+            || self
+                .parent_env
+                .as_ref()
+                .map_or(false, |parent| parent.borrow().exists(name))
     }
 
-    // TODO: distance might be in the wrong direction. 
+    // TODO: distance might be in the wrong direction.
     // Local scope distance is "levels deep" from the global environment
     // Not levels away from the current environment
     pub fn assign(&mut self, depth: usize, name: String, value: Value) {
         if self.depth == depth {
-            compiler_debug!("Env.assign| Assigning {:?} = {:?} at {:?} depth", name, value, depth);
+            compiler_debug!(
+                "Env.assign| Assigning {:?} = {:?} at {:?} depth",
+                name,
+                value,
+                depth
+            );
             self.define(name, value);
             compiler_debug!("Env.assign| Environment after assignment: {}", self);
         } else if let Some(ref parent) = self.parent_env {

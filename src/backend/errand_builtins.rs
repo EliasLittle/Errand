@@ -1,34 +1,34 @@
-use std::collections::HashMap;
 use crate::backend::worklist::ErrandType;
 use crate::frontend::ast::{GenericArg, TypeExpression};
+use std::collections::HashMap;
 
 /// Add built-in data constructors to the type inference context
-/// 
+///
 /// These are the primitive types and their constructors that Errand supports:
 /// - Int, Int32, Float, Bool, String, Unit
 /// - Built-in constructors like true/false for Bool
 pub fn add_builtin_data_constructors() -> HashMap<String, ErrandType> {
     let mut data_constructors = HashMap::new();
-    
+
     // Bool constructors
     data_constructors.insert("true".to_string(), ErrandType::Con("Bool".to_string()));
     data_constructors.insert("false".to_string(), ErrandType::Con("Bool".to_string()));
-    
+
     // Unit constructor (for void/empty expressions)
     data_constructors.insert("unit".to_string(), ErrandType::Con("Unit".to_string()));
-    
+
     data_constructors
 }
 
 /// Add built-in function types to the type inference context
-/// 
+///
 /// These are functions that are available in the runtime environment:
 /// - printf: String -> Unit (for output)
 /// - malloc: Int -> Int (for memory allocation, returns pointer as int)
 /// - free: Int -> Unit (for memory deallocation)
 pub fn add_builtin_functions() -> HashMap<String, ErrandType> {
     let mut function_types = HashMap::new();
-    
+
     // printf :: String -> a -> ... -> Unit (variadic)
     function_types.insert(
         "printf".to_string(),
@@ -40,7 +40,7 @@ pub fn add_builtin_functions() -> HashMap<String, ErrandType> {
             )),
         ),
     );
-    
+
     // malloc :: Int -> Int (returns pointer as int)
     function_types.insert(
         "malloc".to_string(),
@@ -49,7 +49,7 @@ pub fn add_builtin_functions() -> HashMap<String, ErrandType> {
             Box::new(ErrandType::Con("Int".to_string())),
         ),
     );
-    
+
     // free :: Int -> Unit
     function_types.insert(
         "free".to_string(),
