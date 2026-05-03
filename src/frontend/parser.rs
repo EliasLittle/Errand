@@ -1,3 +1,46 @@
+//! Streaming recursive-descent parser over a lexer token stream.
+//!
+//! # Entry point
+//!
+//! - `Parser::new` primes the stream (first non-comment token becomes `bump`’s “current”).
+//! - `Parser::parse` is the public driver: it repeatedly calls `parse_expression` until `at_end`,
+//!   collecting top-level `Expression` nodes into a `Program`.
+//!
+//! # Where statements and expressions are parsed
+//!
+//! `parse_expression` is the main dispatcher for **both** top-level items and nested
+//! statement/expression positions (e.g. inside `block`). It matches on the current
+//! `TokenType`:
+//!
+//! - **Declaration / keyword statements** — delegates to `function`, `structure`,
+//!   `enum_def`, `if_statement`, `while_statement`,
+//!   `for_statement`, `return_statement`, `print_statement`,
+//!   `match_expr`. These methods usually consume their own `end`/`newline` rules and may
+//!   call `parse_expression` again for bodies, conditions, or operands (semi-recursive).
+//! - **General expressions** — builds an atomic `primary` tree, then runs
+//!   `parse_expr_bp` (Pratt / binding-power) for infix operators and chaining.
+//!
+//! Nested expression parsing reuses the same pipeline: `parse_full_expression` is
+//! `primary` + `parse_expr_bp` (used for call arguments, `while` conditions, `return`/`print`
+//! operands, etc.). `parenthesized_expression` parses `(` … `)` by parsing a primary and
+//! then `parse_expr_bp` until `)`.
+//!
+//! # Section layout (matches inline `// --- … ---` headers in this file)
+//!
+//! | Section | Main methods |
+//! |---------|--------------|
+//! | Top-level | `parse` |
+//! | Cursor | `bump`, `current_type`, `at`, `eat`, `expect`, `skip_newlines`, `parse_comma_separated_until`, `at_identifier` |
+//! | Top-level statement / expression | `parse_expression` |
+//! | Pratt parsing | `parse_expr_bp` |
+//! | Infix operators | `apply_infix_operator`, `binary_operator_for_token`, `binary_op` |
+//! | Primary expressions | `parse_full_expression`, `primary`, `inner_primary`, `parenthesized_expression`, prefix helpers |
+//! | Symbols, identifiers & types | `identifier`, `symbol`, `id`, `type_expr`, generics (`generic_type_args`, `type_param_names`, `parse_optional_type_params`) |
+//! | Literals | `literal` |
+//! | Definitions | `function`, `structure`, `enum_def`, `enum_variants` |
+//! | Delimited lists | `parameters`, `arguments`, `type_list`, `inline_field_list`, … |
+//! | Control flow | `block`, `if_statement`, `match_expr`, `match_pattern`, `while_statement`, `for_statement`, `return_statement`, `print_statement` |
+
 use super::ast::{
     BinaryOperator, EnumVariant, Expression, FieldDefinition, GenericArg, Id, MatchCase,
     MatchPattern, Parameter, Program, TypeExpression, UnaryOperator,
