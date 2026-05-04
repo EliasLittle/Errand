@@ -3,50 +3,99 @@ use crate::backend::errand_builtins::{
 };
 use crate::backend::preir::{
     instr_index, BinOpPl, EnumData, EnumVariantConstructData, EnumVariantData, EnumVariantInfo,
-    FnCallPl, ForLoopData, FuncData, IfStatementData, Instr, LiteralPl, MatchArmData, MatchData,
-    PreIR, RegionData, ReturnData, StructData, UnOpPl, VarDeclData, VarRefData, WhileLoopData,
+    FnCallPl, FuncData, IfStatementData, Instr, LiteralPl, MatchArmData, MatchData, PreIR,
+    RegionData, ReturnData, StructData, UnOpPl, VarDeclData, VarRefData, WhileLoopData,
 };
 use crate::backend::worklist::ErrandType;
 use crate::frontend::ast::MatchPattern;
-use crate::frontend::ast::{BinaryOperator, Expression, Program};
-use log::info;
+use crate::frontend::ast::{
+    BinaryOperator, Expression, FieldDefinition, GenericArg, Id, Program, TypeExpression,
+};
 use std::collections::HashMap;
 
+/// Enum name → ordered variant names (for recognising `Enum::Variant` in the AST).
+fn collect_enum_names(program: &Program) -> HashMap<String, Vec<String>> {
+    let mut enum_names = HashMap::new();
+    for expr in &program.expressions {
+        if let Expression::EnumDefinition { id, variants, .. } = expr {
+            let variant_list: Vec<String> = variants.iter().map(|v| v.name.clone()).collect();
+            enum_names.insert(id.name.clone(), variant_list);
+        }
+    }
+    enum_names
+}
+
+/// Same shape as `frontend/lower.rs` used to synthesise: `fn StructName(...) = return new(:StructName, ...)`.
+fn build_struct_constructor_expression(
+    id: &Id,
+    fields: &[FieldDefinition],
+    type_params: &[Id],
+) -> Expression {
+    let parameters: Vec<crate::frontend::ast::Parameter> = fields
+        .iter()
+        .map(|f| crate::frontend::ast::Parameter {
+            id: f.id.clone(),
+            type_expr: Some(f.field_type.clone()),
+        })
+        .collect();
+    let mut new_args = vec![Expression::Symbol(id.name.clone())];
+    new_args.extend(fields.iter().map(|f| Expression::Identifier {
+        id: f.id.clone(),
+        type_expr: Some(f.field_type.clone()),
+    }));
+    let body = Box::new(Expression::Return(Some(Box::new(
+        Expression::FunctionCall {
+            id: Id {
+                name: "new".to_string(),
+            },
+            arguments: new_args,
+        },
+    ))));
+    let return_type_expr = if type_params.is_empty() {
+        Some(TypeExpression::Struct(id.clone(), None, None))
+    } else {
+        let gen_args: Vec<GenericArg> = type_params
+            .iter()
+            .map(|t| GenericArg::Type(TypeExpression::Struct(t.clone(), None, None)))
+            .collect();
+        Some(TypeExpression::Struct(id.clone(), None, Some(gen_args)))
+    };
+    Expression::FunctionDefinition {
+        id: id.clone(),
+        parameters,
+        body,
+        return_type_expr,
+        foreign: false,
+    }
+}
+
 pub fn compile_preir(program: &Program) -> Result<PreIR, String> {
+    let _span = tracing::debug_span!(
+        target: "preir",
+        "preir.compile",
+        top_level_exprs = program.expressions.len()
+    )
+    .entered();
+    tracing::debug!(target: "preir", "compile PreIR: metadata pass");
+
+    let enum_names = collect_enum_names(program);
     let mut ctx = PreIR::init();
 
-    // First pass: collect function and struct definitions
+    // Pass 1: struct and enum declarations (metadata only; no function bodies).
     for expr in &program.expressions {
         match expr {
-            Expression::FunctionDefinition {
-                id,
-                parameters,
-                body,
-                return_type_expr,
-                foreign,
-            } => {
-                // Reserve space for function declaration
-                let func = FuncData {
-                    name: id.name.clone(),
-                    parameters: parameters.clone(),
-                    body_index: compile_expression(&mut ctx, body)?,
-                    return_type: return_type_expr.clone(),
-                    is_foreign: *foreign,
-                };
-                ctx.emit_instruction(Instr::FuncDecl(func));
-            }
             Expression::StructDefinition {
                 id,
                 type_params,
                 fields,
                 ..
             } => {
-                let strct = StructData {
+                let struct_data = StructData {
                     name: id.name.clone(),
                     type_params: type_params.iter().map(|p| p.clone()).collect(),
                     fields: fields.clone(),
                 };
-                ctx.emit_instruction(Instr::StructDecl(strct));
+                ctx.emit_instruction(Instr::StructDecl(struct_data));
             }
             Expression::EnumDefinition {
                 id,
@@ -74,6 +123,65 @@ pub fn compile_preir(program: &Program) -> Result<PreIR, String> {
         }
     }
 
+    tracing::debug!(target: "preir", "compile PreIR: struct constructors");
+
+    // Pass 2: synthetic struct constructors before any user function bodies
+    for expr in &program.expressions {
+        if let Expression::StructDefinition {
+            id,
+            type_params,
+            fields,
+            ..
+        } = expr
+        {
+            let struct_constructor_expression =
+                build_struct_constructor_expression(id, fields, type_params);
+            if let Expression::FunctionDefinition {
+                id: constructor_function_id,
+                parameters,
+                body,
+                return_type_expr,
+                foreign,
+            } = struct_constructor_expression
+            {
+                let body_idx = compile_expression(&mut ctx, &enum_names, body.as_ref())?;
+                let func = FuncData {
+                    name: constructor_function_id.name.clone(),
+                    parameters,
+                    body_index: body_idx,
+                    return_type: return_type_expr,
+                    is_foreign: foreign,
+                };
+                ctx.emit_instruction(Instr::FuncDecl(func));
+            }
+        }
+    }
+
+    tracing::debug!(target: "preir", "compile PreIR: user and foreign functions");
+
+    // Pass 3: user-defined (and foreign) functions.
+    for expr in &program.expressions {
+        if let Expression::FunctionDefinition {
+            id,
+            parameters,
+            body,
+            return_type_expr,
+            foreign,
+        } = expr
+        {
+            let func = FuncData {
+                name: id.name.clone(),
+                parameters: parameters.clone(),
+                body_index: compile_expression(&mut ctx, &enum_names, body)?,
+                return_type: return_type_expr.clone(),
+                is_foreign: *foreign,
+            };
+            ctx.emit_instruction(Instr::FuncDecl(func));
+        }
+    }
+
+    tracing::debug!(target: "preir", "compile PreIR: main region");
+
     // Second pass: compile all expressions and build main region
     let mut main_instructions = Vec::new();
 
@@ -84,7 +192,7 @@ pub fn compile_preir(program: &Program) -> Result<PreIR, String> {
             Expression::StructDefinition { .. } => continue,
             Expression::EnumDefinition { .. } => continue,
             _ => {
-                let instr_idx = compile_expression(&mut ctx, expr)?;
+                let instr_idx = compile_expression(&mut ctx, &enum_names, expr)?;
                 main_instructions.push(instr_idx);
             }
         }
@@ -105,6 +213,12 @@ pub fn compile_preir(program: &Program) -> Result<PreIR, String> {
         return_loc,
     });
 
+    tracing::debug!(
+        target: "preir",
+        instructions = ctx.instructions.len(),
+        "compile PreIR complete"
+    );
+
     Ok(PreIR {
         main,
         instructions: ctx.instructions,
@@ -116,12 +230,19 @@ pub fn compile_preir(program: &Program) -> Result<PreIR, String> {
 pub fn extract_typing_context(
     program: &Program,
 ) -> (HashMap<String, ErrandType>, HashMap<String, ErrandType>) {
+    let _span = tracing::trace_span!(
+        target: "preir",
+        "preir.extract_typing_context",
+        top_level = program.expressions.len()
+    )
+    .entered();
+
     let data_constructors = add_builtin_data_constructors();
     let mut function_types = add_builtin_functions();
 
     // Extract user-defined function signatures and variable assignments
     for expr in &program.expressions {
-        info!("Extracting typing context for expression: {:?}", expr);
+        tracing::trace!(target: "preir", expr = ?expr, "typing context scan");
         // Extract function definitions
         if let Expression::FunctionDefinition {
             id,
@@ -174,7 +295,11 @@ fn build_function_type(
     })
 }
 
-fn compile_expression(ctx: &mut PreIR, expr: &Expression) -> Result<instr_index, String> {
+fn compile_expression(
+    ctx: &mut PreIR,
+    enum_names: &HashMap<String, Vec<String>>,
+    expr: &Expression,
+) -> Result<instr_index, String> {
     match expr {
         Expression::Int(n) => {
             let instr = Instr::Literal(LiteralPl::Int(*n));
@@ -196,15 +321,26 @@ fn compile_expression(ctx: &mut PreIR, expr: &Expression) -> Result<instr_index,
             let instr = Instr::Literal(LiteralPl::Symbol(s.clone()));
             Ok(ctx.emit_instruction(instr))
         }
-        Expression::Identifier { id, type_expr: _ } => {
-            // Look up variable in declaration table
+        Expression::Identifier { id, type_expr } => {
+            if let Some(TypeExpression::Struct(variant_id, None, None)) = type_expr {
+                if let Some(variants) = enum_names.get(&id.name) {
+                    if variants.iter().any(|v| v == &variant_id.name) {
+                        return Ok(ctx.emit_instruction(Instr::EnumVariantAccess(
+                            EnumVariantData {
+                                enum_name: id.name.clone(),
+                                variant: variant_id.name.clone(),
+                            },
+                        )));
+                    }
+                }
+            }
             let instr = Instr::VarRef(VarRefData {
                 name: id.name.clone(),
             });
             Ok(ctx.emit_instruction(instr))
         }
         Expression::UnaryOp { operator, operand } => {
-            let operand_idx = compile_expression(ctx, operand)?;
+            let operand_idx = compile_expression(ctx, enum_names, operand)?;
             let instr = Instr::UnOp(UnOpPl {
                 op: operator.clone(),
                 operand: operand_idx,
@@ -220,7 +356,7 @@ fn compile_expression(ctx: &mut PreIR, expr: &Expression) -> Result<instr_index,
                 BinaryOperator::Assignment => {
                     // Handle variable assignment
                     if let Expression::Identifier { id, type_expr } = left.as_ref() {
-                        let value_idx = compile_expression(ctx, right)?;
+                        let value_idx = compile_expression(ctx, enum_names, right)?;
 
                         // Create or update variable declaration
                         let instr = Instr::VarDecl(VarDeclData {
@@ -236,8 +372,11 @@ fn compile_expression(ctx: &mut PreIR, expr: &Expression) -> Result<instr_index,
                     }
                 }
                 _ => {
-                    let left_idx = compile_expression(ctx, left)?;
-                    let right_idx = compile_expression(ctx, right)?;
+                    if matches!(operator, BinaryOperator::Dot) {
+                        return compile_field_access(ctx, enum_names, left, right);
+                    }
+                    let left_idx = compile_expression(ctx, enum_names, left)?;
+                    let right_idx = compile_expression(ctx, enum_names, right)?;
                     let instr = Instr::BinOp(BinOpPl {
                         op: operator.clone(),
                         left: left_idx,
@@ -258,13 +397,13 @@ fn compile_expression(ctx: &mut PreIR, expr: &Expression) -> Result<instr_index,
                         arguments.len()
                     ));
                 }
-                let operand_idx = compile_expression(ctx, &arguments[0])?;
+                let operand_idx = compile_expression(ctx, enum_names, &arguments[0])?;
                 return Ok(ctx.emit_instruction(Instr::Typeof(operand_idx)));
             }
 
             let mut arg_indices = Vec::new();
             for arg in arguments {
-                arg_indices.push(compile_expression(ctx, arg)?);
+                arg_indices.push(compile_expression(ctx, enum_names, arg)?);
             }
 
             let instr = Instr::FnCall(FnCallPl {
@@ -280,7 +419,7 @@ fn compile_expression(ctx: &mut PreIR, expr: &Expression) -> Result<instr_index,
             return_type_expr,
             foreign,
         } => {
-            let body_idx = compile_expression(ctx, body)?;
+            let body_idx = compile_expression(ctx, enum_names, body)?;
 
             let func = Instr::FuncDecl(FuncData {
                 name: id.name.clone(),
@@ -339,7 +478,7 @@ fn compile_expression(ctx: &mut PreIR, expr: &Expression) -> Result<instr_index,
         } => {
             let arg_indices: Vec<instr_index> = args
                 .iter()
-                .map(|a| compile_expression(ctx, a))
+                .map(|a| compile_expression(ctx, enum_names, a))
                 .collect::<Result<Vec<_>, _>>()?;
             Ok(
                 ctx.emit_instruction(Instr::EnumVariantConstruct(EnumVariantConstructData {
@@ -350,7 +489,7 @@ fn compile_expression(ctx: &mut PreIR, expr: &Expression) -> Result<instr_index,
             )
         }
         Expression::Match { value, cases } => {
-            let scrutinee_idx = compile_expression(ctx, value)?;
+            let scrutinee_idx = compile_expression(ctx, enum_names, value)?;
 
             // Resolve enum_name from the first non-wildcard pattern.
             let enum_name = cases
@@ -403,7 +542,7 @@ fn compile_expression(ctx: &mut PreIR, expr: &Expression) -> Result<instr_index,
                             (tag, bindings.clone())
                         }
                     };
-                    let body = compile_expression(ctx, &c.body)?;
+                    let body = compile_expression(ctx, enum_names, &c.body)?;
                     Ok(MatchArmData {
                         tag,
                         bindings,
@@ -423,10 +562,10 @@ fn compile_expression(ctx: &mut PreIR, expr: &Expression) -> Result<instr_index,
             then_branch,
             else_branch,
         } => {
-            let condition_idx = compile_expression(ctx, condition)?;
-            let then_idx = compile_expression(ctx, then_branch)?;
+            let condition_idx = compile_expression(ctx, enum_names, condition)?;
+            let then_idx = compile_expression(ctx, enum_names, then_branch)?;
             let else_idx = if let Some(else_expr) = else_branch {
-                Some(compile_expression(ctx, else_expr)?)
+                Some(compile_expression(ctx, enum_names, else_expr)?)
             } else {
                 None
             };
@@ -439,8 +578,8 @@ fn compile_expression(ctx: &mut PreIR, expr: &Expression) -> Result<instr_index,
             Ok(ctx.emit_instruction(instr))
         }
         Expression::While { condition, body } => {
-            let condition_idx = compile_expression(ctx, condition)?;
-            let body_idx = compile_expression(ctx, body)?;
+            let condition_idx = compile_expression(ctx, enum_names, condition)?;
+            let body_idx = compile_expression(ctx, enum_names, body)?;
 
             let instr = Instr::WhileLoop(WhileLoopData {
                 condition: condition_idx,
@@ -452,25 +591,13 @@ fn compile_expression(ctx: &mut PreIR, expr: &Expression) -> Result<instr_index,
             iterator,
             range,
             body,
-        } => {
-            // For now, treat For loops similar to While loops
-            // In a complete implementation, we'd desugar this to a while loop
-            let iterator = iterator.name.clone();
-            let range_idx = compile_expression(ctx, range)?;
-            let body_idx = compile_expression(ctx, body)?;
-            let instr = Instr::ForLoop(ForLoopData {
-                iterator: iterator,
-                range: range_idx,
-                body: body_idx,
-            });
-            Ok(ctx.emit_instruction(instr))
-        }
+        } => compile_for_loop(ctx, enum_names, iterator, range, body),
         Expression::Block(expressions) => {
             let instr_start = ctx.instructions.len() as instr_index;
 
             let mut last_instr_idx = None;
             for expr in expressions {
-                last_instr_idx = Some(compile_expression(ctx, expr)?);
+                last_instr_idx = Some(compile_expression(ctx, enum_names, expr)?);
             }
 
             let instr_end = ctx.instructions.len() as instr_index;
@@ -489,7 +616,7 @@ fn compile_expression(ctx: &mut PreIR, expr: &Expression) -> Result<instr_index,
         }
         Expression::Return(expr) => {
             let value_idx = if let Some(return_expr) = expr {
-                Some(compile_expression(ctx, return_expr)?)
+                Some(compile_expression(ctx, enum_names, return_expr)?)
             } else {
                 None
             };
@@ -498,13 +625,121 @@ fn compile_expression(ctx: &mut PreIR, expr: &Expression) -> Result<instr_index,
             Ok(ctx.emit_instruction(instr))
         }
         Expression::Print(expr) => {
-            let _value_idx = compile_expression(ctx, expr)?;
+            let _value_idx = compile_expression(ctx, enum_names, expr)?;
             // For now, we don't have a Print instruction in the new IR
             // We could add it or handle it differently
             // For now, let's just return the value (this might need refinement)
             Err("Print expressions not yet implemented in new IR".to_string())
         }
     }
+}
+
+fn compile_field_access(
+    ctx: &mut PreIR,
+    enum_names: &HashMap<String, Vec<String>>,
+    left: &Expression,
+    right: &Expression,
+) -> Result<instr_index, String> {
+    let field_symbol = match right {
+        Expression::Identifier { id, .. } => id.name.clone(),
+        other => {
+            return Err(format!(
+                "Dot field access expects an identifier as the field name, got: {:?}",
+                other
+            ))
+        }
+    };
+    let left_idx = compile_expression(ctx, enum_names, left)?;
+    let sym_idx = ctx.emit_instruction(Instr::Literal(LiteralPl::Symbol(field_symbol)));
+    let typeof_idx = ctx.emit_instruction(Instr::Typeof(left_idx));
+    Ok(ctx.emit_instruction(Instr::FnCall(FnCallPl {
+        name: "getfield".to_string(),
+        arguments: vec![left_idx, sym_idx, typeof_idx],
+    })))
+}
+
+/// Desugar `for iter in range ...` to index, `while`, and `get` / `length` (mirrors former `lower.rs`).
+fn compile_for_loop(
+    ctx: &mut PreIR,
+    enum_names: &HashMap<String, Vec<String>>,
+    iterator: &Id,
+    range: &Expression,
+    body: &Expression,
+) -> Result<instr_index, String> {
+    let instr_start = ctx.instructions.len() as instr_index;
+
+    let zero_idx = ctx.emit_instruction(Instr::Literal(LiteralPl::Int(0)));
+    let _index_init = ctx.emit_instruction(Instr::VarDecl(VarDeclData {
+        name: "%index".to_string(),
+        value: zero_idx,
+        declared_type: Some(TypeExpression::Int),
+    }));
+
+    let range_idx = compile_expression(ctx, enum_names, range)?;
+
+    let index_ref_cond = ctx.emit_instruction(Instr::VarRef(VarRefData {
+        name: "%index".to_string(),
+    }));
+    let len_call = ctx.emit_instruction(Instr::FnCall(FnCallPl {
+        name: "length".to_string(),
+        arguments: vec![range_idx],
+    }));
+    let cond_idx = ctx.emit_instruction(Instr::BinOp(BinOpPl {
+        op: BinaryOperator::LessThan,
+        left: index_ref_cond,
+        right: len_call,
+    }));
+
+    let body_region_start = ctx.instructions.len() as instr_index;
+
+    let index_ref_get = ctx.emit_instruction(Instr::VarRef(VarRefData {
+        name: "%index".to_string(),
+    }));
+    let get_call = ctx.emit_instruction(Instr::FnCall(FnCallPl {
+        name: "get".to_string(),
+        arguments: vec![range_idx, index_ref_get],
+    }));
+    let _iter_assign = ctx.emit_instruction(Instr::VarDecl(VarDeclData {
+        name: iterator.name.clone(),
+        value: get_call,
+        declared_type: None,
+    }));
+
+    let _body = compile_expression(ctx, enum_names, body)?;
+
+    let index_ref_add_left = ctx.emit_instruction(Instr::VarRef(VarRefData {
+        name: "%index".to_string(),
+    }));
+    let one = ctx.emit_instruction(Instr::Literal(LiteralPl::Int(1)));
+    let add_idx = ctx.emit_instruction(Instr::BinOp(BinOpPl {
+        op: BinaryOperator::Add,
+        left: index_ref_add_left,
+        right: one,
+    }));
+    let incr_idx = ctx.emit_instruction(Instr::VarDecl(VarDeclData {
+        name: "%index".to_string(),
+        value: add_idx,
+        declared_type: Some(TypeExpression::Int),
+    }));
+
+    let body_region_end = ctx.instructions.len() as instr_index;
+    let while_body = ctx.emit_instruction(Instr::Region(RegionData {
+        instr_start: body_region_start,
+        instr_end: body_region_end,
+        return_loc: incr_idx,
+    }));
+
+    let while_idx = ctx.emit_instruction(Instr::WhileLoop(WhileLoopData {
+        condition: cond_idx,
+        body: while_body,
+    }));
+
+    let instr_end = ctx.instructions.len() as instr_index;
+    Ok(ctx.emit_instruction(Instr::Region(RegionData {
+        instr_start,
+        instr_end,
+        return_loc: while_idx,
+    })))
 }
 
 #[cfg(test)]

@@ -32,7 +32,7 @@ each transformation it performs into the appropriate later compiler phase:
   generation (`sir_gen.rs`)
 - Recognition of syntactic patterns (e.g. enum variant access) → PreIR generation
 
-**Do not add new transformations to `lower.rs`.** Some desugaring (struct
-constructor synthesis, for-loop expansion) still lives there temporarily until it
-can be migrated. New features should place their lowering logic in the backend
-from the start.
+**Do not add new transformations to `lower.rs`.** Remaining frontend desugar is
+limited to `printf` string temporaries and implicit `return` on functions; other
+desugaring lives in `preir_gen.rs` (or later phases). New features should place
+their lowering logic in the backend from the start.

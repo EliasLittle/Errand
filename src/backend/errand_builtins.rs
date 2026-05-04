@@ -78,7 +78,7 @@ pub fn add_builtin_functions() -> HashMap<String, ErrandType> {
     );
 
     // strlen :: String -> Int
-    // Injected by `printf` lowering (see frontend/lower.rs) when computing the
+    // Injected by `printf` lowering (see `frontend/lower.rs`) when computing the
     // size of the format string buffer to allocate. The Errand type system must
     // know about it, otherwise downstream analysis (e.g. annotated var decls
     // whose RHS contains the lowered call chain) will fail with
@@ -92,7 +92,7 @@ pub fn add_builtin_functions() -> HashMap<String, ErrandType> {
     );
 
     // strcpy :: String -> String -> Int
-    // Also injected by `printf` lowering to copy the format string into the
+    // Also injected by `printf` lowering (`frontend/lower.rs`) to copy the format string into the
     // freshly malloc'd buffer.
     function_types.insert(
         "strcpy".to_string(),
