@@ -19,7 +19,7 @@ def sieve_prime_count(n: int) -> int:
 
 
 def main() -> None:
-    n = 100000000
+    n = 10000000
     print(sieve_prime_count(n))
 
 

@@ -50,4 +50,4 @@ fn sieve_prime_count(n)
     return count
 end
 
-printf("%d\n", sieve_prime_count(1000000))
+printf("%d\n", sieve_prime_count(10000000))
