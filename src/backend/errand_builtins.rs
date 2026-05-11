@@ -8,138 +8,123 @@ use std::collections::HashMap;
 /// - Int, Int32, Float, Bool, String, Unit
 /// - Built-in constructors like true/false for Bool
 pub fn add_builtin_data_constructors() -> HashMap<String, ErrandType> {
-    let mut data_constructors = HashMap::new();
-
-    // Bool constructors
-    data_constructors.insert("true".to_string(), ErrandType::Con("Bool".to_string()));
-    data_constructors.insert("false".to_string(), ErrandType::Con("Bool".to_string()));
-
-    // Unit constructor (for void/empty expressions)
-    data_constructors.insert("unit".to_string(), ErrandType::Con("Unit".to_string()));
-
-    data_constructors
+    const ENTRIES: &[(&str, &str)] = &[("true", "Bool"), ("false", "Bool"), ("unit", "Unit")];
+    HashMap::from_iter(
+        ENTRIES
+            .iter()
+            .map(|&(name, con)| (name.to_string(), ErrandType::Con(con.to_string()))),
+    )
 }
 
-/// Add built-in function types to the type inference context
-///
-/// These are functions that are available in the runtime environment:
-/// - printf: String -> Unit (for output)
-/// - malloc: Int -> Int (for memory allocation, returns pointer as int)
-/// - free: Int -> Unit (for memory deallocation)
-pub fn add_builtin_functions() -> HashMap<String, ErrandType> {
-    let mut function_types = HashMap::new();
-
-    // printf :: String -> a -> ... -> Unit (variadic)
-    function_types.insert(
-        "printf".to_string(),
-        ErrandType::Arrow(
-            Box::new(ErrandType::Con("String".to_string())),
-            Box::new(ErrandType::Arrow(
-                Box::new(ErrandType::Var("_a".to_string())),
-                Box::new(ErrandType::Con("Unit".to_string())),
-            )),
-        ),
-    );
-
-    // malloc :: Int -> Int (returns pointer as int)
-    function_types.insert(
-        "malloc".to_string(),
-        ErrandType::Arrow(
-            Box::new(ErrandType::Con("Int".to_string())),
-            Box::new(ErrandType::Con("Int".to_string())),
-        ),
-    );
-
-    // free :: Int -> Unit
-    function_types.insert(
-        "free".to_string(),
-        ErrandType::Arrow(
-            Box::new(ErrandType::Con("Int".to_string())),
+fn builtin_printf() -> ErrandType {
+    ErrandType::Arrow(
+        Box::new(ErrandType::Con("String".to_string())),
+        Box::new(ErrandType::Arrow(
+            Box::new(ErrandType::Var("_a".to_string())),
             Box::new(ErrandType::Con("Unit".to_string())),
-        ),
-    );
+        )),
+    )
+}
 
-    // as_ptr :: String -> Int (convert string to raw pointer)
-    function_types.insert(
-        "as_ptr".to_string(),
-        ErrandType::Arrow(
+fn builtin_malloc() -> ErrandType {
+    ErrandType::Arrow(
+        Box::new(ErrandType::Con("Int".to_string())),
+        Box::new(ErrandType::Con("Int".to_string())),
+    )
+}
+
+fn builtin_free() -> ErrandType {
+    ErrandType::Arrow(
+        Box::new(ErrandType::Con("Int".to_string())),
+        Box::new(ErrandType::Con("Unit".to_string())),
+    )
+}
+
+fn builtin_as_ptr() -> ErrandType {
+    ErrandType::Arrow(
+        Box::new(ErrandType::Con("String".to_string())),
+        Box::new(ErrandType::Con("Int".to_string())),
+    )
+}
+
+fn builtin_as_string() -> ErrandType {
+    ErrandType::Arrow(
+        Box::new(ErrandType::Con("Int".to_string())),
+        Box::new(ErrandType::Con("String".to_string())),
+    )
+}
+
+fn builtin_strlen() -> ErrandType {
+    ErrandType::Arrow(
+        Box::new(ErrandType::Con("String".to_string())),
+        Box::new(ErrandType::Con("Int".to_string())),
+    )
+}
+
+fn builtin_strcpy() -> ErrandType {
+    ErrandType::Arrow(
+        Box::new(ErrandType::Con("String".to_string())),
+        Box::new(ErrandType::Arrow(
             Box::new(ErrandType::Con("String".to_string())),
             Box::new(ErrandType::Con("Int".to_string())),
-        ),
-    );
+        )),
+    )
+}
 
-    // as_string :: Int -> String
-    function_types.insert(
-        "as_string".to_string(),
-        ErrandType::Arrow(
-            Box::new(ErrandType::Con("Int".to_string())),
-            Box::new(ErrandType::Con("String".to_string())),
-        ),
-    );
-
-    // strlen :: String -> Int
-    // Injected by `printf` lowering (see `frontend/lower.rs`) when computing the
-    // size of the format string buffer to allocate. The Errand type system must
-    // know about it, otherwise downstream analysis (e.g. annotated var decls
-    // whose RHS contains the lowered call chain) will fail with
-    // UnboundVariable.
-    function_types.insert(
-        "strlen".to_string(),
-        ErrandType::Arrow(
-            Box::new(ErrandType::Con("String".to_string())),
-            Box::new(ErrandType::Con("Int".to_string())),
-        ),
-    );
-
-    // strcpy :: String -> String -> Int
-    // Also injected by `printf` lowering (`frontend/lower.rs`) to copy the format string into the
-    // freshly malloc'd buffer.
-    function_types.insert(
-        "strcpy".to_string(),
-        ErrandType::Arrow(
+fn builtin_getfield() -> ErrandType {
+    ErrandType::Arrow(
+        Box::new(ErrandType::Var("_struct".to_string())),
+        Box::new(ErrandType::Arrow(
             Box::new(ErrandType::Con("String".to_string())),
             Box::new(ErrandType::Arrow(
                 Box::new(ErrandType::Con("String".to_string())),
                 Box::new(ErrandType::Con("Int".to_string())),
             )),
-        ),
-    );
+        )),
+    )
+}
 
-    // getfield :: (struct_instance, field_symbol, struct_type) -> field_type
-    // Struct instance can be any struct; symbols are String in the type system
-    function_types.insert(
-        "getfield".to_string(),
-        ErrandType::Arrow(
-            Box::new(ErrandType::Var("_struct".to_string())),
+fn builtin_new() -> ErrandType {
+    ErrandType::Arrow(
+        Box::new(ErrandType::Con("String".to_string())),
+        Box::new(ErrandType::Arrow(
+            Box::new(ErrandType::Var("_a".to_string())),
             Box::new(ErrandType::Arrow(
-                Box::new(ErrandType::Con("String".to_string())),
-                Box::new(ErrandType::Arrow(
-                    Box::new(ErrandType::Con("String".to_string())),
-                    Box::new(ErrandType::Con("Int".to_string())),
-                )),
+                Box::new(ErrandType::Var("_b".to_string())),
+                Box::new(ErrandType::Var("_result".to_string())),
             )),
-        ),
-    );
+        )),
+    )
+}
 
-    // new :: Symbol -> Field1 -> Field2 -> ... -> Struct
-    // Polymorphic: first arg is type name (Symbol), then field values. Used by lowered
-    // struct constructors like Point(x, y) -> return new(:Point, x, y).
-    // 3 arrows for 2-field structs (Point); extend chain for larger structs.
-    function_types.insert(
-        "new".to_string(),
-        ErrandType::Arrow(
-            Box::new(ErrandType::Con("String".to_string())),
-            Box::new(ErrandType::Arrow(
-                Box::new(ErrandType::Var("_a".to_string())),
-                Box::new(ErrandType::Arrow(
-                    Box::new(ErrandType::Var("_b".to_string())),
-                    Box::new(ErrandType::Var("_result".to_string())),
-                )),
-            )),
-        ),
-    );
-
-    function_types
+/// Add built-in function types to the type inference context
+///
+/// These are functions that are available in the runtime environment:
+/// - printf: String -> a -> ... -> Unit (variadic)
+/// - malloc: Int -> Int (for memory allocation, returns pointer as int)
+/// - free: Int -> Unit (for memory deallocation)
+pub fn add_builtin_functions() -> HashMap<String, ErrandType> {
+    const ENTRIES: &[(&str, fn() -> ErrandType)] = &[
+        ("printf", builtin_printf),
+        ("malloc", builtin_malloc),
+        ("free", builtin_free),
+        ("as_ptr", builtin_as_ptr),
+        ("as_string", builtin_as_string),
+        // Injected by `printf` lowering (see `frontend/lower.rs`) when computing the
+        // size of the format string buffer to allocate. The Errand type system must
+        // know about it, otherwise downstream analysis (e.g. annotated var decls
+        // whose RHS contains the lowered call chain) will fail with UnboundVariable.
+        ("strlen", builtin_strlen),
+        // Also injected by `printf` lowering (`frontend/lower.rs`) to copy the format string into the
+        // freshly malloc'd buffer.
+        ("strcpy", builtin_strcpy),
+        // Struct instance can be any struct; symbols are String in the type system
+        ("getfield", builtin_getfield),
+        // Polymorphic: first arg is type name (Symbol), then field values. Used by lowered
+        // struct constructors like Point(x, y) -> return new(:Point, x, y).
+        ("new", builtin_new),
+    ];
+    HashMap::from_iter(ENTRIES.iter().map(|&(name, mk)| (name.to_string(), mk())))
 }
 
 /// Convert from Errand's frontend TypeExpression to ErrandType for inference.

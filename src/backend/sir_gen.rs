@@ -9,7 +9,7 @@ use crate::backend::preir::PreIR;
 use crate::backend::preir::{
     instr_index, BinOpPl, EnumData, EnumVariantConstructData, FnCallPl, ForLoopData, FuncData,
     IfStatementData, Instr, LiteralPl, MatchArmData, MatchData, RegionData, ReturnData, StructData,
-    UnOpPl, VarDeclData,
+    UnOpPl, VarDeclData, WhileLoopData,
 };
 use crate::backend::sir::{
     SIREnumLayout, SIREnumVariantLayout, SIRFunctionInfo, SIRInstr, SIRModule, SIRStructField,
@@ -28,6 +28,8 @@ pub struct SirGen {
 }
 
 impl SirGen {
+    // ── Public API ─────────────────────────────────────────────────────────────
+
     fn new(analyzer: Analyzer) -> Self {
         SirGen {
             analyzer,
@@ -70,44 +72,26 @@ impl SirGen {
             .collect();
 
         // Build struct layouts from StructDecl instructions.
-        let struct_layouts: HashMap<String, SIRStructLayout> = gen
-            .analyzer
-            .preir
-            .instructions
-            .iter()
-            .filter_map(|instr| {
-                if let Instr::StructDecl(sd) = instr {
-                    if !sd.type_params.is_empty() {
-                        return None;
+        let struct_layouts: HashMap<String, SIRStructLayout> =
+            gen.analyzer
+                .preir
+                .instructions
+                .iter()
+                .filter_map(|instr| {
+                    if let Instr::StructDecl(sd) = instr {
+                        if !sd.type_params.is_empty() {
+                            return None;
+                        }
+                        let layout =
+                            sir_layout_struct_fields_from_types(sd.fields.iter().map(|f| {
+                                (f.id.name.clone(), type_expr_to_errand_type(&f.field_type))
+                            }));
+                        Some((sd.name.clone(), layout))
+                    } else {
+                        None
                     }
-                    let mut offset = 0usize;
-                    let fields = sd
-                        .fields
-                        .iter()
-                        .map(|f| {
-                            let ty = type_expr_to_errand_type(&f.field_type);
-                            let size = errand_type_size(&ty);
-                            let field = SIRStructField {
-                                name: f.id.name.clone(),
-                                ty,
-                                byte_offset: offset,
-                            };
-                            offset += size;
-                            field
-                        })
-                        .collect();
-                    Some((
-                        sd.name.clone(),
-                        SIRStructLayout {
-                            fields,
-                            total_size: offset,
-                        },
-                    ))
-                } else {
-                    None
-                }
-            })
-            .collect();
+                })
+                .collect();
 
         // Process main first so module-level variables enter module_context
         // before any function body is analyzed.
@@ -184,29 +168,18 @@ impl SirGen {
                         .variants
                         .iter()
                         .map(|v| {
-                            let mut payload_offset = 0usize;
-                            let fields: Vec<SIRStructField> = v
-                                .fields
-                                .iter()
-                                .map(|(field_name, field_type)| {
-                                    let ty = type_expr_to_errand_type(field_type);
-                                    let size = errand_type_size(&ty);
-                                    let f = SIRStructField {
-                                        name: field_name.clone(),
-                                        ty,
-                                        byte_offset: payload_offset,
-                                    };
-                                    payload_offset += size;
-                                    f
-                                })
-                                .collect();
-                            let payload_size = payload_offset;
+                            let inner = sir_layout_struct_fields_from_types(v.fields.iter().map(
+                                |(field_name, field_type)| {
+                                    (field_name.clone(), type_expr_to_errand_type(field_type))
+                                },
+                            ));
+                            let payload_size = inner.total_size;
                             if payload_size > max_payload {
                                 max_payload = payload_size;
                             }
                             SIREnumVariantLayout {
                                 name: v.name.clone(),
-                                fields,
+                                fields: inner.fields,
                                 payload_size,
                             }
                         })
@@ -239,43 +212,521 @@ impl SirGen {
         Ok(module)
     }
 
+    // ── Emission (PreIR → SIR) ─────────────────────────────────────────────────
+
+    /// Emit SIR for a function body rooted at `root_idx`.
+    /// Resets the index map so local indices start at 0.
+    fn emit_body_sir(&mut self, root_idx: instr_index) -> Result<SIR, String> {
+        self.preir_to_sir.clear();
+        let mut sir = SIR {
+            instructions: Vec::new(),
+            return_loc: 0,
+        };
+        let local_root = self.analyze_and_emit(root_idx, &mut sir)?;
+        sir.return_loc = local_root;
+        Ok(sir)
+    }
+
+    /// Emit SIR for the main region: walk `instr_start..instr_end` in order,
+    /// skipping top-level declarations (they have their own entry points).
+    fn emit_region_sir(&mut self, region_data: &RegionData) -> Result<SIR, String> {
+        self.preir_to_sir.clear();
+        let mut sir = SIR {
+            instructions: Vec::new(),
+            return_loc: 0,
+        };
+
+        // Instructions that belong to match arm body Regions are deferred so
+        // they are emitted lazily inside their Region's SIR range. This ensures
+        // that binding variables (e.g. `x`, `y` from `Message::Move(x, y)`)
+        // have SIR indices that fall inside the arm body Region's range, which
+        // is required for the lowering pass to correctly mark them as nested.
+        self.emit_region_instruction_range(
+            region_data.instr_start,
+            region_data.instr_end,
+            &mut sir,
+            /* nested_decls */ false,
+        )?;
+
+        sir.return_loc = self
+            .preir_to_sir
+            .get(&region_data.return_loc)
+            .copied()
+            .unwrap_or(0);
+        Ok(sir)
+    }
+
+    /// Emit the instructions contained in a `Region`, then emit the Region
+    /// node itself with adjusted local bounds.
+    fn emit_region_instr(
+        &mut self,
+        global_idx: instr_index,
+        rd: RegionData,
+        sir: &mut SIR,
+    ) -> Result<instr_index, String> {
+        let new_start = sir.instructions.len() as instr_index;
+
+        self.emit_region_instruction_range(rd.instr_start, rd.instr_end, sir, true)?;
+
+        let new_end = sir.instructions.len() as instr_index;
+        let new_return_loc = self
+            .preir_to_sir
+            .get(&rd.return_loc)
+            .copied()
+            .unwrap_or(new_start);
+
+        let remapped_region = Instr::Region(RegionData {
+            instr_start: new_start,
+            instr_end: new_end,
+            return_loc: new_return_loc,
+        });
+
+        let ty = self
+            .analyzer
+            .analyze_instr(global_idx)
+            .map(|idx| {
+                self.analyzer
+                    .collapse_apps_in_type(self.analyzer.expanded_pool_type(idx))
+            })
+            .ok();
+
+        let local_idx = sir.instructions.len() as instr_index;
+        sir.instructions.push(SIRInstr {
+            instr: remapped_region,
+            ty,
+        });
+        self.preir_to_sir.insert(global_idx, local_idx);
+
+        Ok(local_idx)
+    }
+
+    /// Collect all PreIR instruction indices that are "owned" by match arm body
+    /// Regions within the given PreIR range. These must not be pre-emitted in
+    /// a sequential scan; instead they must be emitted lazily inside the arm
+    /// body's `emit_region_instr` call so that their SIR indices fall within
+    /// the Region's `instr_start..instr_end` range.
+    fn collect_arm_owned_preir(
+        &self,
+        start: instr_index,
+        end: instr_index,
+    ) -> HashSet<instr_index> {
+        let mut owned = HashSet::new();
+        for i in start..end {
+            if let Some(Instr::Match(data)) = self.analyzer.preir.get_instruction(i) {
+                for arm in &data.arms {
+                    self.mark_arm_owned_preir(arm.body, &mut owned);
+                }
+            }
+        }
+        owned
+    }
+
+    /// Recursively mark `idx` and all PreIR instructions inside it as arm-owned.
+    fn mark_arm_owned_preir(&self, idx: instr_index, owned: &mut HashSet<instr_index>) {
+        if owned.contains(&idx) {
+            return;
+        }
+        owned.insert(idx);
+        match self.analyzer.preir.get_instruction(idx) {
+            Some(Instr::Region(data)) => {
+                let start = data.instr_start;
+                let end = data.instr_end;
+                for i in start..end {
+                    self.mark_arm_owned_preir(i, owned);
+                }
+            }
+            Some(Instr::Match(data)) => {
+                for arm in &data.arms {
+                    self.mark_arm_owned_preir(arm.body, owned);
+                }
+            }
+            _ => {}
+        }
+    }
+
+    /// PreIR lays out `while cond do (block)` as: `cond…`, `block` statements, the block's
+    /// `Region` node, then the `WhileLoop`. A linear scan would emit the block twice (once
+    /// while walking the parent range, again when lowering the `WhileLoop`), leaving the
+    /// `WhileLoop`'s body `Region` empty in SIR because `preir_to_sir` is already populated.
+    /// Skip the operand `Region` and its `instr_start..instr_end` range whenever we see a
+    /// control-flow instruction that owns them.
+    fn control_flow_operand_skip_indices(
+        &self,
+        start: instr_index,
+        end: instr_index,
+    ) -> HashSet<instr_index> {
+        let mut skip = HashSet::new();
+        let preir = &self.analyzer.preir;
+        for i in start..end {
+            match preir.get_instruction(i) {
+                Some(Instr::WhileLoop(d)) => Self::mark_region_body_skip(preir, d.body, &mut skip),
+                Some(Instr::ForLoop(d)) => Self::mark_region_body_skip(preir, d.body, &mut skip),
+                Some(Instr::IfStatement(d)) => {
+                    Self::mark_region_body_skip(preir, d.then_branch, &mut skip);
+                    if let Some(e) = d.else_branch {
+                        Self::mark_region_body_skip(preir, e, &mut skip);
+                    }
+                }
+                _ => {}
+            }
+        }
+        skip
+    }
+
+    fn mark_region_body_skip(preir: &PreIR, body: instr_index, skip: &mut HashSet<instr_index>) {
+        if let Some(Instr::Region(rd)) = preir.get_instruction(body) {
+            skip.insert(body);
+            for j in rd.instr_start..rd.instr_end {
+                skip.insert(j);
+            }
+        }
+    }
+
+    /// Walk `instr_start..instr_end` in PreIR order for region emission: defer match-arm-owned
+    /// instructions and control-flow-owned region bodies, optionally skip or analyze nested
+    /// module-level declarations.
+    fn emit_region_instruction_range(
+        &mut self,
+        instr_start: instr_index,
+        instr_end: instr_index,
+        sir: &mut SIR,
+        nested_decls: bool,
+    ) -> Result<(), String> {
+        let arm_owned = self.collect_arm_owned_preir(instr_start, instr_end);
+        let cf_skip = self.control_flow_operand_skip_indices(instr_start, instr_end);
+        for i in instr_start..instr_end {
+            match self.analyzer.preir.get_instruction(i) {
+                Some(Instr::FuncDecl(_))
+                | Some(Instr::StructDecl(_))
+                | Some(Instr::EnumDecl(_)) => {
+                    if nested_decls {
+                        let _ = self.analyzer.analyze_instr(i);
+                    }
+                    continue;
+                }
+                _ => {}
+            }
+            if arm_owned.contains(&i) || cf_skip.contains(&i) {
+                continue;
+            }
+            self.analyze_and_emit(i, sir)?;
+        }
+        Ok(())
+    }
+
+    /// Type the instruction at `global_idx` via `Analyzer`, emit a `SIRInstr`
+    /// with remapped local indices, and return the local index.
+    fn analyze_and_emit(
+        &mut self,
+        global_idx: instr_index,
+        sir: &mut SIR,
+    ) -> Result<instr_index, String> {
+        if let Some(&local) = self.preir_to_sir.get(&global_idx) {
+            return Ok(local);
+        }
+
+        let instr = self
+            .analyzer
+            .preir
+            .get_instruction(global_idx)
+            .cloned()
+            .ok_or_else(|| format!("invalid PreIR index: {global_idx}"))?;
+
+        // Region instructions: emit contained body first, then the Region node.
+        if let Instr::Region(ref rd) = instr {
+            return self.emit_region_instr(global_idx, rd.clone(), sir);
+        }
+
+        // Declarations nested inside a body: analyze only, don't emit into
+        // this SIR (they are independent entry points at the module level).
+        if matches!(
+            instr,
+            Instr::FuncDecl(_) | Instr::StructDecl(_) | Instr::EnumDecl(_)
+        ) {
+            let _ = self
+                .analyzer
+                .analyze_instr(global_idx)
+                .map_err(|e| format!("{e:?}"));
+            return Ok(-1);
+        }
+
+        // Track up front whether this is a var declaration with an explicit
+        // type annotation; those have to surface type errors loudly so
+        // mismatches between the annotation and the initializer (e.g.
+        // `d::Pair<Int, Int> = Pair("hello", "world")`) actually fail
+        // compilation. Errors on other instructions are swallowed because
+        // the type system has known gaps (enums-as-int coercion, raw
+        // pointer arithmetic, untyped parameters) that legitimate programs
+        // rely on.
+        let is_annotated_var_decl = matches!(
+            &instr,
+            Instr::VarDecl(data) if data.declared_type.is_some()
+        );
+
+        // Recursively emit operand instructions and remap their indices.
+        let remapped = self.remap_operands(instr, sir)?;
+
+        let analysis = self.analyzer.analyze_instr(global_idx);
+        if is_annotated_var_decl {
+            analysis.as_ref().map_err(|e| format!("{e:?}"))?;
+        }
+        let ty = analysis
+            .map(|idx| {
+                self.analyzer
+                    .collapse_apps_in_type(self.analyzer.expanded_pool_type(idx))
+            })
+            .ok();
+
+        let local_idx = sir.instructions.len() as instr_index;
+        sir.instructions.push(SIRInstr {
+            instr: remapped,
+            ty,
+        });
+        self.preir_to_sir.insert(global_idx, local_idx);
+
+        Ok(local_idx)
+    }
+
+    // ── Operand remapping (during emission) ───────────────────────────────────
+
+    /// Return a new `Instr` with all operand `instr_index` values remapped from
+    /// global PreIR space to local SIR space, emitting dependencies first.
+    fn remap_operands(&mut self, instr: Instr, sir: &mut SIR) -> Result<Instr, String> {
+        match instr {
+            Instr::Literal(_)
+            | Instr::VarRef(_)
+            | Instr::StructDecl(_)
+            | Instr::EnumDecl(_)
+            | Instr::EnumVariantAccess(_) => Ok(instr),
+            Instr::EnumVariantConstruct(data) => self.remap_enum_variant_construct(data, sir),
+            Instr::Match(data) => self.remap_match_instr(data, sir),
+            Instr::VarDecl(data) => self.remap_var_decl(data, sir),
+            Instr::UnOp(data) => self.remap_un_op(data, sir),
+            Instr::BinOp(data) => self.remap_bin_op(data, sir),
+            Instr::FnCall(data) => self.remap_fn_call(data, sir),
+            Instr::Typeof(operand) => self.remap_typeof(operand, sir),
+            Instr::IfStatement(data) => self.remap_if_statement(data, sir),
+            Instr::WhileLoop(data) => self.remap_while_loop(data, sir),
+            Instr::ForLoop(data) => self.remap_for_loop(data, sir),
+            Instr::Return(data) => self.remap_return(data, sir),
+            Instr::FuncDecl(data) => self.remap_func_decl(data, sir),
+            Instr::Region(_) => unreachable!("Region handled before remap_operands"),
+        }
+    }
+
+    fn remap_enum_variant_construct(
+        &mut self,
+        data: EnumVariantConstructData,
+        sir: &mut SIR,
+    ) -> Result<Instr, String> {
+        let mut arg_indices = Vec::new();
+        for idx in data.arg_indices {
+            arg_indices.push(self.analyze_and_emit(idx, sir)?);
+        }
+        Ok(Instr::EnumVariantConstruct(EnumVariantConstructData {
+            enum_name: data.enum_name,
+            variant: data.variant,
+            arg_indices,
+        }))
+    }
+
+    fn remap_match_instr(&mut self, data: MatchData, sir: &mut SIR) -> Result<Instr, String> {
+        let scrutinee = self.analyze_and_emit(data.scrutinee, sir)?;
+
+        // Obtain variant info so we can register binding variable types
+        // into global_defs before emitting each arm body.
+        let variants: Vec<_> = self
+            .analyzer
+            .enum_variants
+            .get(&data.enum_name)
+            .cloned()
+            .unwrap_or_default();
+        let enum_tparams = self
+            .analyzer
+            .enum_type_params
+            .get(&data.enum_name)
+            .cloned()
+            .unwrap_or_default();
+        let scrut_ty = self
+            .analyzer
+            .cached_type(data.scrutinee)
+            .map(|idx| self.analyzer.expanded_pool_type(idx));
+        let mut scrut_subst: HashMap<String, ErrandType> = HashMap::new();
+        if let Some(ErrandType::App(head, args)) = &scrut_ty {
+            if let ErrandType::Con(en) = head.as_ref() {
+                if en == &data.enum_name && args.len() == enum_tparams.len() {
+                    for (p, a) in enum_tparams.iter().zip(args.iter()) {
+                        scrut_subst.insert(p.clone(), a.clone());
+                    }
+                }
+            }
+        }
+
+        let mut arms = Vec::new();
+        for arm in &data.arms {
+            // Register binding names as typed globals so that VarRef
+            // instructions in the arm body resolve during analysis.
+            if !arm.bindings.is_empty() {
+                if let Some(tag) = arm.tag {
+                    if let Some(variant_info) = variants.get(tag as usize) {
+                        for (i, binding_name) in arm.bindings.iter().enumerate() {
+                            if let Some((_, field_type)) = variant_info.fields.get(i) {
+                                let mut ty =
+                                    type_expr_to_errand_type_with_params(field_type, &enum_tparams);
+                                ty = self.analyzer.apply_substs_to_type(&ty, &scrut_subst);
+                                let ty_idx = self.analyzer.pool.intern(ty);
+                                self.analyzer
+                                    .global_defs
+                                    .insert(binding_name.clone(), ty_idx);
+                            }
+                        }
+                    }
+                }
+            }
+            let body = self.analyze_and_emit(arm.body, sir)?;
+            arms.push(MatchArmData {
+                tag: arm.tag,
+                bindings: arm.bindings.clone(),
+                body,
+            });
+        }
+        Ok(Instr::Match(MatchData {
+            scrutinee,
+            enum_name: data.enum_name.clone(),
+            arms,
+        }))
+    }
+
+    fn remap_var_decl(&mut self, data: VarDeclData, sir: &mut SIR) -> Result<Instr, String> {
+        let value = self.analyze_and_emit(data.value, sir)?;
+        Ok(Instr::VarDecl(VarDeclData {
+            name: data.name,
+            value,
+            declared_type: data.declared_type.clone(),
+        }))
+    }
+
+    fn remap_un_op(&mut self, data: UnOpPl, sir: &mut SIR) -> Result<Instr, String> {
+        let operand = self.analyze_and_emit(data.operand, sir)?;
+        Ok(Instr::UnOp(UnOpPl {
+            op: data.op,
+            operand,
+        }))
+    }
+
+    fn remap_bin_op(&mut self, data: BinOpPl, sir: &mut SIR) -> Result<Instr, String> {
+        let left = self.analyze_and_emit(data.left, sir)?;
+        let right = self.analyze_and_emit(data.right, sir)?;
+        Ok(Instr::BinOp(BinOpPl {
+            op: data.op,
+            left,
+            right,
+        }))
+    }
+
+    fn remap_fn_call(&mut self, data: FnCallPl, sir: &mut SIR) -> Result<Instr, String> {
+        let mut arguments = Vec::new();
+        for arg_idx in data.arguments {
+            arguments.push(self.analyze_and_emit(arg_idx, sir)?);
+        }
+        Ok(Instr::FnCall(FnCallPl {
+            name: data.name,
+            arguments,
+        }))
+    }
+
+    fn remap_typeof(&mut self, operand: instr_index, sir: &mut SIR) -> Result<Instr, String> {
+        // Emit the operand so its analysis cache is populated, then
+        // resolve its (mangled) type name and replace this instruction
+        // with a Symbol literal carrying that name.  The operand SIR
+        // instruction may end up dead but that's fine — `getfield`
+        // and friends only consume the resulting symbol.
+        self.analyze_and_emit(operand, sir)?;
+        let ty = self
+            .analyzer
+            .cached_type(operand)
+            .map(|idx| {
+                self.analyzer
+                    .collapse_apps_in_type(self.analyzer.expanded_pool_type(idx))
+            })
+            .ok_or_else(|| format!("typeof: cannot resolve type of operand %{}", operand))?;
+        let name = errand_type_name(&ty);
+        Ok(Instr::Literal(LiteralPl::Symbol(name)))
+    }
+
+    fn remap_if_statement(
+        &mut self,
+        data: IfStatementData,
+        sir: &mut SIR,
+    ) -> Result<Instr, String> {
+        let condition = self.analyze_and_emit(data.condition, sir)?;
+        let then_branch = self.analyze_and_emit(data.then_branch, sir)?;
+        let else_branch = data
+            .else_branch
+            .map(|e| self.analyze_and_emit(e, sir))
+            .transpose()?;
+        Ok(Instr::IfStatement(IfStatementData {
+            condition,
+            then_branch,
+            else_branch,
+        }))
+    }
+
+    fn remap_while_loop(&mut self, data: WhileLoopData, sir: &mut SIR) -> Result<Instr, String> {
+        let condition = self.analyze_and_emit(data.condition, sir)?;
+        let body = self.analyze_and_emit(data.body, sir)?;
+        Ok(Instr::WhileLoop(WhileLoopData { condition, body }))
+    }
+
+    fn remap_for_loop(&mut self, data: ForLoopData, sir: &mut SIR) -> Result<Instr, String> {
+        let range = self.analyze_and_emit(data.range, sir)?;
+        let body = self.analyze_and_emit(data.body, sir)?;
+        Ok(Instr::ForLoop(ForLoopData {
+            iterator: data.iterator,
+            range,
+            body,
+        }))
+    }
+
+    fn remap_return(&mut self, data: ReturnData, sir: &mut SIR) -> Result<Instr, String> {
+        let value = data
+            .value
+            .map(|v| self.analyze_and_emit(v, sir))
+            .transpose()?;
+        Ok(Instr::Return(ReturnData { value }))
+    }
+
+    fn remap_func_decl(&mut self, data: FuncData, sir: &mut SIR) -> Result<Instr, String> {
+        let body_index = self.analyze_and_emit(data.body_index, sir)?;
+        Ok(Instr::FuncDecl(FuncData {
+            name: data.name,
+            parameters: data.parameters,
+            body_index,
+            return_type: data.return_type,
+            is_foreign: data.is_foreign,
+        }))
+    }
+
+    // ── Generic finalization (module post-pass) ─────────────────────────────────
+
     /// Collapse `App` types, patch `new`/enum names, and add mangled struct/enum layouts.
     fn finalize_generics(&mut self, module: &mut SIRModule) -> Result<(), String> {
-        Self::collapse_sir_types(&mut module.main, &self.analyzer);
-        for overloads in module.functions.values_mut() {
-            for info in overloads.values_mut() {
-                if let Some(ref mut body) = info.body {
-                    Self::collapse_sir_types(body, &self.analyzer);
-                }
-            }
-        }
-        Self::patch_mangled_names(&mut module.main);
-        for overloads in module.functions.values_mut() {
-            for info in overloads.values_mut() {
-                if let Some(ref mut body) = info.body {
-                    Self::patch_mangled_names(body);
-                }
-            }
-        }
+        Self::apply_collapse_patch(module, &self.analyzer);
         self.monomorph_generic_struct_constructors(module)?;
-        Self::collapse_sir_types(&mut module.main, &self.analyzer);
-        for overloads in module.functions.values_mut() {
-            for info in overloads.values_mut() {
-                if let Some(ref mut body) = info.body {
-                    Self::collapse_sir_types(body, &self.analyzer);
-                }
-            }
-        }
-        Self::patch_mangled_names(&mut module.main);
-        for overloads in module.functions.values_mut() {
-            for info in overloads.values_mut() {
-                if let Some(ref mut body) = info.body {
-                    Self::patch_mangled_names(body);
-                }
-            }
-        }
+        // Monomorph clones template bodies with substituted types; run collapse+patch again
+        // so `App` normalizes and `new`/enum symbols pick up mangled names.
+        Self::apply_collapse_patch(module, &self.analyzer);
         Self::ensure_mangled_layouts(module, &self.analyzer.preir)?;
         Ok(())
+    }
+
+    fn apply_collapse_patch(module: &mut SIRModule, analyzer: &Analyzer) {
+        for_each_sir_body_mut(module, |sir| {
+            Self::collapse_sir_types(sir, analyzer);
+        });
+        for_each_sir_body_mut(module, |sir| {
+            Self::patch_mangled_names(sir);
+        });
     }
 
     fn collapse_sir_types(sir: &mut SIR, analyzer: &Analyzer) {
@@ -556,14 +1007,9 @@ impl SirGen {
         expand: impl Fn(&ErrandType) -> ErrandType + Copy,
         out: &mut HashMap<Vec<String>, Vec<ErrandType>>,
     ) {
-        Self::collect_generic_ctor_call_shapes(&module.main, ctor_name, expand, out);
-        for overloads in module.functions.values() {
-            for info in overloads.values() {
-                if let Some(body) = &info.body {
-                    Self::collect_generic_ctor_call_shapes(body, ctor_name, expand, out);
-                }
-            }
-        }
+        for_each_sir_body(module, |sir| {
+            Self::collect_generic_ctor_call_shapes(sir, ctor_name, expand, out);
+        });
     }
 
     fn monomorph_generic_struct_constructors(&self, module: &mut SIRModule) -> Result<(), String> {
@@ -684,28 +1130,16 @@ impl SirGen {
 
     fn ensure_mangled_layouts(module: &mut SIRModule, preir: &PreIR) -> Result<(), String> {
         let mut mangled: HashSet<String> = HashSet::new();
-        for si in &module.main.instructions {
-            if let Some(ErrandType::Con(m)) = &si.ty {
-                if m.contains("__") {
-                    mangled.insert(m.clone());
-                }
-            }
-        }
-        Self::collect_mangled_symbols_from_sir(&module.main, &mut mangled);
-        for overloads in module.functions.values() {
-            for info in overloads.values() {
-                if let Some(body) = &info.body {
-                    for si in &body.instructions {
-                        if let Some(ErrandType::Con(m)) = &si.ty {
-                            if m.contains("__") {
-                                mangled.insert(m.clone());
-                            }
-                        }
+        for_each_sir_body(module, |sir| {
+            for si in &sir.instructions {
+                if let Some(ErrandType::Con(m)) = &si.ty {
+                    if m.contains("__") {
+                        mangled.insert(m.clone());
                     }
-                    Self::collect_mangled_symbols_from_sir(body, &mut mangled);
                 }
             }
-        }
+            Self::collect_mangled_symbols_from_sir(sir, &mut mangled);
+        });
 
         let struct_defs: Vec<StructData> = preir
             .instructions
@@ -754,486 +1188,28 @@ impl SirGen {
         }
         Ok(())
     }
+}
 
-    // ── Emission ──────────────────────────────────────────────────────────────
+// ── Module-wide SIR body iteration ───────────────────────────────────────────
 
-    /// PreIR lays out `while cond do (block)` as: `cond…`, `block` statements, the block's
-    /// `Region` node, then the `WhileLoop`. A linear scan would emit the block twice (once
-    /// while walking the parent range, again when lowering the `WhileLoop`), leaving the
-    /// `WhileLoop`'s body `Region` empty in SIR because `preir_to_sir` is already populated.
-    /// Skip the operand `Region` and its `instr_start..instr_end` range whenever we see a
-    /// control-flow instruction that owns them.
-    fn control_flow_operand_skip_indices(
-        &self,
-        start: instr_index,
-        end: instr_index,
-    ) -> HashSet<instr_index> {
-        let mut skip = HashSet::new();
-        let preir = &self.analyzer.preir;
-        for i in start..end {
-            match preir.get_instruction(i) {
-                Some(Instr::WhileLoop(d)) => Self::mark_region_body_skip(preir, d.body, &mut skip),
-                Some(Instr::ForLoop(d)) => Self::mark_region_body_skip(preir, d.body, &mut skip),
-                Some(Instr::IfStatement(d)) => {
-                    Self::mark_region_body_skip(preir, d.then_branch, &mut skip);
-                    if let Some(e) = d.else_branch {
-                        Self::mark_region_body_skip(preir, e, &mut skip);
-                    }
-                }
-                _ => {}
-            }
-        }
-        skip
-    }
-
-    fn mark_region_body_skip(preir: &PreIR, body: instr_index, skip: &mut HashSet<instr_index>) {
-        if let Some(Instr::Region(rd)) = preir.get_instruction(body) {
-            skip.insert(body);
-            for j in rd.instr_start..rd.instr_end {
-                skip.insert(j);
+fn for_each_sir_body_mut(module: &mut SIRModule, mut f: impl FnMut(&mut SIR)) {
+    f(&mut module.main);
+    for overloads in module.functions.values_mut() {
+        for info in overloads.values_mut() {
+            if let Some(ref mut body) = info.body {
+                f(body);
             }
         }
     }
+}
 
-    /// Emit SIR for a function body rooted at `root_idx`.
-    /// Resets the index map so local indices start at 0.
-    fn emit_body_sir(&mut self, root_idx: instr_index) -> Result<SIR, String> {
-        self.preir_to_sir.clear();
-        let mut sir = SIR {
-            instructions: Vec::new(),
-            return_loc: 0,
-        };
-        let local_root = self.analyze_and_emit(root_idx, &mut sir)?;
-        sir.return_loc = local_root;
-        Ok(sir)
-    }
-
-    /// Emit SIR for the main region: walk `instr_start..instr_end` in order,
-    /// skipping top-level declarations (they have their own entry points).
-    fn emit_region_sir(&mut self, region_data: &RegionData) -> Result<SIR, String> {
-        self.preir_to_sir.clear();
-        let mut sir = SIR {
-            instructions: Vec::new(),
-            return_loc: 0,
-        };
-
-        // Instructions that belong to match arm body Regions are deferred so
-        // they are emitted lazily inside their Region's SIR range. This ensures
-        // that binding variables (e.g. `x`, `y` from `Message::Move(x, y)`)
-        // have SIR indices that fall inside the arm body Region's range, which
-        // is required for the lowering pass to correctly mark them as nested.
-        let arm_owned =
-            self.collect_arm_owned_preir(region_data.instr_start, region_data.instr_end);
-        let cf_skip =
-            self.control_flow_operand_skip_indices(region_data.instr_start, region_data.instr_end);
-
-        for i in region_data.instr_start..region_data.instr_end {
-            match self.analyzer.preir.get_instruction(i) {
-                Some(Instr::FuncDecl(_))
-                | Some(Instr::StructDecl(_))
-                | Some(Instr::EnumDecl(_)) => continue,
-                _ => {}
+fn for_each_sir_body(module: &SIRModule, mut f: impl FnMut(&SIR)) {
+    f(&module.main);
+    for overloads in module.functions.values() {
+        for info in overloads.values() {
+            if let Some(ref body) = info.body {
+                f(body);
             }
-            if arm_owned.contains(&i) || cf_skip.contains(&i) {
-                continue;
-            }
-            self.analyze_and_emit(i, &mut sir)?;
-        }
-
-        sir.return_loc = self
-            .preir_to_sir
-            .get(&region_data.return_loc)
-            .copied()
-            .unwrap_or(0);
-        Ok(sir)
-    }
-
-    /// Collect all PreIR instruction indices that are "owned" by match arm body
-    /// Regions within the given PreIR range. These must not be pre-emitted in
-    /// a sequential scan; instead they must be emitted lazily inside the arm
-    /// body's `emit_region_instr` call so that their SIR indices fall within
-    /// the Region's `instr_start..instr_end` range.
-    fn collect_arm_owned_preir(
-        &self,
-        start: instr_index,
-        end: instr_index,
-    ) -> HashSet<instr_index> {
-        let mut owned = HashSet::new();
-        for i in start..end {
-            if let Some(Instr::Match(data)) = self.analyzer.preir.get_instruction(i) {
-                for arm in &data.arms {
-                    self.mark_arm_owned_preir(arm.body, &mut owned);
-                }
-            }
-        }
-        owned
-    }
-
-    /// Recursively mark `idx` and all PreIR instructions inside it as arm-owned.
-    fn mark_arm_owned_preir(&self, idx: instr_index, owned: &mut HashSet<instr_index>) {
-        if owned.contains(&idx) {
-            return;
-        }
-        owned.insert(idx);
-        match self.analyzer.preir.get_instruction(idx) {
-            Some(Instr::Region(data)) => {
-                let start = data.instr_start;
-                let end = data.instr_end;
-                for i in start..end {
-                    self.mark_arm_owned_preir(i, owned);
-                }
-            }
-            Some(Instr::Match(data)) => {
-                for arm in &data.arms {
-                    self.mark_arm_owned_preir(arm.body, owned);
-                }
-            }
-            _ => {}
-        }
-    }
-
-    /// Type the instruction at `global_idx` via `Analyzer`, emit a `SIRInstr`
-    /// with remapped local indices, and return the local index.
-    fn analyze_and_emit(
-        &mut self,
-        global_idx: instr_index,
-        sir: &mut SIR,
-    ) -> Result<instr_index, String> {
-        if let Some(&local) = self.preir_to_sir.get(&global_idx) {
-            return Ok(local);
-        }
-
-        let instr = self
-            .analyzer
-            .preir
-            .get_instruction(global_idx)
-            .cloned()
-            .ok_or_else(|| format!("invalid PreIR index: {global_idx}"))?;
-
-        // Region instructions: emit contained body first, then the Region node.
-        if let Instr::Region(ref rd) = instr {
-            return self.emit_region_instr(global_idx, rd.clone(), sir);
-        }
-
-        // Declarations nested inside a body: analyze only, don't emit into
-        // this SIR (they are independent entry points at the module level).
-        if matches!(
-            instr,
-            Instr::FuncDecl(_) | Instr::StructDecl(_) | Instr::EnumDecl(_)
-        ) {
-            let _ = self
-                .analyzer
-                .analyze_instr(global_idx)
-                .map_err(|e| format!("{e:?}"));
-            return Ok(-1);
-        }
-
-        // Track up front whether this is a var declaration with an explicit
-        // type annotation; those have to surface type errors loudly so
-        // mismatches between the annotation and the initializer (e.g.
-        // `d::Pair<Int, Int> = Pair("hello", "world")`) actually fail
-        // compilation. Errors on other instructions are swallowed because
-        // the type system has known gaps (enums-as-int coercion, raw
-        // pointer arithmetic, untyped parameters) that legitimate programs
-        // rely on.
-        let is_annotated_var_decl = matches!(
-            &instr,
-            Instr::VarDecl(data) if data.declared_type.is_some()
-        );
-
-        // Recursively emit operand instructions and remap their indices.
-        let remapped = self.remap_operands(instr, sir)?;
-
-        let analysis = self.analyzer.analyze_instr(global_idx);
-        if is_annotated_var_decl {
-            analysis.as_ref().map_err(|e| format!("{e:?}"))?;
-        }
-        let ty = analysis
-            .map(|idx| {
-                self.analyzer
-                    .collapse_apps_in_type(self.analyzer.expanded_pool_type(idx))
-            })
-            .ok();
-
-        let local_idx = sir.instructions.len() as instr_index;
-        sir.instructions.push(SIRInstr {
-            instr: remapped,
-            ty,
-        });
-        self.preir_to_sir.insert(global_idx, local_idx);
-
-        Ok(local_idx)
-    }
-
-    /// Emit the instructions contained in a `Region`, then emit the Region
-    /// node itself with adjusted local bounds.
-    fn emit_region_instr(
-        &mut self,
-        global_idx: instr_index,
-        rd: RegionData,
-        sir: &mut SIR,
-    ) -> Result<instr_index, String> {
-        let new_start = sir.instructions.len() as instr_index;
-
-        // Same deferral as `emit_region_sir`: skip instructions owned by any
-        // match arm body within this Region so they are emitted lazily at SIR
-        // indices inside the arm body Region's range.
-        let arm_owned = self.collect_arm_owned_preir(rd.instr_start, rd.instr_end);
-        let cf_skip = self.control_flow_operand_skip_indices(rd.instr_start, rd.instr_end);
-
-        for i in rd.instr_start..rd.instr_end {
-            match self.analyzer.preir.get_instruction(i) {
-                Some(Instr::FuncDecl(_))
-                | Some(Instr::StructDecl(_))
-                | Some(Instr::EnumDecl(_)) => {
-                    let _ = self.analyzer.analyze_instr(i);
-                    continue;
-                }
-                _ => {}
-            }
-            if arm_owned.contains(&i) || cf_skip.contains(&i) {
-                continue;
-            }
-            self.analyze_and_emit(i, sir)?;
-        }
-
-        let new_end = sir.instructions.len() as instr_index;
-        let new_return_loc = self
-            .preir_to_sir
-            .get(&rd.return_loc)
-            .copied()
-            .unwrap_or(new_start);
-
-        let remapped_region = Instr::Region(RegionData {
-            instr_start: new_start,
-            instr_end: new_end,
-            return_loc: new_return_loc,
-        });
-
-        let ty = self
-            .analyzer
-            .analyze_instr(global_idx)
-            .map(|idx| {
-                self.analyzer
-                    .collapse_apps_in_type(self.analyzer.expanded_pool_type(idx))
-            })
-            .ok();
-
-        let local_idx = sir.instructions.len() as instr_index;
-        sir.instructions.push(SIRInstr {
-            instr: remapped_region,
-            ty,
-        });
-        self.preir_to_sir.insert(global_idx, local_idx);
-
-        Ok(local_idx)
-    }
-
-    /// Return a new `Instr` with all operand `instr_index` values remapped from
-    /// global PreIR space to local SIR space, emitting dependencies first.
-    fn remap_operands(&mut self, instr: Instr, sir: &mut SIR) -> Result<Instr, String> {
-        match instr {
-            Instr::Literal(_)
-            | Instr::VarRef(_)
-            | Instr::StructDecl(_)
-            | Instr::EnumDecl(_)
-            | Instr::EnumVariantAccess(_) => Ok(instr),
-
-            Instr::EnumVariantConstruct(data) => {
-                let mut arg_indices = Vec::new();
-                for idx in data.arg_indices {
-                    arg_indices.push(self.analyze_and_emit(idx, sir)?);
-                }
-                Ok(Instr::EnumVariantConstruct(
-                    crate::backend::preir::EnumVariantConstructData {
-                        enum_name: data.enum_name,
-                        variant: data.variant,
-                        arg_indices,
-                    },
-                ))
-            }
-
-            Instr::Match(data) => {
-                let scrutinee = self.analyze_and_emit(data.scrutinee, sir)?;
-
-                // Obtain variant info so we can register binding variable types
-                // into global_defs before emitting each arm body.
-                let variants: Vec<_> = self
-                    .analyzer
-                    .enum_variants
-                    .get(&data.enum_name)
-                    .cloned()
-                    .unwrap_or_default();
-                let enum_tparams = self
-                    .analyzer
-                    .enum_type_params
-                    .get(&data.enum_name)
-                    .cloned()
-                    .unwrap_or_default();
-                let scrut_ty = self
-                    .analyzer
-                    .cached_type(data.scrutinee)
-                    .map(|idx| self.analyzer.expanded_pool_type(idx));
-                let mut scrut_subst: HashMap<String, ErrandType> = HashMap::new();
-                if let Some(ErrandType::App(head, args)) = &scrut_ty {
-                    if let ErrandType::Con(en) = head.as_ref() {
-                        if en == &data.enum_name && args.len() == enum_tparams.len() {
-                            for (p, a) in enum_tparams.iter().zip(args.iter()) {
-                                scrut_subst.insert(p.clone(), a.clone());
-                            }
-                        }
-                    }
-                }
-
-                let mut arms = Vec::new();
-                for arm in &data.arms {
-                    // Register binding names as typed globals so that VarRef
-                    // instructions in the arm body resolve during analysis.
-                    if !arm.bindings.is_empty() {
-                        if let Some(tag) = arm.tag {
-                            if let Some(variant_info) = variants.get(tag as usize) {
-                                for (i, binding_name) in arm.bindings.iter().enumerate() {
-                                    if let Some((_, field_type)) = variant_info.fields.get(i) {
-                                        let mut ty = type_expr_to_errand_type_with_params(
-                                            field_type,
-                                            &enum_tparams,
-                                        );
-                                        ty = self.analyzer.apply_substs_to_type(&ty, &scrut_subst);
-                                        let ty_idx = self.analyzer.pool.intern(ty);
-                                        self.analyzer
-                                            .global_defs
-                                            .insert(binding_name.clone(), ty_idx);
-                                    }
-                                }
-                            }
-                        }
-                    }
-                    let body = self.analyze_and_emit(arm.body, sir)?;
-                    arms.push(MatchArmData {
-                        tag: arm.tag,
-                        bindings: arm.bindings.clone(),
-                        body,
-                    });
-                }
-                Ok(Instr::Match(MatchData {
-                    scrutinee,
-                    enum_name: data.enum_name.clone(),
-                    arms,
-                }))
-            }
-
-            Instr::VarDecl(data) => {
-                let value = self.analyze_and_emit(data.value, sir)?;
-                Ok(Instr::VarDecl(VarDeclData {
-                    name: data.name,
-                    value,
-                    declared_type: data.declared_type.clone(),
-                }))
-            }
-
-            Instr::UnOp(data) => {
-                let operand = self.analyze_and_emit(data.operand, sir)?;
-                Ok(Instr::UnOp(UnOpPl {
-                    op: data.op,
-                    operand,
-                }))
-            }
-
-            Instr::BinOp(data) => {
-                let left = self.analyze_and_emit(data.left, sir)?;
-                let right = self.analyze_and_emit(data.right, sir)?;
-                Ok(Instr::BinOp(BinOpPl {
-                    op: data.op,
-                    left,
-                    right,
-                }))
-            }
-
-            Instr::FnCall(data) => {
-                let mut arguments = Vec::new();
-                for arg_idx in data.arguments {
-                    arguments.push(self.analyze_and_emit(arg_idx, sir)?);
-                }
-                Ok(Instr::FnCall(FnCallPl {
-                    name: data.name,
-                    arguments,
-                }))
-            }
-
-            Instr::Typeof(operand) => {
-                // Emit the operand so its analysis cache is populated, then
-                // resolve its (mangled) type name and replace this instruction
-                // with a Symbol literal carrying that name.  The operand SIR
-                // instruction may end up dead but that's fine — `getfield`
-                // and friends only consume the resulting symbol.
-                self.analyze_and_emit(operand, sir)?;
-                let ty = self
-                    .analyzer
-                    .cached_type(operand)
-                    .map(|idx| {
-                        self.analyzer
-                            .collapse_apps_in_type(self.analyzer.expanded_pool_type(idx))
-                    })
-                    .ok_or_else(|| {
-                        format!("typeof: cannot resolve type of operand %{}", operand)
-                    })?;
-                let name = errand_type_name(&ty);
-                Ok(Instr::Literal(LiteralPl::Symbol(name)))
-            }
-
-            Instr::IfStatement(data) => {
-                let condition = self.analyze_and_emit(data.condition, sir)?;
-                let then_branch = self.analyze_and_emit(data.then_branch, sir)?;
-                let else_branch = data
-                    .else_branch
-                    .map(|e| self.analyze_and_emit(e, sir))
-                    .transpose()?;
-                Ok(Instr::IfStatement(IfStatementData {
-                    condition,
-                    then_branch,
-                    else_branch,
-                }))
-            }
-
-            Instr::WhileLoop(data) => {
-                let condition = self.analyze_and_emit(data.condition, sir)?;
-                let body = self.analyze_and_emit(data.body, sir)?;
-                Ok(Instr::WhileLoop(crate::backend::preir::WhileLoopData {
-                    condition,
-                    body,
-                }))
-            }
-
-            Instr::ForLoop(data) => {
-                let range = self.analyze_and_emit(data.range, sir)?;
-                let body = self.analyze_and_emit(data.body, sir)?;
-                Ok(Instr::ForLoop(ForLoopData {
-                    iterator: data.iterator,
-                    range,
-                    body,
-                }))
-            }
-
-            Instr::Return(data) => {
-                let value = data
-                    .value
-                    .map(|v| self.analyze_and_emit(v, sir))
-                    .transpose()?;
-                Ok(Instr::Return(ReturnData { value }))
-            }
-
-            Instr::FuncDecl(data) => {
-                let body_index = self.analyze_and_emit(data.body_index, sir)?;
-                Ok(Instr::FuncDecl(FuncData {
-                    name: data.name,
-                    parameters: data.parameters,
-                    body_index,
-                    return_type: data.return_type,
-                    is_foreign: data.is_foreign,
-                }))
-            }
-
-            Instr::Region(_) => unreachable!("Region handled before remap_operands"),
         }
     }
 }
@@ -1312,23 +1288,12 @@ fn build_struct_layout_subst(
     sd: &StructData,
     subst: &HashMap<String, TypeExpression>,
 ) -> Result<SIRStructLayout, String> {
-    let mut offset = 0usize;
-    let mut fields = Vec::new();
-    for f in &sd.fields {
-        let ft = subst_type_expr(&f.field_type, subst);
-        let ty = type_expr_to_errand_type(&ft);
-        let size = errand_type_size(&ty);
-        fields.push(SIRStructField {
-            name: f.id.name.clone(),
-            ty,
-            byte_offset: offset,
-        });
-        offset += size;
-    }
-    Ok(SIRStructLayout {
-        fields,
-        total_size: offset,
-    })
+    Ok(sir_layout_struct_fields_from_types(sd.fields.iter().map(
+        |f| {
+            let ft = subst_type_expr(&f.field_type, subst);
+            (f.id.name.clone(), type_expr_to_errand_type(&ft))
+        },
+    )))
 }
 
 fn parse_mangled_enum(
@@ -1363,30 +1328,19 @@ fn build_enum_layout_subst(
         .variants
         .iter()
         .map(|v| {
-            let mut payload_offset = 0usize;
-            let fields: Vec<SIRStructField> = v
-                .fields
-                .iter()
-                .map(|(field_name, field_type)| {
+            let inner = sir_layout_struct_fields_from_types(v.fields.iter().map(
+                |(field_name, field_type)| {
                     let ft = subst_type_expr(field_type, subst);
-                    let ty = type_expr_to_errand_type(&ft);
-                    let size = errand_type_size(&ty);
-                    let f = SIRStructField {
-                        name: field_name.clone(),
-                        ty,
-                        byte_offset: payload_offset,
-                    };
-                    payload_offset += size;
-                    f
-                })
-                .collect();
-            let payload_size = payload_offset;
+                    (field_name.clone(), type_expr_to_errand_type(&ft))
+                },
+            ));
+            let payload_size = inner.total_size;
             if payload_size > max_payload {
                 max_payload = payload_size;
             }
             SIREnumVariantLayout {
                 name: v.name.clone(),
-                fields,
+                fields: inner.fields,
                 payload_size,
             }
         })
@@ -1402,6 +1356,32 @@ fn build_enum_layout_subst(
 
 // ─── Utilities ────────────────────────────────────────────────────────────────
 
+/// Field order, `byte_offset`, and `total_size` for a struct or enum variant payload.
+fn sir_layout_struct_fields_from_types(
+    field_name_ty: impl Iterator<Item = (String, ErrandType)>,
+) -> SIRStructLayout {
+    let mut offset = 0usize;
+    let fields: Vec<SIRStructField> = field_name_ty
+        .map(|(name, ty)| {
+            let size = errand_type_size(&ty);
+            let field = SIRStructField {
+                name,
+                ty,
+                byte_offset: offset,
+            };
+            offset += size;
+            field
+        })
+        .collect();
+    SIRStructLayout {
+        fields,
+        total_size: offset,
+    }
+}
+
+/// Stable mangling / dispatch key for an [`ErrandType`]. Differs from
+/// [`ErrandType`](crate::backend::worklist::ErrandType)'s `Display` output used in SIR dumps;
+/// do not use `Display` for overload keys.
 pub(crate) fn errand_type_name(ty: &ErrandType) -> String {
     match ty {
         ErrandType::Con(n) | ErrandType::Var(n) | ErrandType::ETVar(n) => n.clone(),

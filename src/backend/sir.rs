@@ -88,35 +88,13 @@ pub struct SIRModule {
 
 // ─── Formatting ──────────────────────────────────────────────────────────────
 
-// TODO: Remove this and just use the ErrandType's Display impl?
-fn errand_type_to_string(ty: &ErrandType) -> String {
-    match ty {
-        ErrandType::Var(n) | ErrandType::ETVar(n) | ErrandType::Con(n) => n.clone(),
-        ErrandType::Arrow(a, b) => format!(
-            "{} -> {}",
-            errand_type_to_string(a),
-            errand_type_to_string(b)
-        ),
-        ErrandType::Forall(v, t) => format!("∀{}. {}", v, errand_type_to_string(t)),
-        ErrandType::Product(ts) => ts
-            .iter()
-            .map(errand_type_to_string)
-            .collect::<Vec<_>>()
-            .join(" × "),
-        ErrandType::App(h, args) => {
-            let parts: Vec<String> = args.iter().map(errand_type_to_string).collect();
-            format!("{}<{}>", errand_type_to_string(h), parts.join(", "))
-        }
-    }
-}
-
 impl SIR {
     /// Format all instructions as `%N : Ty = instr` (declarations without `%N =`).
     pub fn format_all(&self) -> String {
         let mut out = String::new();
         for (i, si) in self.instructions.iter().enumerate() {
             let ty_str = match &si.ty {
-                Some(ty) => errand_type_to_string(ty),
+                Some(ty) => ty.to_string(),
                 None => "?".to_string(),
             };
             let instr_str = format!("{}", si.instr);
@@ -180,16 +158,13 @@ impl SIRModule {
                 let params_str = info
                     .params
                     .iter()
-                    .map(|(n, t)| format!("{}: {}", n, errand_type_to_string(t)))
+                    .map(|(n, t)| format!("{}: {}", n, t))
                     .collect::<Vec<_>>()
                     .join(", ");
                 let foreign_tag = if info.is_foreign { " [foreign]" } else { "" };
                 out.push_str(&format!(
                     "\n=== SIR: {}({}){}  -> {} ===\n",
-                    name,
-                    params_str,
-                    foreign_tag,
-                    errand_type_to_string(&info.return_type)
+                    name, params_str, foreign_tag, info.return_type
                 ));
                 if let Some(body) = &info.body {
                     out.push_str(&body.format_all());

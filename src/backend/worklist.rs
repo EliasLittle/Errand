@@ -1,4 +1,5 @@
 use std::collections::HashMap;
+use std::fmt::{self, Display, Formatter};
 
 use crate::backend::preir::{instr_index, Instr};
 
@@ -26,6 +27,26 @@ pub enum ErrandType {
     Product(Vec<ErrandType>),
     /// Type application: `F<T1, T2, …>` (e.g. `Option` applied to `Int`).
     App(Box<ErrandType>, Vec<ErrandType>),
+}
+
+/// Human-readable type syntax for debug / SIR dumps. For mangling keys and
+/// overload dispatch, use [`crate::backend::sir_gen::errand_type_name`] instead.
+impl Display for ErrandType {
+    fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
+        match self {
+            ErrandType::Var(n) | ErrandType::ETVar(n) | ErrandType::Con(n) => write!(f, "{n}"),
+            ErrandType::Arrow(a, b) => write!(f, "{a} -> {b}"),
+            ErrandType::Forall(v, t) => write!(f, "∀{v}. {t}"),
+            ErrandType::Product(ts) => {
+                let parts: Vec<String> = ts.iter().map(|t| t.to_string()).collect();
+                write!(f, "{}", parts.join(" × "))
+            }
+            ErrandType::App(h, args) => {
+                let parts: Vec<String> = args.iter().map(|a| a.to_string()).collect();
+                write!(f, "{}<{}>", h, parts.join(", "))
+            }
+        }
+    }
 }
 
 /// An entry in the constraint-solving worklist.
