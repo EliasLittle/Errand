@@ -10,6 +10,14 @@ pub struct PreIR {
 }
 
 impl PreIR {
+    /// Parenthesized recursive formatting for an operand index, or `%idx` if missing.
+    fn format_operand_idx(&self, idx: instr_index) -> String {
+        match self.get_instruction(idx) {
+            Some(instr) => format!("({})", self.format_instr_with_context(instr)),
+            None => format!("%{}", idx),
+        }
+    }
+
     /// Creates a new `PreIR` instance with an empty `Region` instruction as its main body.
     pub fn init() -> Self {
         PreIR {
@@ -40,13 +48,19 @@ impl PreIR {
     /// Format an instruction with context
     pub fn format_instruction(&self, index: instr_index) -> String {
         match self.get_instruction(index) {
-            Some(instr) => match instr {
-                Instr::VarDecl(data) => format!("    {}", self.format_instr_with_context(instr)),
-                Instr::FuncDecl(data) => format!("    {}", self.format_instr_with_context(instr)),
-                Instr::StructDecl(data) => format!("    {}", self.format_instr_with_context(instr)),
-                Instr::EnumDecl(data) => format!("    {}", self.format_instr_with_context(instr)),
-                _ => format!("%{} = {}", index, self.format_instr_with_context(instr)),
-            },
+            Some(instr) => {
+                if matches!(
+                    instr,
+                    Instr::VarDecl(_)
+                        | Instr::FuncDecl(_)
+                        | Instr::StructDecl(_)
+                        | Instr::EnumDecl(_)
+                ) {
+                    format!("    {}", self.format_instr_with_context(instr))
+                } else {
+                    format!("%{} = {}", index, self.format_instr_with_context(instr))
+                }
+            }
             None => format!("%{} = <invalid>", index),
         }
     }
@@ -57,10 +71,7 @@ impl PreIR {
             Instr::Literal(data) => format!("{}", data),
             Instr::VarRef(data) => format!("{}", data.name),
             Instr::UnOp(data) => {
-                let operand = match self.get_instruction(data.operand) {
-                    Some(op_instr) => format!("({})", self.format_instr_with_context(op_instr)),
-                    None => format!("%{}", data.operand),
-                };
+                let operand = self.format_operand_idx(data.operand);
                 format!("unop {:?} {}", data.op, operand)
             }
             Instr::BinOp(data) => {
@@ -70,69 +81,34 @@ impl PreIR {
                 let args: Vec<String> = data
                     .arguments
                     .iter()
-                    .map(|&arg_idx| match self.get_instruction(arg_idx) {
-                        Some(arg_instr) => {
-                            format!("({})", self.format_instr_with_context(arg_instr))
-                        }
-                        None => format!("%{}", arg_idx),
-                    })
+                    .map(|&arg_idx| self.format_operand_idx(arg_idx))
                     .collect();
                 format!("call {}({})", data.name, args.join(", "))
             }
             Instr::IfStatement(data) => {
-                let condition = match self.get_instruction(data.condition) {
-                    Some(cond_instr) => format!("({})", self.format_instr_with_context(cond_instr)),
-                    None => format!("%{}", data.condition),
-                };
-                let then_branch = match self.get_instruction(data.then_branch) {
-                    Some(then_instr) => format!("({})", self.format_instr_with_context(then_instr)),
-                    None => format!("%{}", data.then_branch),
-                };
+                let condition = self.format_operand_idx(data.condition);
+                let then_branch = self.format_operand_idx(data.then_branch);
                 if let Some(else_idx) = data.else_branch {
-                    let else_branch = match self.get_instruction(else_idx) {
-                        Some(else_instr) => {
-                            format!("({})", self.format_instr_with_context(else_instr))
-                        }
-                        None => format!("%{}", else_idx),
-                    };
+                    let else_branch = self.format_operand_idx(else_idx);
                     format!("if {} then {} else {}", condition, then_branch, else_branch)
                 } else {
                     format!("if {} then {}", condition, then_branch)
                 }
             }
             Instr::WhileLoop(data) => {
-                let condition = match self.get_instruction(data.condition) {
-                    Some(cond_instr) => format!("({})", self.format_instr_with_context(cond_instr)),
-                    None => format!("%{}", data.condition),
-                };
-                let body = match self.get_instruction(data.body) {
-                    Some(body_instr) => format!("({})", self.format_instr_with_context(body_instr)),
-                    None => format!("%{}", data.body),
-                };
+                let condition = self.format_operand_idx(data.condition);
+                let body = self.format_operand_idx(data.body);
                 format!("while {} do {}", condition, body)
             }
             Instr::ForLoop(data) => {
                 let iterator = data.iterator.clone();
-                let range = match self.get_instruction(data.range) {
-                    Some(range_instr) => {
-                        format!("({})", self.format_instr_with_context(range_instr))
-                    }
-                    None => format!("%{}", data.range),
-                };
-                let body = match self.get_instruction(data.body) {
-                    Some(body_instr) => format!("({})", self.format_instr_with_context(body_instr)),
-                    None => format!("%{}", data.body),
-                };
+                let range = self.format_operand_idx(data.range);
+                let body = self.format_operand_idx(data.body);
                 format!("for {} in {} do {}", iterator, range, body)
             }
             Instr::Return(data) => {
                 if let Some(value_idx) = data.value {
-                    let value = match self.get_instruction(value_idx) {
-                        Some(val_instr) => {
-                            format!("({})", self.format_instr_with_context(val_instr))
-                        }
-                        None => format!("%{}", value_idx),
-                    };
+                    let value = self.format_operand_idx(value_idx);
                     format!("ret_node({})", value)
                 } else {
                     format!("ret_node()")
@@ -211,8 +187,10 @@ impl PreIR {
             Instr::FuncDecl(data) => {
                 let params: Vec<String> =
                     data.parameters.iter().map(|p| p.id.name.clone()).collect();
-                let body =
-                    self.format_instr_with_context(&self.get_instruction(data.body_index).unwrap());
+                let body = match self.get_instruction(data.body_index) {
+                    Some(body_instr) => self.format_instr_with_context(body_instr),
+                    None => format!("%{} <invalid>", data.body_index),
+                };
                 // Handle multi-line body formatting - indent all lines after the first
                 let body_lines: Vec<&str> = body.lines().collect();
                 let formatted_body = if body_lines.len() > 1 {
@@ -236,10 +214,7 @@ impl PreIR {
                 format!("var {} = %{}", data.name, data.value)
             }
             Instr::Typeof(operand) => {
-                let operand_str = match self.get_instruction(*operand) {
-                    Some(op_instr) => format!("({})", self.format_instr_with_context(op_instr)),
-                    None => format!("%{}", operand),
-                };
+                let operand_str = self.format_operand_idx(*operand);
                 format!("typeof {}", operand_str)
             }
         }

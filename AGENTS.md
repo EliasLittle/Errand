@@ -36,3 +36,11 @@ each transformation it performs into the appropriate later compiler phase:
 limited to `printf` string temporaries and implicit `return` on functions; other
 desugaring lives in `preir_gen.rs` (or later phases). New features should place
 their lowering logic in the backend from the start.
+
+## Naming: clarity over brevity
+
+Prefer **readable names** over cryptic abbreviations. Do not shorten identifiers
+when the savings are a few characters and the full word (or a standard compound
+like `constructor_function_id`) reads clearly at a glance. Reserve very short
+names for well-established locals with tiny scope (e.g. loop indices) or where the
+type or API convention is universally understood.

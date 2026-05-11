@@ -32,9 +32,13 @@ These produce a value at their index (referenced as `%N`).
 | **FnCall** | `FnCallPl` | Function call |
 | **IfStatement** | `IfStatementData` | Conditional expression |
 | **WhileLoop** | `WhileLoopData` | While loop expression |
-| **ForLoop** | `ForLoopData` | For loop expression |
+| **ForLoop** | `ForLoopData` | Reserved IR shape; **not emitted** by `preir_gen` today — `for` is lowered to `WhileLoop` plus `Region` (see below) |
 | **Return** | `ReturnData` | Return from function |
 | **Region** | `RegionData` | Block of instructions (sequence) |
+| **EnumVariantAccess** | `EnumVariantData` | Unit variant reference `E::V` |
+| **EnumVariantConstruct** | `EnumVariantConstructData` | Variant construction with payload |
+| **Match** | `MatchData` | `match` on enum with tag-resolved arms |
+| **Typeof** | `instr_index` | Intrinsic: operand index; resolved during analysis / SIR |
 
 ### Declaration Instructions
 
@@ -45,6 +49,7 @@ These define names; they do not produce a value in the same way. Formatted witho
 | **VarDecl** | `VarDeclData` | Variable declaration/assignment |
 | **FuncDecl** | `FuncData` | Function definition |
 | **StructDecl** | `StructData` | Struct definition |
+| **EnumDecl** | `EnumData` | Enum definition (ordered variants → integer tags) |
 
 ---
 
@@ -112,6 +117,8 @@ These define names; they do not produce a value in the same way. Formatted witho
 | `range` | `instr_index` | Range expression (e.g. list) |
 | `body` | `instr_index` | Loop body (Region) |
 
+The current PreIR generator does **not** emit `Instr::ForLoop`. Source `for` loops are desugared in [`preir_gen.rs`](preir_gen.rs) into index variables, `length` / `get`, and a `WhileLoop` wrapped in a `Region`. The `ForLoop` variant remains for possible future use or other pipeline paths; the worklist type checker reports it as unsupported if it appears.
+
 ### Return (`ReturnData`)
 
 | Field | Type | Description |
@@ -148,21 +155,46 @@ A Region represents a block: instructions `[instr_start..instr_end)` are execute
 | Field | Type | Description |
 |-------|------|-------------|
 | `name` | `String` | Struct name |
+| `type_params` | `Vec<Id>` | Generic type parameters |
 | `fields` | `Vec<FieldDefinition>` | Fields (from AST: `id`, `field_type`) |
+
+### EnumDecl (`EnumData`)
+
+| Field | Type | Description |
+|-------|------|-------------|
+| `name` | `String` | Enum name |
+| `type_params` | `Vec<Id>` | Generic type parameters |
+| `variants` | `Vec<EnumVariantInfo>` | Variants in declaration order (index = tag) |
+
+### Match (`MatchData`)
+
+| Field | Type | Description |
+|-------|------|-------------|
+| `scrutinee` | `instr_index` | Value being matched |
+| `enum_name` | `String` | Enum for layout / tag lookup |
+| `arms` | `Vec<MatchArmData>` | Arms with optional tag and bindings |
+
+### Typeof (instruction variant)
+
+Single field: operand `instr_index`. Lowered from a `typeof(...)` call in the AST; not a normal `FnCall`.
 
 ---
 
-## Compilation Order (from `preir_gen`)
+## Compilation Order (`compile_preir` in `preir_gen`)
 
-1. **First pass**: Emit `FuncDecl` and `StructDecl` for all top-level definitions. Function bodies are compiled and their indices stored in `body_index`.
-2. **Second pass**: Compile remaining top-level expressions (main program) into a Region. The main Region's `instr_start`..`instr_end` spans these instructions; `return_loc` is the last one (or a Unit literal if empty).
+1. **Pass 1 — declarations**: For each top-level `StructDefinition` / `EnumDefinition`, emit `StructDecl` / `EnumDecl` (metadata only; no function bodies).
+2. **Pass 2 — synthetic struct constructors**: For each struct, emit the compiler-generated constructor as a `FuncDecl` (body compiled in this pass).
+3. **Pass 3 — user functions**: For each top-level `FunctionDefinition`, emit `FuncDecl` with compiled body.
+4. **Pass 4 — main program**: Compile remaining top-level expressions (everything that is not a struct, enum, or function definition) in order; wrap them in `main` as a `Region` whose `instr_start`..`instr_end` spans those instructions. `return_loc` is the last such instruction, or a fresh `Literal(Unit)` if there are none.
+
+Nested expressions (inside bodies) use the same lowering helpers; nested struct/enum definitions inside expressions also emit duplicate decl instructions into the flat pool when they appear in the AST.
 
 ---
 
 ## Pipeline Position
 
 ```
-Parse → Lower → Type inference → Typeof eval → PreIR gen → [Optional: worklist type check] → IR lowering → Codegen
+Parse → Lower → Type inference → … → PreIR gen (`compile_preir`) → [Optional: worklist type check] → SIR / lowering → Codegen
 ```
 
-PreIR is produced by `compile_preir()` from the typed AST. It is consumed by the worklist type checker (`--type-check-preir`) and can be dumped for debugging (`--dump-ir`).
+PreIR is produced by `compile_preir()` from the AST (typically after typing). It is consumed by the worklist type checker (`--type-check-preir`) and can be dumped for debugging (`--dump-ir`).
