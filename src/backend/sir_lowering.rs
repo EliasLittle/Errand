@@ -27,6 +27,7 @@ use crate::backend::structs::{
 };
 use crate::backend::worklist::ErrandType;
 use crate::frontend::ast::{BinaryOperator, UnaryOperator};
+use tracing::instrument;
 
 // ─── Core struct ─────────────────────────────────────────────────────────────
 
@@ -55,6 +56,7 @@ pub struct SIRLoweringPass {
 }
 
 impl SIRLoweringPass {
+    #[instrument(name = "sir_lowering.new", target = "sir_lowering", level = "trace")]
     pub fn new() -> Self {
         SIRLoweringPass {
             module: None,
@@ -71,11 +73,35 @@ impl SIRLoweringPass {
     }
 
     /// Compile a fully-typed `SIRModule` into native machine code.
+    #[instrument(
+        skip(sir_module),
+        fields(
+            function_names = sir_module.functions.len(),
+            struct_names = sir_module.structs.len(),
+            enum_names = sir_module.enums.len(),
+            main_instrs = sir_module.main.instructions.len()
+        ),
+        name = "sir_lowering.compile_sir_module",
+        target = "sir_lowering",
+        level = "debug"
+    )]
     pub fn compile_sir_module(sir_module: &SIRModule) -> Result<Vec<u8>, String> {
         let mut pass = SIRLoweringPass::new();
         pass.run(sir_module)
     }
 
+    #[instrument(
+        skip(self, sir_module),
+        fields(
+            function_names = sir_module.functions.len(),
+            struct_names = sir_module.structs.len(),
+            enum_names = sir_module.enums.len(),
+            main_instrs = sir_module.main.instructions.len()
+        ),
+        name = "sir_lowering.run",
+        target = "sir_lowering",
+        level = "debug"
+    )]
     fn run(&mut self, sir_module: &SIRModule) -> Result<Vec<u8>, String> {
         self.build_struct_registry(sir_module);
         self.build_enum_registry(sir_module);
@@ -122,6 +148,13 @@ impl SIRLoweringPass {
 
     // ─── Phase 1: build struct registry from SIRModule ───────────────────────
 
+    #[instrument(
+        skip(self, sir_module),
+        fields(struct_count = sir_module.structs.len()),
+        name = "sir_lowering.build_struct_registry",
+        target = "sir_lowering",
+        level = "trace"
+    )]
     fn build_struct_registry(&mut self, sir_module: &SIRModule) {
         for (name, layout) in &sir_module.structs {
             let backend_fields: Vec<BackendField> = layout
@@ -137,6 +170,13 @@ impl SIRLoweringPass {
         }
     }
 
+    #[instrument(
+        skip(self, sir_module),
+        fields(enum_count = sir_module.enums.len()),
+        name = "sir_lowering.build_enum_registry",
+        target = "sir_lowering",
+        level = "trace"
+    )]
     fn build_enum_registry(&mut self, sir_module: &SIRModule) {
         for (name, layout) in &sir_module.enums {
             self.enum_registry.insert(name.clone(), layout.clone());
@@ -159,6 +199,12 @@ impl SIRLoweringPass {
 
     // ─── Phase 2: initialise Cranelift ObjectModule ───────────────────────────
 
+    #[instrument(
+        skip(self),
+        name = "sir_lowering.initialize_module",
+        target = "sir_lowering",
+        level = "debug"
+    )]
     fn initialize_module(&mut self) -> Result<(), String> {
         let mut flag_builder = settings::builder();
         flag_builder.set("use_colocated_libcalls", "false").unwrap();
@@ -186,6 +232,12 @@ impl SIRLoweringPass {
 
     // ─── Phase 4: declare FFI builtins ───────────────────────────────────────
 
+    #[instrument(
+        skip(self),
+        name = "sir_lowering.declare_builtins",
+        target = "sir_lowering",
+        level = "debug"
+    )]
     fn declare_builtins(&mut self) -> Result<(), String> {
         let builtins: Vec<(&str, Vec<types::Type>, types::Type)> = vec![
             ("malloc", vec![types::I64], types::I64),
@@ -215,6 +267,13 @@ impl SIRLoweringPass {
 
     // ─── Phase 5: declare user-defined functions from SIRModule ─────────────
 
+    #[instrument(
+        skip(self, sir_module),
+        fields(function_names = sir_module.functions.len()),
+        name = "sir_lowering.declare_all_functions",
+        target = "sir_lowering",
+        level = "debug"
+    )]
     fn declare_all_functions(&mut self, sir_module: &SIRModule) -> Result<(), String> {
         for (name, overloads) in &sir_module.functions {
             for (type_keys, info) in overloads {
@@ -295,6 +354,17 @@ impl SIRLoweringPass {
 
     // ─── Phase 6: compile a named function body from SIR ─────────────────────
 
+    #[instrument(
+        skip(self, info),
+        fields(
+            function_name = name,
+            param_count = info.params.len(),
+            is_foreign = info.is_foreign
+        ),
+        name = "sir_lowering.compile_function",
+        target = "sir_lowering",
+        level = "debug"
+    )]
     fn compile_function(&mut self, name: &str, info: &SIRFunctionInfo) -> Result<(), String> {
         let sir = match &info.body {
             Some(s) => s.clone(),
@@ -416,6 +486,13 @@ impl SIRLoweringPass {
 
     // ─── Phase 7: compile the main body ──────────────────────────────────────
 
+    #[instrument(
+        skip(self, sir),
+        fields(instr_count = sir.instructions.len()),
+        name = "sir_lowering.compile_main",
+        target = "sir_lowering",
+        level = "debug"
+    )]
     fn compile_main(&mut self, sir: &SIR) -> Result<Function, String> {
         let func_idx = self.next_func_idx;
         self.next_func_idx += 1;
@@ -476,6 +553,12 @@ impl SIRLoweringPass {
 
     // ─── Finalise the module ──────────────────────────────────────────────────
 
+    #[instrument(
+        skip(self),
+        name = "sir_lowering.finalize_module",
+        target = "sir_lowering",
+        level = "debug"
+    )]
     fn finalize_module(&mut self) -> Result<Vec<u8>, String> {
         let module = self.module.take().ok_or("Module not initialised")?;
         let product = module.finish();
@@ -487,6 +570,13 @@ impl SIRLoweringPass {
 
     // ─── Core instruction emitter ─────────────────────────────────────────────
 
+    #[instrument(
+        skip(self, sir, builder, value_map, var_map, var_counter),
+        fields(instr_index = idx),
+        name = "sir_lowering.emit_instr",
+        target = "sir_lowering",
+        level = "trace"
+    )]
     fn emit_instr(
         &mut self,
         idx: usize,
@@ -995,6 +1085,13 @@ impl SIRLoweringPass {
 
     // ─── Emit a Region's body into the current Cranelift block ───────────────
 
+    #[instrument(
+        skip(self, sir, builder, value_map, var_map, var_counter),
+        fields(region_index = region_idx),
+        name = "sir_lowering.emit_region_body",
+        target = "sir_lowering",
+        level = "trace"
+    )]
     fn emit_region_body(
         &mut self,
         region_idx: usize,
@@ -1035,6 +1132,13 @@ impl SIRLoweringPass {
     /// Re-emit an instruction and its dependencies without caching (used for
     /// while-loop conditions so that `VarRef` always calls `use_var`, picking
     /// up any mutations made by the loop body).
+    #[instrument(
+        skip(self, sir, builder, var_map),
+        fields(instr_index = idx),
+        name = "sir_lowering.emit_fresh",
+        target = "sir_lowering",
+        level = "trace"
+    )]
     fn emit_fresh(
         &mut self,
         idx: usize,
@@ -1104,6 +1208,13 @@ impl SIRLoweringPass {
 
     // ─── Function call dispatch ───────────────────────────────────────────────
 
+    #[instrument(
+        skip(self, arg_indices, sir, builder, value_map, var_map, var_counter),
+        fields(function_name = name, arg_count = arg_indices.len()),
+        name = "sir_lowering.emit_fn_call",
+        target = "sir_lowering",
+        level = "trace"
+    )]
     fn emit_fn_call(
         &mut self,
         name: &str,
@@ -1279,6 +1390,13 @@ impl SIRLoweringPass {
 
     // ─── String/symbol literal ────────────────────────────────────────────────
 
+    #[instrument(
+        skip(self, builder),
+        fields(string_len = s.len()),
+        name = "sir_lowering.emit_string_literal",
+        target = "sir_lowering",
+        level = "trace"
+    )]
     fn emit_string_literal(
         &mut self,
         s: &str,

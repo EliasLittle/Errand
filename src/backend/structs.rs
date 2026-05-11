@@ -1,4 +1,5 @@
 use std::collections::HashMap;
+use tracing::instrument;
 
 #[derive(Debug, Clone)]
 pub struct Field {
@@ -27,6 +28,13 @@ pub enum Type {
 }
 
 impl Field {
+    #[instrument(
+        skip(ty),
+        fields(name = name, offset = offset),
+        name = "backend.structs.field_new",
+        target = "backend",
+        level = "trace"
+    )]
     pub fn new(name: &str, offset: usize, ty: Type) -> Self {
         Field {
             name: name.to_string(),
@@ -37,6 +45,13 @@ impl Field {
 }
 
 impl Struct {
+    #[instrument(
+        skip(fields),
+        fields(name = name, field_count = fields.len(), size = size),
+        name = "backend.structs.struct_new",
+        target = "backend",
+        level = "trace"
+    )]
     pub fn new(name: &str, fields: Vec<Field>, size: usize) -> Self {
         let name_to_index = fields
             .iter()
@@ -51,6 +66,13 @@ impl Struct {
         }
     }
 
+    #[instrument(
+        skip(self),
+        fields(struct_name = self.name.as_str(), field_name = name),
+        name = "backend.structs.get_field",
+        target = "backend",
+        level = "trace"
+    )]
     pub fn get_field(&self, name: &str) -> Option<&Field> {
         self.name_to_index.get(name).map(|&i| &self.fields[i])
     }

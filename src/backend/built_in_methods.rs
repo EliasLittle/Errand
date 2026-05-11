@@ -1,4 +1,3 @@
-use crate::cranelift_log;
 // built_in_methods.rs
 
 use crate::backend::structs::Struct as BackendStruct;
@@ -7,6 +6,7 @@ use cranelift_codegen::ir::{
 };
 use cranelift_frontend::FunctionBuilder;
 use cranelift_module::Module;
+use tracing::trace;
 
 pub fn emit_new(
     builder: &mut FunctionBuilder,
@@ -81,7 +81,7 @@ pub fn emit_new(
             value
         };
         // Debug print for address and offset
-        cranelift_log!(
+        trace!(
             "Storing field '{}' at struct_ptr: {:?}, offset: {}",
             field.name,
             struct_ptr,
@@ -141,7 +141,7 @@ pub fn emit_getfield(
     struct_type: &str, // The type name of the struct (needed to look up the layout)
 ) -> Result<Value, String> {
     // Look up the struct layout
-    cranelift_log!(
+    trace!(
         "Getting field: {:?} of type: {:?}",
         field_symbol,
         struct_type
@@ -154,7 +154,7 @@ pub fn emit_getfield(
             struct_type, available, struct_type
         )
     })?;
-    cranelift_log!("Struct info: {:?}", struct_info);
+    trace!("Struct info: {:?}", struct_info);
     let field = struct_info
         .fields
         .iter()
@@ -166,8 +166,8 @@ pub fn emit_getfield(
             )
         })?;
     let offset = field.offset as i32;
-    cranelift_log!("Pointer: {:?}", struct_ptr);
-    cranelift_log!("Offset: {:?}", offset);
+    trace!("Pointer: {:?}", struct_ptr);
+    trace!("Offset: {:?}", offset);
     let cranelift_type = match &field.ty {
         crate::backend::structs::Type::Int => types::I64, // or types::I32 if your Int is 32-bit
         crate::backend::structs::Type::Float => types::F64, // or types::F32 if your Float is 32-bit

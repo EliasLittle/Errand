@@ -1,4 +1,3 @@
-use crate::cranelift_log;
 use crate::frontend::ast::{
     BinaryOperator, Expression, Id, Parameter, Program, TypeExpression, UnaryOperator,
 };
@@ -15,6 +14,8 @@ use cranelift_module::{Linkage, Module, ModuleError};
 use cranelift_object::ObjectModule;
 use std::collections::HashMap;
 use std::error::Error;
+use tracing::instrument;
+use tracing::{debug, error, trace};
 
 use crate::backend::built_in_methods::{
     emit_getfield, emit_mem_load, emit_mem_store, emit_new, emit_printf,
@@ -39,6 +40,7 @@ pub struct CraneliftCompiler {
 }
 
 impl CraneliftCompiler {
+    #[instrument(name = "cranelift_compiler.new", target = "backend", level = "trace")]
     pub fn new() -> Self {
         CraneliftCompiler {
             builder_ctx: FunctionBuilderContext::new(),
@@ -53,6 +55,13 @@ impl CraneliftCompiler {
         }
     }
 
+    #[instrument(
+        skip(self, program),
+        fields(expr_count = program.expressions.len()),
+        name = "cranelift_compiler.compile_program",
+        target = "backend",
+        level = "debug"
+    )]
     pub fn compile_program(&mut self, program: &Program) -> Result<Vec<u8>, String> {
         // --- Populate struct registry for all struct definitions ---
         for expr in &program.expressions {
@@ -105,37 +114,44 @@ impl CraneliftCompiler {
         self.finalize_module()
     }
 
+    #[instrument(
+        skip(self, program),
+        fields(expr_count = program.expressions.len()),
+        name = "cranelift_compiler.generate_clif",
+        target = "backend",
+        level = "debug"
+    )]
     pub fn generate_clif(&mut self, program: &Program) -> Result<String, String> {
         // First pass: collect function definitions and create signatures
         self.collect_function_definitions(program)?;
-        cranelift_log!("Collected function definitions");
+        debug!("Collected function definitions");
 
         // Initialize the module
         self.initialize_module()?;
-        cranelift_log!("Initialized module");
+        debug!("Initialized module");
 
         // Second pass: compile all functions
         self.compile_all_functions(program)?;
-        cranelift_log!("Compiled all functions");
+        debug!("Compiled all functions");
 
         // Third pass: compile the main function
         let mut main_function = self.lower_to_clif(program)?;
-        cranelift_log!("Compiled main function");
+        debug!("Compiled main function");
 
         // Add main function to module (but don't compile to machine code)
         let _main_func_ref = match self.add_function_to_module("main", &mut main_function, &[]) {
             Ok(func_ref) => {
-                cranelift_log!("Added main function to module");
+                debug!("Added main function to module");
                 func_ref
             }
             Err(e) => {
-                cranelift_log!("=== ERROR ADDING MAIN FUNCTION TO MODULE (generate_clif) ===");
-                cranelift_log!("Error: {}", e);
-                cranelift_log!("Main function IR:");
-                cranelift_log!("{}", main_function);
-                cranelift_log!("Function name: {:?}", main_function.name);
-                cranelift_log!("Function signature: {:?}", main_function.signature);
-                cranelift_log!("=== END ERROR DETAILS ===");
+                error!(
+                    "Error adding main function to module in generate_clif: {}",
+                    e
+                );
+                debug!("Main function IR: {}", main_function);
+                debug!("Function name: {:?}", main_function.name);
+                debug!("Function signature: {:?}", main_function.signature);
                 return Err(e);
             }
         };
@@ -144,6 +160,12 @@ impl CraneliftCompiler {
         Ok(format!("{}", main_function))
     }
 
+    #[instrument(
+        skip(self),
+        name = "cranelift_compiler.initialize_module",
+        target = "backend",
+        level = "debug"
+    )]
     fn initialize_module(&mut self) -> Result<(), String> {
         // Set up the target
         let mut flag_builder = settings::builder();
@@ -176,6 +198,13 @@ impl CraneliftCompiler {
         Ok(())
     }
 
+    #[instrument(
+        skip(self, program),
+        fields(expr_count = program.expressions.len()),
+        name = "cranelift_compiler.compile_all_functions",
+        target = "backend",
+        level = "debug"
+    )]
     fn compile_all_functions(&mut self, program: &Program) -> Result<(), String> {
         // Phase 1: Declare all functions in the module (but don't define them yet)
         for expr in &program.expressions {
@@ -187,10 +216,9 @@ impl CraneliftCompiler {
                 foreign,
             } = expr
             {
-                cranelift_log!(
+                debug!(
                     "[CRANELIFT] Declaring function: {} | foreign: {}",
-                    id.name,
-                    foreign
+                    id.name, foreign
                 );
                 if *foreign {
                     self.declare_foreign_function_in_module(id, parameters, return_type_expr)?;
@@ -210,22 +238,28 @@ impl CraneliftCompiler {
                 foreign,
             } = expr
             {
-                cranelift_log!(
+                debug!(
                     "[CRANELIFT] Compiling function: {} | foreign: {}",
-                    id.name,
-                    foreign
+                    id.name, foreign
                 );
                 if *foreign {
                     continue;
                 }
-                cranelift_log!("Compiling function body: {:?}", id);
+                debug!("Compiling function body: {:?}", id);
                 self.compile_function_definition(id, parameters, body)?;
             }
         }
-        cranelift_log!("All functions defined: {:?}", self.functions);
+        debug!("All functions defined: {:?}", self.functions);
         Ok(())
     }
 
+    #[instrument(
+        skip(self, parameters, return_type_expr),
+        fields(function_name = id.name.as_str(), param_count = parameters.len()),
+        name = "cranelift_compiler.declare_function_in_module",
+        target = "backend",
+        level = "trace"
+    )]
     fn declare_function_in_module(
         &mut self,
         id: &Id,
@@ -272,14 +306,20 @@ impl CraneliftCompiler {
             .or_insert_with(HashMap::new);
         entry.insert(param_types, func_id);
 
-        cranelift_log!(
+        debug!(
             "Declared function '{}' with func_id: {:?}",
-            mangled_name,
-            func_id
+            mangled_name, func_id
         );
         Ok(())
     }
 
+    #[instrument(
+        skip(self, parameters, return_type_expr),
+        fields(function_name = id.name.as_str(), param_count = parameters.len()),
+        name = "cranelift_compiler.declare_foreign_function_in_module",
+        target = "backend",
+        level = "trace"
+    )]
     fn declare_foreign_function_in_module(
         &mut self,
         id: &Id,
@@ -324,15 +364,20 @@ impl CraneliftCompiler {
             .entry(id.name.clone())
             .or_insert_with(HashMap::new);
         entry.insert(param_types, func_id);
-        cranelift_log!(
+        debug!(
             "Declared foreign function '{}' (import symbol '{}') with func_id: {:?}",
-            mangled_name,
-            id.name,
-            func_id
+            mangled_name, id.name, func_id
         );
         Ok(())
     }
 
+    #[instrument(
+        skip(self, func, parameters),
+        fields(function_name = name, param_count = parameters.len()),
+        name = "cranelift_compiler.define_function_in_module",
+        target = "backend",
+        level = "trace"
+    )]
     fn define_function_in_module(
         &mut self,
         name: &str,
@@ -378,31 +423,41 @@ impl CraneliftCompiler {
         // Enable verbose error reporting
         ctx.set_disasm(false);
 
-        cranelift_log!(
+        debug!(
             "About to define function name: '{}' with func_id: {:?}",
-            mangled_name,
-            func_id
+            mangled_name, func_id
         );
 
         // Define the function in the module
         module.define_function(*func_id, &mut ctx).map_err(|e| {
-            cranelift_log!("!!Error: {:?}", e.source());
+            error!(
+                "Error defining function '{}': {:?}",
+                mangled_name,
+                e.source()
+            );
             format!("Failed to define function '{}': {}", mangled_name, e)
         })?;
 
-        cranelift_log!("Function defined: {}", mangled_name);
+        debug!("Function defined: {}", mangled_name);
         Ok(())
     }
 
+    #[instrument(
+        skip(self, func, parameters),
+        fields(function_name = name, param_count = parameters.len()),
+        name = "cranelift_compiler.add_function_to_module",
+        target = "backend",
+        level = "trace"
+    )]
     fn add_function_to_module(
         &mut self,
         name: &str,
         func: &mut Function,
         parameters: &[Parameter],
     ) -> Result<FuncId, String> {
-        cranelift_log!("=== ADDING FUNCTION TO MODULE ===");
-        cranelift_log!("Function name: '{}'", name);
-        cranelift_log!("Function IR name: {:?}", func.name);
+        debug!("Adding function to module");
+        debug!("Function name: '{}'", name);
+        debug!("Function IR name: {:?}", func.name);
 
         let module = self.module.as_mut().ok_or("Module not initialized")?;
 
@@ -412,7 +467,6 @@ impl CraneliftCompiler {
             let mut sig = module.make_signature();
             sig.params.push(AbiParam::new(types::I64)); // Use I64 to match other functions
             sig.returns.push(AbiParam::new(types::I64)); // Use I64 to match other functions
-                                                         // cranelift_log!("Created main signature: {:?}", sig);
             sig
         } else {
             // Get the signature from our stored signatures
@@ -421,15 +475,12 @@ impl CraneliftCompiler {
                 .get(name)
                 .ok_or_else(|| format!("No signature found for function: {}", name))?
                 .clone();
-            // cranelift_log!("Retrieved signature for '{}': {:?}", name, sig);
             sig
         };
 
-        // cranelift_log!("About to declare function '{}' in module", name);
         let func_id = module
             .declare_function(name, cranelift_module::Linkage::Export, &signature)
             .map_err(|e| format!("Failed to declare function: {}", e))?;
-        // cranelift_log!("Module returned func_id: {:?}", func_id);
 
         // Create a context for compilation
         let mut ctx = cranelift_codegen::Context::for_function(func.clone());
@@ -437,11 +488,9 @@ impl CraneliftCompiler {
         // Enable verbose error reporting
         ctx.set_disasm(false);
 
-        // cranelift_log!("About to define function name: '{}' with func_id: {:?}, func: {:?}", name, func_id, func);
-        // cranelift_log!("In context: {:?}", ctx.func);
         // Compile the function
         let define_result = module.define_function(func_id, &mut ctx).map_err(|e| {
-            cranelift_log!("!!Error: {:?}", e.source());
+            error!("Error while defining '{}': {:?}", name, e.source());
             // Try to get more detailed error information
             format!("Failed to define function '{}': {}", name, e)
         });
@@ -449,12 +498,18 @@ impl CraneliftCompiler {
             return Err(e);
         }
 
-        cranelift_log!("Function defined: {}", name);
+        debug!("Function defined: {}", name);
 
         // Return the FuncId - we'll create FuncRefs when needed in calling contexts
         Ok(func_id)
     }
 
+    #[instrument(
+        skip(self),
+        name = "cranelift_compiler.add_builtin_ffi_functions",
+        target = "backend",
+        level = "debug"
+    )]
     fn add_builtin_ffi_functions(&mut self) -> Result<(), String> {
         let module = self.module.as_mut().ok_or("Module not initialized")?;
 
@@ -603,15 +658,20 @@ impl CraneliftCompiler {
                 .map_err(|e| format!("Failed to declare FFI function '{}': {}", name, e))?;
             self.functions.insert(name.to_string(), HashMap::new()); // No overloads for this one
             self.function_signatures.insert(name.to_string(), sig);
-            cranelift_log!(
+            debug!(
                 "Added FFI function '{}' to symbol table with ID: {:?}",
-                name,
-                func_id
+                name, func_id
             );
         }
         Ok(())
     }
 
+    #[instrument(
+        skip(self),
+        name = "cranelift_compiler.finalize_module",
+        target = "backend",
+        level = "debug"
+    )]
     fn finalize_module(&mut self) -> Result<Vec<u8>, String> {
         let module = self.module.take().ok_or("Module not initialized")?;
 
@@ -625,6 +685,13 @@ impl CraneliftCompiler {
         Ok(object_bytes.to_vec())
     }
 
+    #[instrument(
+        skip(self, program),
+        fields(expr_count = program.expressions.len()),
+        name = "cranelift_compiler.collect_function_definitions",
+        target = "backend",
+        level = "trace"
+    )]
     fn collect_function_definitions(&mut self, program: &Program) -> Result<(), String> {
         for expr in &program.expressions {
             if let Expression::FunctionDefinition {
@@ -647,6 +714,13 @@ impl CraneliftCompiler {
         Ok(())
     }
 
+    #[instrument(
+        skip(self, parameters, return_type_expr),
+        fields(param_count = parameters.len()),
+        name = "cranelift_compiler.create_function_signature",
+        target = "backend",
+        level = "trace"
+    )]
     fn create_function_signature(
         &self,
         parameters: &[Parameter],
@@ -672,6 +746,12 @@ impl CraneliftCompiler {
         Ok(sig)
     }
 
+    #[instrument(
+        skip(self),
+        name = "cranelift_compiler.type_expression_to_cranelift_type",
+        target = "backend",
+        level = "trace"
+    )]
     fn type_expression_to_cranelift_type(
         &self,
         type_expr: Option<&TypeExpression>,
@@ -688,10 +768,16 @@ impl CraneliftCompiler {
         }
     }
 
+    #[instrument(
+        skip(self, program),
+        fields(expr_count = program.expressions.len()),
+        name = "cranelift_compiler.lower_to_clif",
+        target = "backend",
+        level = "debug"
+    )]
     pub fn lower_to_clif(&mut self, program: &Program) -> Result<Function, String> {
-        cranelift_log!("=== CREATING MAIN FUNCTION ===");
-        // cranelift_log!("Current next_function_id: {}", self.next_function_id);
-        cranelift_log!("Available functions: {:?}", self.functions);
+        debug!("Creating main function");
+        debug!("Available functions: {:?}", self.functions);
 
         // Create a new function
         let mut sig =
@@ -702,8 +788,7 @@ impl CraneliftCompiler {
         let mut func =
             Function::with_name_signature(UserFuncName::user(0, self.next_function_id), sig);
         self.next_function_id += 1;
-        cranelift_log!("Created main function with name: {:?}", func.name);
-        cranelift_log!("=== END MAIN FUNCTION CREATION ===\n");
+        debug!("Created main function with name: {:?}", func.name);
 
         // Create a new FunctionBuilderContext for this compilation
         let mut local_builder_ctx = FunctionBuilderContext::new();
@@ -736,6 +821,13 @@ impl CraneliftCompiler {
         Ok(func)
     }
 
+    #[instrument(
+        skip(self, parameters, body),
+        fields(function_name = id.name.as_str(), param_count = parameters.len()),
+        name = "cranelift_compiler.compile_function_definition",
+        target = "backend",
+        level = "debug"
+    )]
     fn compile_function_definition(
         &mut self,
         id: &Id,
@@ -771,9 +863,9 @@ impl CraneliftCompiler {
                 )
             })?;
 
-        cranelift_log!("=== COMPILING FUNCTION DEFINITION ===");
-        cranelift_log!("Function name: '{}'", id.name);
-        cranelift_log!("Using existing function_id: {:?}", function_id);
+        debug!("Compiling function definition");
+        debug!("Function name: '{}'", id.name);
+        debug!("Using existing function_id: {:?}", function_id);
 
         // Create a new function
         let mut func = Function::with_name_signature(
@@ -809,15 +901,12 @@ impl CraneliftCompiler {
             builder.def_var(var, param_value);
 
             param_vars.insert(param.id.name.clone(), var);
-            // cranelift_log!("Function parameter '{}' mapped to variable {:?} with value {:?}", param.id.name, var, param_value);
         }
 
         // Temporarily replace the global variables with function parameters
-        // cranelift_log!("Before replacing variables: {:?}", self.variables.keys().collect::<Vec<_>>());
         let original_variables = std::mem::replace(&mut self.variables, param_vars);
-        // cranelift_log!("After replacing variables: {:?}", self.variables.keys().collect::<Vec<_>>());
 
-        cranelift_log!("Compiling body: {:?}", body);
+        trace!("Compiling body: {:?}", body);
         // Compile the function body
         let result = self.compile_expression(&mut builder, body);
 
@@ -837,28 +926,39 @@ impl CraneliftCompiler {
         builder.finalize();
 
         // Debug: Print the function IR before adding to module
-        cranelift_log!("Function '{}' IR before module addition:", id.name);
-        cranelift_log!("{}", func);
+        debug!("Function '{}' IR before module addition:", id.name);
+        debug!("{}", func);
 
         // Define the function in the module (it's already declared)
         self.define_function_in_module(&id.name, &mut func, parameters)?;
 
-        cranelift_log!("=== FUNCTION MODULE REGISTRATION ===");
-        cranelift_log!("Function name: '{}'", id.name);
-        cranelift_log!("Function signature: {:?}", signature);
-        cranelift_log!("Function defined in module");
-        cranelift_log!("Current functions map: {:?}", self.functions);
-        cranelift_log!("=== END FUNCTION DEFINITION ===\n");
+        debug!("Function module registration complete");
+        debug!("Function name: '{}'", id.name);
+        debug!("Function signature: {:?}", signature);
+        debug!("Current functions map: {:?}", self.functions);
 
         Ok(())
     }
 
+    #[instrument(
+        skip(self, object_bytes),
+        fields(filename = filename, object_size = object_bytes.len()),
+        name = "cranelift_compiler.write_object_to_file",
+        target = "backend",
+        level = "debug"
+    )]
     pub fn write_object_to_file(&self, object_bytes: &[u8], filename: &str) -> Result<(), String> {
         std::fs::write(filename, object_bytes)
             .map_err(|e| format!("Failed to write object to file: {}", e))?;
         Ok(())
     }
 
+    #[instrument(
+        skip(self, builder, expr),
+        name = "cranelift_compiler.compile_expression",
+        target = "backend",
+        level = "trace"
+    )]
     fn compile_expression(
         &mut self,
         builder: &mut FunctionBuilder,
@@ -866,26 +966,23 @@ impl CraneliftCompiler {
     ) -> Result<Value, String> {
         match expr {
             Expression::Int(n) => {
-                // cranelift_log!("Compiling int: {:?}", n);
                 let result = builder.ins().iconst(types::I64, *n as i64);
-                // cranelift_log!("result: {:?}", result);
                 Ok(result)
             }
             Expression::Float(f) => {
                 let result = builder.ins().f64const(*f);
-                // cranelift_log!("result: {:?}", result);
                 Ok(result)
             }
             Expression::Boolean(b) => Ok(builder.ins().iconst(types::I8, *b as i64)),
             Expression::String(s) => {
-                cranelift_log!("Compiling string literal: '{}'", s);
+                trace!("Compiling string literal: '{}'", s);
 
                 // For now, let's use a simple approach - create a static string
                 // This is a temporary workaround until we fix the data object approach
 
                 let static_string = format!("{}{}", s.as_str(), '\0');
                 let static_string = static_string.as_str();
-                cranelift_log!(
+                trace!(
                     "static_string: {:?} : {:?}",
                     static_string,
                     std::any::type_name_of_val(static_string)
@@ -924,10 +1021,7 @@ impl CraneliftCompiler {
                 Ok(addr)
             }
             Expression::Identifier { id, type_expr } => {
-                // cranelift_log!("Looking up identifier: {}", id.name);
-                // cranelift_log!("Available variables: {:?}", self.variables.keys().collect::<Vec<_>>());
                 if let Some(var) = self.variables.get(&id.name) {
-                    // cranelift_log!("Found variable: {:?}", var);
                     Ok(builder.use_var(*var))
                 } else {
                     Err(format!("Undefined variable: {}", id.name))
@@ -973,7 +1067,6 @@ impl CraneliftCompiler {
 
                         match operator {
                             BinaryOperator::Add => {
-                                // cranelift_log!("Compiling add: {:?}, {:?}", lhs, rhs);
                                 // Assume I64 for now, we can add type checking later
                                 Ok(builder.ins().iadd(lhs, rhs))
                             }
@@ -1012,14 +1105,14 @@ impl CraneliftCompiler {
                 }
             }
             Expression::FunctionCall { id, arguments } => {
-                cranelift_log!("=== COMPILING FUNCTION CALL ===");
-                cranelift_log!("Function name: '{}'", id.name);
+                debug!("Compiling function call");
+                debug!("Function name: '{}'", id.name);
                 // Compile arguments
                 let mut compiled_args = Vec::new();
                 let mut arg_types = Vec::new();
                 for (i, arg) in arguments.iter().enumerate() {
                     let arg_val = self.compile_expression(builder, arg)?;
-                    cranelift_log!("Argument {}:{} compiled to: {:?}", i, arg, arg_val);
+                    trace!("Argument {}:{} compiled to: {:?}", i, arg, arg_val);
                     compiled_args.push(arg_val);
                     // Try to infer type for lookup
                     let ty = match arg {
@@ -1178,7 +1271,7 @@ impl CraneliftCompiler {
                     let arg_val = self.compile_expression(builder, &arguments[0])?;
                     return Ok(arg_val);
                 }
-                cranelift_log!("Function table: {:?}", self.functions);
+                trace!("Function table: {:?}", self.functions);
                 // Lookup user-defined overloaded functions
                 if let Some(overloads) = self.functions.get(&id.name) {
                     if let Some(func_id) = overloads.get(&arg_types) {
@@ -1237,9 +1330,7 @@ impl CraneliftCompiler {
 
                 // Compile then branch
                 builder.switch_to_block(then_block);
-                // cranelift_log!("Compiling then branch");
                 let then_val = self.compile_expression(builder, then_branch)?;
-                // cranelift_log!("Then branch compiled to: {:?}", then_val);
 
                 // Check if the last instruction is a return - if so, don't add a jump
                 let should_add_jump =
@@ -1254,21 +1345,17 @@ impl CraneliftCompiler {
                     builder
                         .ins()
                         .jump(merge_block, &[BlockArg::Value(then_val)]);
-                    // cranelift_log!("Jumped to merge block");
                 } else {
-                    // cranelift_log!("Skipping jump due to return instruction");
                 }
                 builder.seal_block(then_block);
 
                 // Compile else branch
                 builder.switch_to_block(else_block);
-                // cranelift_log!("Compiling else branch");
                 let else_val = if let Some(else_expr) = else_branch {
                     self.compile_expression(builder, else_expr)?
                 } else {
                     builder.ins().iconst(types::I64, 0)
                 };
-                // cranelift_log!("Else branch compiled to: {:?}", else_val);
 
                 // Check if the last instruction is a return - if so, don't add a jump
                 let should_add_jump =
@@ -1284,7 +1371,6 @@ impl CraneliftCompiler {
                         .ins()
                         .jump(merge_block, &[BlockArg::Value(else_val)]);
                 } else {
-                    // cranelift_log!("Skipping jump due to return instruction");
                 }
                 builder.seal_block(else_block);
 
@@ -1372,19 +1458,16 @@ impl CraneliftCompiler {
                     // When we encounter them during main expression compilation, we should skip them
                     // or return a unit value. For now, we'll return a unit value (0).
                     // This should not happen in normal flow since we skip function definitions in lower_to_clif
-                    // cranelift_log!("Warning: Foreign function definition '{}' encountered during main expression compilation", id.name);
                     Ok(builder.ins().iconst(types::I64, 0))
                 } else {
                     // Function definitions should be compiled during the "compile all functions" phase
                     // When we encounter them during main expression compilation, we should skip them
                     // or return a unit value. For now, we'll return a unit value (0).
                     // This should not happen in normal flow since we skip function definitions in lower_to_clif
-                    // cranelift_log!("Warning: Function definition '{}' encountered during main expression compilation", id.name);
                     Ok(builder.ins().iconst(types::I64, 0))
                 }
             }
             Expression::Return(expr) => {
-                // cranelift_log!("Compiling return expression: {:?}", expr);
                 let mut value = self.compile_expression(builder, expr.as_ref().unwrap())?;
                 // Patch: If the function signature expects i32, cast value to i32
                 let func_sig = &builder.func.signature;
@@ -1404,7 +1487,7 @@ impl CraneliftCompiler {
             }
             Expression::Symbol(s) => {
                 // Treat symbol as a static string pointer (like Expression::String)
-                cranelift_log!("Compiling symbol literal: ':{}'", s);
+                trace!("Compiling symbol literal: ':{}'", s);
                 let static_string = format!("{}\0", s);
                 let string_literal = static_string.as_str();
                 let module = self.module.as_mut().ok_or("Module not initialized")?;
