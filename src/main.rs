@@ -12,6 +12,7 @@ use std::path::{Path, PathBuf};
 use std::process::Command;
 use std::sync::Mutex;
 use tracing::{debug, error, info};
+use tracing_chrome::ChromeLayerBuilder;
 use tracing_subscriber::fmt::format::FmtSpan;
 use tracing_subscriber::fmt::time::SystemTime;
 use tracing_subscriber::layer::SubscriberExt;
@@ -43,6 +44,10 @@ struct Cli {
     /// Write structured tracing output (newline-delimited JSON) to this file
     #[arg(long, default_value = "errand-trace.jsonl")]
     trace_json: PathBuf,
+
+    /// Write a Chrome/Perfetto trace (open in https://ui.perfetto.dev or chrome://tracing)
+    #[arg(long, default_value = "errand-trace-chrome.json")]
+    trace_chrome: PathBuf,
 }
 
 #[derive(Copy, Clone, PartialEq, Eq, PartialOrd, Ord, ValueEnum)]
@@ -243,20 +248,26 @@ fn run_compile(cli: &Cli) -> Result<(), String> {
     Ok(())
 }
 
-fn init_tracing_json(path: &Path) {
+fn init_tracing(json_path: &Path, chrome_path: &Path) -> tracing_chrome::FlushGuard {
     let file = std::fs::OpenOptions::new()
         .create(true)
         .write(true)
         .truncate(true)
-        .open(path)
-        .unwrap_or_else(|e| panic!("failed to open trace file {}: {e}", path.display()));
+        .open(json_path)
+        .unwrap_or_else(|e| panic!("failed to open trace file {}: {e}", json_path.display()));
 
     let writer = Mutex::new(file);
 
     let filter = EnvFilter::try_from_default_env().unwrap_or_else(|_| EnvFilter::new("trace"));
 
+    let (chrome_layer, chrome_guard) = ChromeLayerBuilder::new()
+        .file(chrome_path)
+        .include_args(true)
+        .build();
+
     Registry::default()
         .with(filter)
+        .with(chrome_layer)
         .with(
             fmt::layer()
                 .json()
@@ -267,12 +278,15 @@ fn init_tracing_json(path: &Path) {
                 .with_timer(SystemTime),
         )
         .init();
+
+    chrome_guard
 }
 
 fn main() {
     let cli = Cli::parse();
-    init_tracing_json(&cli.trace_json);
+    let _chrome_trace_guard = init_tracing(&cli.trace_json, &cli.trace_chrome);
     info!(path = %cli.trace_json.display(), "JSON trace output");
+    info!(path = %cli.trace_chrome.display(), "Chrome/Perfetto trace output");
 
     if let Err(msg) = run_compile(&cli) {
         error!(%msg, "compilation failed");
