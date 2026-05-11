@@ -13,6 +13,7 @@ use crate::backend::worklist::{
     ErrandType, ErrandTypeError, Judgment, TyVarKind, TypeResult, Worklist, WorklistEntry,
 };
 use crate::frontend::ast::{BinaryOperator, Parameter, Program, UnaryOperator};
+use tracing::instrument;
 
 // ─── TypePool ────────────────────────────────────────────────────────────────
 
@@ -35,6 +36,7 @@ pub struct TypePool {
 }
 
 impl TypePool {
+    #[instrument(name = "analysis.type_pool.new", target = "analysis", level = "trace")]
     pub fn new() -> Self {
         let mut types = Vec::new();
 
@@ -61,6 +63,12 @@ impl TypePool {
     }
 
     /// Store a type in the pool and return its stable handle.
+    #[instrument(
+        skip(self, ty),
+        name = "analysis.type_pool.intern",
+        target = "analysis",
+        level = "trace"
+    )]
     pub fn intern(&mut self, ty: ErrandType) -> TypeIndex {
         let idx = TypeIndex(self.types.len() as u32);
         self.types.push(ty);
@@ -80,6 +88,12 @@ impl TypePool {
 
     /// Intern an `ErrandType` that came from outside the pool (e.g. from
     /// `errand_builtins`).  Arrow / compound types are stored recursively.
+    #[instrument(
+        skip(self, ty),
+        name = "analysis.type_pool.intern_errand_type",
+        target = "analysis",
+        level = "trace"
+    )]
     pub fn intern_errand_type(&mut self, ty: ErrandType) -> TypeIndex {
         self.intern(ty)
     }
@@ -117,6 +131,13 @@ impl Analyzer {
     ///
     /// Performs the global definition-collection pass (builtins + function
     /// placeholders + struct constructors) before returning.
+    #[instrument(
+        skip(preir, _program),
+        fields(preir_len = preir.instructions.len()),
+        name = "analysis.new",
+        target = "analysis",
+        level = "debug"
+    )]
     pub fn new(preir: PreIR, _program: &Program) -> Self {
         let mut pool = TypePool::new();
         let mut worklist = Worklist::new();
@@ -155,15 +176,34 @@ impl Analyzer {
     }
 
     /// Expand existential solutions; use when reading types after `solve()`.
+    #[instrument(
+        skip(self, ty),
+        name = "analysis.expand_type",
+        target = "analysis",
+        level = "trace"
+    )]
     pub fn expand_type(&self, ty: &ErrandType) -> ErrandType {
         self.worklist.expand_type(ty)
     }
 
+    #[instrument(
+        skip(self),
+        fields(idx = idx.0),
+        name = "analysis.expanded_pool_type",
+        target = "analysis",
+        level = "trace"
+    )]
     pub fn expanded_pool_type(&self, idx: TypeIndex) -> ErrandType {
         self.expand_type(&self.pool.to_errand_type(idx))
     }
 
     /// Turn a fully-instantiated `App(Con(Foo), …)` into `Con(Foo__…)` for codegen / mangling.
+    #[instrument(
+        skip(self, ty),
+        name = "analysis.collapse_apps_in_type",
+        target = "analysis",
+        level = "trace"
+    )]
     pub fn collapse_apps_in_type(&self, ty: ErrandType) -> ErrandType {
         let t = self.expand_type(&ty);
         match &t {
@@ -181,6 +221,13 @@ impl Analyzer {
         }
     }
 
+    #[instrument(
+        skip(head, args),
+        fields(head = %head, arg_count = args.len()),
+        name = "analysis.mangle_type_app",
+        target = "analysis",
+        level = "trace"
+    )]
     fn mangle_type_app(head: &str, args: &[ErrandType]) -> String {
         let mut s = head.to_string();
         for a in args {
@@ -190,6 +237,12 @@ impl Analyzer {
         s
     }
 
+    #[instrument(
+        skip(ty),
+        name = "analysis.mangle_type_component",
+        target = "analysis",
+        level = "trace"
+    )]
     fn mangle_type_component(ty: &ErrandType) -> String {
         match ty {
             ErrandType::Con(n) | ErrandType::Var(n) | ErrandType::ETVar(n) => n.clone(),
@@ -204,6 +257,12 @@ impl Analyzer {
         }
     }
 
+    #[instrument(
+        skip(ty),
+        name = "analysis.type_contains_etvar",
+        target = "analysis",
+        level = "trace"
+    )]
     fn type_contains_etvar(ty: &ErrandType) -> bool {
         match ty {
             ErrandType::ETVar(_) => true,
@@ -221,6 +280,13 @@ impl Analyzer {
 
     /// Populate `var_context` from function parameters, clearing any previous
     /// per-function state.  Module-level context is not touched.
+    #[instrument(
+        skip(self, parameters),
+        fields(param_count = parameters.len()),
+        name = "analysis.setup_function_context",
+        target = "analysis",
+        level = "debug"
+    )]
     pub fn setup_function_context(&mut self, parameters: &[Parameter]) {
         self.var_context.clear();
         for param in parameters {
@@ -241,6 +307,12 @@ impl Analyzer {
     /// Move all entries from `var_context` into `module_context`.
     /// Call after analyzing the main region so top-level bindings are visible
     /// inside function bodies.
+    #[instrument(
+        skip(self),
+        name = "analysis.promote_to_module",
+        target = "analysis",
+        level = "debug"
+    )]
     pub fn promote_to_module(&mut self) {
         self.module_context.extend(self.var_context.drain());
     }
@@ -252,6 +324,17 @@ impl Analyzer {
     /// `VarDecl` instructions extend `var_context` as a side-effect so that
     /// later instructions in the same region can resolve the declared names.
     /// Returns the type of the region's return location.
+    #[instrument(
+        skip(self, region),
+        fields(
+            instr_start = region.instr_start,
+            instr_end = region.instr_end,
+            return_loc = region.return_loc
+        ),
+        name = "analysis.analyze_body",
+        target = "analysis",
+        level = "debug"
+    )]
     pub fn analyze_body(&mut self, region: &RegionData) -> TypeResult<TypeIndex> {
         let mut last_ty = self.pool.unit;
         for i in region.instr_start..region.instr_end {
@@ -272,6 +355,13 @@ impl Analyzer {
     }
 
     /// Type an instruction by index.  Results are memoized.
+    #[instrument(
+        skip(self),
+        fields(idx),
+        name = "analysis.analyze_instr",
+        target = "analysis",
+        level = "trace"
+    )]
     pub fn analyze_instr(&mut self, idx: instr_index) -> TypeResult<TypeIndex> {
         if let Some(&cached) = self.analysis_cache.get(&idx) {
             return Ok(cached);
@@ -292,12 +382,26 @@ impl Analyzer {
 
     /// Look up the cached `TypeIndex` for an already-analyzed instruction, or
     /// return the pool's `unit` handle if not yet analyzed.
+    #[instrument(
+        skip(self),
+        fields(idx),
+        name = "analysis.cached_type",
+        target = "analysis",
+        level = "trace"
+    )]
     pub fn cached_type(&self, idx: instr_index) -> Option<TypeIndex> {
         self.analysis_cache.get(&idx).copied()
     }
 
     // ── Core dispatch ─────────────────────────────────────────────────────────
 
+    #[instrument(
+        skip(self, instr),
+        fields(instr_kind = fmt_instr(instr)),
+        name = "analysis.analyze_instr_inner",
+        target = "analysis",
+        level = "trace"
+    )]
     fn analyze_instr_inner(&mut self, instr: &Instr) -> TypeResult<TypeIndex> {
         match instr {
             Instr::Literal(lit) => Ok(self.infer_literal(lit)),
@@ -329,6 +433,12 @@ impl Analyzer {
 
     // ── Per-instruction analysis arms ─────────────────────────────────────────
 
+    #[instrument(
+        skip(self, lit),
+        name = "analysis.infer_literal",
+        target = "analysis",
+        level = "trace"
+    )]
     fn infer_literal(&self, lit: &LiteralPl) -> TypeIndex {
         match lit {
             LiteralPl::Int(_) => self.pool.int,
@@ -340,6 +450,13 @@ impl Analyzer {
         }
     }
 
+    #[instrument(
+        skip(self, data),
+        fields(name = %data.name),
+        name = "analysis.analyze_var_ref",
+        target = "analysis",
+        level = "trace"
+    )]
     fn analyze_var_ref(&mut self, data: &VarRefData) -> TypeResult<TypeIndex> {
         if let Some(&ty) = self.var_context.get(&data.name) {
             return Ok(ty);
@@ -356,6 +473,13 @@ impl Analyzer {
     /// Type a unit enum variant access, e.g. `Direction::North`.
     ///
     /// Validates that the enum and variant both exist, then returns `Con(enum_name)`.
+    #[instrument(
+        skip(self, data),
+        fields(enum_name = %data.enum_name, variant = %data.variant),
+        name = "analysis.analyze_enum_variant_access",
+        target = "analysis",
+        level = "trace"
+    )]
     fn analyze_enum_variant_access(&mut self, data: &EnumVariantData) -> TypeResult<TypeIndex> {
         let variants = self
             .enum_variants
@@ -394,6 +518,17 @@ impl Analyzer {
     ///
     /// Validates enum name, variant name, and argument count.
     /// Returns `Con(enum_name)` — the enum's own type.
+    #[instrument(
+        skip(self, data),
+        fields(
+            enum_name = %data.enum_name,
+            variant = %data.variant,
+            arg_count = data.arg_indices.len()
+        ),
+        name = "analysis.analyze_enum_variant_construct",
+        target = "analysis",
+        level = "trace"
+    )]
     fn analyze_enum_variant_construct(
         &mut self,
         data: &EnumVariantConstructData,
@@ -506,6 +641,13 @@ impl Analyzer {
     /// For each arm that has binding variables, temporarily registers the binding
     /// names with the corresponding field types from `enum_variants` so that
     /// `VarRef` instructions in the arm body can resolve correctly.
+    #[instrument(
+        skip(self, data),
+        fields(enum_name = %data.enum_name, arm_count = data.arms.len()),
+        name = "analysis.analyze_match",
+        target = "analysis",
+        level = "trace"
+    )]
     fn analyze_match(&mut self, data: &MatchData) -> TypeResult<TypeIndex> {
         let scrut_idx = self.analyze_instr(data.scrutinee)?;
         let scrut_ty = self.expanded_pool_type(scrut_idx);
@@ -557,6 +699,12 @@ impl Analyzer {
         Ok(last_ty)
     }
 
+    #[instrument(
+        skip(self, data),
+        name = "analysis.analyze_binop",
+        target = "analysis",
+        level = "trace"
+    )]
     fn analyze_binop(&mut self, data: &BinOpPl) -> TypeResult<TypeIndex> {
         let left_ty = self.analyze_instr(data.left)?;
         let right_ty = self.analyze_instr(data.right)?;
@@ -575,6 +723,12 @@ impl Analyzer {
         Ok(result)
     }
 
+    #[instrument(
+        skip(self, data),
+        name = "analysis.analyze_unop",
+        target = "analysis",
+        level = "trace"
+    )]
     fn analyze_unop(&mut self, data: &UnOpPl) -> TypeResult<TypeIndex> {
         let operand_ty = self.analyze_instr(data.operand)?;
         let (expected, result) = self.unop_signature(&data.op);
@@ -587,6 +741,13 @@ impl Analyzer {
         Ok(result)
     }
 
+    #[instrument(
+        skip(self, data),
+        fields(name = %data.name, arg_count = data.arguments.len()),
+        name = "analysis.analyze_call",
+        target = "analysis",
+        level = "trace"
+    )]
     fn analyze_call(&mut self, data: &FnCallPl) -> TypeResult<TypeIndex> {
         let func_ty_idx = self
             .global_defs
@@ -637,6 +798,12 @@ impl Analyzer {
         Ok(result_idx)
     }
 
+    #[instrument(
+        skip(self, data),
+        name = "analysis.analyze_if",
+        target = "analysis",
+        level = "trace"
+    )]
     fn analyze_if(&mut self, data: &IfStatementData) -> TypeResult<TypeIndex> {
         let cond_ty = self.analyze_instr(data.condition)?;
         self.worklist.push(WorklistEntry::Judgment(Judgment::Sub {
@@ -657,6 +824,12 @@ impl Analyzer {
         Ok(then_ty)
     }
 
+    #[instrument(
+        skip(self, data),
+        name = "analysis.analyze_while",
+        target = "analysis",
+        level = "trace"
+    )]
     fn analyze_while(&mut self, data: &WhileLoopData) -> TypeResult<TypeIndex> {
         let cond_ty = self.analyze_instr(data.condition)?;
         self.worklist.push(WorklistEntry::Judgment(Judgment::Sub {
@@ -667,6 +840,12 @@ impl Analyzer {
         Ok(self.pool.unit)
     }
 
+    #[instrument(
+        skip(self, data),
+        name = "analysis.analyze_return",
+        target = "analysis",
+        level = "trace"
+    )]
     fn analyze_return(&mut self, data: &ReturnData) -> TypeResult<TypeIndex> {
         match data.value {
             Some(idx) => self.analyze_instr(idx),
@@ -674,6 +853,17 @@ impl Analyzer {
         }
     }
 
+    #[instrument(
+        skip(self, data),
+        fields(
+            instr_start = data.instr_start,
+            instr_end = data.instr_end,
+            return_loc = data.return_loc
+        ),
+        name = "analysis.analyze_region_instr",
+        target = "analysis",
+        level = "trace"
+    )]
     fn analyze_region_instr(&mut self, data: &RegionData) -> TypeResult<TypeIndex> {
         let mut last_ty = self.pool.unit;
         for i in data.instr_start..data.instr_end {
@@ -693,6 +883,13 @@ impl Analyzer {
         Ok(last_ty)
     }
 
+    #[instrument(
+        skip(self, data),
+        fields(name = %data.name),
+        name = "analysis.analyze_var_decl",
+        target = "analysis",
+        level = "trace"
+    )]
     fn analyze_var_decl(&mut self, data: &VarDeclData) -> TypeResult<TypeIndex> {
         let value_ty = self.analyze_instr(data.value)?;
         // When the variable has an explicit type annotation, the annotation is
@@ -728,6 +925,13 @@ impl Analyzer {
         Ok(self.pool.unit)
     }
 
+    #[instrument(
+        skip(self, data),
+        fields(name = %data.name, is_foreign = data.is_foreign),
+        name = "analysis.analyze_func_decl",
+        target = "analysis",
+        level = "trace"
+    )]
     fn analyze_func_decl(&mut self, data: &FuncData) -> TypeResult<TypeIndex> {
         let body_ty = self.analyze_instr(data.body_index)?;
         let func_ty = self.build_function_type(&data.parameters, body_ty);
@@ -758,6 +962,12 @@ impl Analyzer {
     // ── Type signatures for operators ─────────────────────────────────────────
 
     /// Returns `(expected_left, expected_right, result)` as `TypeIndex` triples.
+    #[instrument(
+        skip(self, op),
+        name = "analysis.binop_signature",
+        target = "analysis",
+        level = "trace"
+    )]
     fn binop_signature(&mut self, op: &BinaryOperator) -> (TypeIndex, TypeIndex, TypeIndex) {
         match op {
             BinaryOperator::Add
@@ -790,6 +1000,12 @@ impl Analyzer {
     }
 
     /// Returns `(expected_operand, result)` as `TypeIndex` pairs.
+    #[instrument(
+        skip(self, op),
+        name = "analysis.unop_signature",
+        target = "analysis",
+        level = "trace"
+    )]
     fn unop_signature(&mut self, op: &UnaryOperator) -> (TypeIndex, TypeIndex) {
         match op {
             UnaryOperator::Negate => (self.pool.int, self.pool.int),
@@ -799,6 +1015,13 @@ impl Analyzer {
 
     // ── Function type construction ────────────────────────────────────────────
 
+    #[instrument(
+        skip(self, params),
+        fields(param_count = params.len(), return_idx = return_ty.0),
+        name = "analysis.build_function_type",
+        target = "analysis",
+        level = "trace"
+    )]
     fn build_function_type(&mut self, params: &[Parameter], return_ty: TypeIndex) -> ErrandType {
         params
             .iter()
@@ -818,10 +1041,22 @@ impl Analyzer {
     /// callers (e.g. `SirGen` after walking the main region) can ensure
     /// module-level constraints are checked, since the per-`Region`
     /// `solve()` only fires when an `Instr::Region` node is analyzed.
+    #[instrument(
+        skip(self),
+        name = "analysis.solve_pending",
+        target = "analysis",
+        level = "debug"
+    )]
     pub fn solve_pending(&mut self) -> TypeResult<()> {
         self.solve()
     }
 
+    #[instrument(
+        skip(self),
+        name = "analysis.solve",
+        target = "analysis",
+        level = "trace"
+    )]
     fn solve(&mut self) -> TypeResult<()> {
         while let Some(entry) = self.worklist.pop() {
             match entry {
@@ -838,6 +1073,12 @@ impl Analyzer {
     /// declaration's subtyping check, without surfacing pre-existing
     /// module-level type errors that the codebase still tolerates (e.g.
     /// enum-as-int arithmetic).
+    #[instrument(
+        skip(self),
+        name = "analysis.drain_silently",
+        target = "analysis",
+        level = "trace"
+    )]
     fn drain_silently(&mut self) {
         while let Some(entry) = self.worklist.pop() {
             match entry {
@@ -849,6 +1090,12 @@ impl Analyzer {
         }
     }
 
+    #[instrument(
+        skip(self, j),
+        name = "analysis.solve_judgment",
+        target = "analysis",
+        level = "trace"
+    )]
     fn solve_judgment(&mut self, j: Judgment) -> TypeResult<()> {
         match j {
             Judgment::Sub { left, right } => self.solve_subtype(left, right),
@@ -862,6 +1109,13 @@ impl Analyzer {
         }
     }
 
+    #[instrument(
+        skip(self, func_ty, result_ty),
+        fields(arg_idx),
+        name = "analysis.solve_inf_app",
+        target = "analysis",
+        level = "trace"
+    )]
     fn solve_inf_app(
         &mut self,
         func_ty: ErrandType,
@@ -921,6 +1175,12 @@ impl Analyzer {
         }
     }
 
+    #[instrument(
+        skip(self, left, right),
+        name = "analysis.solve_subtype",
+        target = "analysis",
+        level = "trace"
+    )]
     fn solve_subtype(&mut self, left: ErrandType, right: ErrandType) -> TypeResult<()> {
         // Substitute any already-solved existentials on both sides before
         // making subtyping decisions. Without this, a constraint like
@@ -1021,6 +1281,13 @@ impl Analyzer {
         }
     }
 
+    #[instrument(
+        skip(self, instr, ty),
+        fields(instr_kind = fmt_instr(&instr)),
+        name = "analysis.solve_inference",
+        target = "analysis",
+        level = "trace"
+    )]
     fn solve_inference(&mut self, instr: Instr, ty: ErrandType) -> TypeResult<()> {
         self.trace
             .push(format!("Inf {} ⊢ {}", fmt_instr(&instr), fmt_ty(&ty)));
@@ -1111,6 +1378,13 @@ impl Analyzer {
         }
     }
 
+    #[instrument(
+        skip(self, instr, ty),
+        fields(instr_kind = fmt_instr(&instr)),
+        name = "analysis.solve_checking",
+        target = "analysis",
+        level = "trace"
+    )]
     fn solve_checking(&mut self, instr: Instr, ty: ErrandType) -> TypeResult<()> {
         self.trace
             .push(format!("Chk {} ⇐ {}", fmt_instr(&instr), fmt_ty(&ty)));
@@ -1143,6 +1417,13 @@ impl Analyzer {
 
     // ── Instantiation ─────────────────────────────────────────────────────────
 
+    #[instrument(
+        skip(self, ty),
+        fields(var = %var),
+        name = "analysis.instantiate_left",
+        target = "analysis",
+        level = "trace"
+    )]
     fn instantiate_left(&mut self, var: &str, ty: &ErrandType) -> TypeResult<()> {
         match ty {
             ErrandType::ETVar(b) if self.worklist.before(var, b) => {
@@ -1224,6 +1505,13 @@ impl Analyzer {
         }
     }
 
+    #[instrument(
+        skip(self, ty),
+        fields(var = %var),
+        name = "analysis.instantiate_right",
+        target = "analysis",
+        level = "trace"
+    )]
     fn instantiate_right(&mut self, ty: &ErrandType, var: &str) -> TypeResult<()> {
         match ty {
             ErrandType::ETVar(a) if self.worklist.before(var, a) => {
@@ -1309,6 +1597,13 @@ impl Analyzer {
 
     // ── Utilities ─────────────────────────────────────────────────────────────
 
+    #[instrument(
+        skip(self, ty),
+        fields(var = %var),
+        name = "analysis.occurs_check",
+        target = "analysis",
+        level = "trace"
+    )]
     fn occurs_check(&self, var: &str, ty: &ErrandType) -> bool {
         match ty {
             ErrandType::ETVar(n) | ErrandType::Var(n) => n == var,
@@ -1322,6 +1617,12 @@ impl Analyzer {
         }
     }
 
+    #[instrument(
+        skip(self, ty),
+        name = "analysis.is_monotype",
+        target = "analysis",
+        level = "trace"
+    )]
     fn is_monotype(&self, ty: &ErrandType) -> bool {
         match ty {
             ErrandType::Var(_) | ErrandType::ETVar(_) | ErrandType::Con(_) => true,
@@ -1335,6 +1636,12 @@ impl Analyzer {
     }
 
     /// Peel top-level `∀` into fresh existentials (DK instantiation for constructors).
+    #[instrument(
+        skip(self, ctor_ty),
+        name = "analysis.instantiate_constructor_type",
+        target = "analysis",
+        level = "trace"
+    )]
     fn instantiate_constructor_type(&mut self, ctor_ty: &ErrandType) -> TypeResult<ErrandType> {
         let mut subs: HashMap<String, ErrandType> = HashMap::new();
         let mut cur = ctor_ty.clone();
@@ -1386,6 +1693,12 @@ impl Analyzer {
         self.apply_substs_to_type(ty, map)
     }
 
+    #[instrument(
+        skip(self),
+        name = "analysis.get_trace",
+        target = "analysis",
+        level = "trace"
+    )]
     pub fn get_trace(&self) -> &[String] {
         &self.trace
     }
@@ -1394,6 +1707,13 @@ impl Analyzer {
 
     /// Pre-populate the `global_defs` table with builtins, function placeholders,
     /// and struct constructor arrow types — before any per-instruction analysis.
+    #[instrument(
+        skip(preir, pool, worklist),
+        fields(preir_len = preir.instructions.len()),
+        name = "analysis.collect_global_defs",
+        target = "analysis",
+        level = "debug"
+    )]
     fn collect_global_defs(
         preir: &PreIR,
         pool: &mut TypePool,
