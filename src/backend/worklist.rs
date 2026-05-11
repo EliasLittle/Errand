@@ -1,6 +1,8 @@
 use std::collections::HashMap;
 use std::fmt::{self, Display, Formatter};
 
+use tracing::instrument;
+
 use crate::backend::preir::{instr_index, Instr};
 
 /// Type inference for Errand's PreIR using the DK Worklist Algorithm.
@@ -96,12 +98,14 @@ pub struct Worklist {
 }
 
 impl Default for Worklist {
+    #[instrument(name = "worklist.default", target = "worklist", level = "trace")]
     fn default() -> Self {
         Self::new()
     }
 }
 
 impl Worklist {
+    #[instrument(name = "worklist.new", target = "worklist", level = "trace")]
     pub fn new() -> Self {
         Worklist {
             entries: Vec::new(),
@@ -111,6 +115,12 @@ impl Worklist {
     }
 
     /// Substitute solved existential variables (one level; call in a loop for fixpoint).
+    #[instrument(
+        skip(self, ty),
+        name = "worklist.expand_type_shallow",
+        target = "worklist",
+        level = "trace"
+    )]
     pub fn expand_type_shallow(&self, ty: &ErrandType) -> ErrandType {
         match ty {
             ErrandType::ETVar(n) => self
@@ -137,6 +147,12 @@ impl Worklist {
     }
 
     /// Expand evar bindings until fixpoint.
+    #[instrument(
+        skip(self, ty),
+        name = "worklist.expand_type",
+        target = "worklist",
+        level = "trace"
+    )]
     pub fn expand_type(&self, ty: &ErrandType) -> ErrandType {
         let mut cur = ty.clone();
         for _ in 0..64 {
@@ -149,27 +165,52 @@ impl Worklist {
         cur
     }
 
+    #[instrument(
+        skip(self),
+        name = "worklist.fresh_var",
+        target = "worklist",
+        level = "trace"
+    )]
     pub fn fresh_var(&mut self) -> TyVar {
         let v = format!("α{}", self.next_var);
         self.next_var += 1;
         v
     }
 
+    #[instrument(
+        skip(self),
+        name = "worklist.fresh_evar",
+        target = "worklist",
+        level = "trace"
+    )]
     pub fn fresh_evar(&mut self) -> TyVar {
         let v = format!("^α{}", self.next_var);
         self.next_var += 1;
         v
     }
 
+    #[instrument(
+        skip(self, entry),
+        name = "worklist.push",
+        target = "worklist",
+        level = "trace"
+    )]
     pub fn push(&mut self, entry: WorklistEntry) {
         self.entries.push(entry);
     }
 
+    #[instrument(
+        skip(self),
+        name = "worklist.pop",
+        target = "worklist",
+        level = "trace"
+    )]
     pub fn pop(&mut self) -> Option<WorklistEntry> {
         self.entries.pop()
     }
 
     /// Find the type of a term variable in the worklist (right-to-left search).
+    #[instrument(skip(self), fields(name = %name), name = "worklist.find_var", target = "worklist", level = "trace")]
     pub fn find_var(&self, name: &str) -> Option<&ErrandType> {
         self.entries.iter().rev().find_map(|e| {
             if let WorklistEntry::Var(n, ty) = e {
@@ -185,6 +226,7 @@ impl Worklist {
     }
 
     /// Solve an existential variable by recording its solution in the worklist.
+    #[instrument(skip(self, ty), fields(name = %name), name = "worklist.solve_evar", target = "worklist", level = "trace")]
     pub fn solve_evar(&mut self, name: &str, ty: ErrandType) -> Result<(), ErrandTypeError> {
         for entry in &mut self.entries {
             if let WorklistEntry::TVar(var_name, kind) = entry {
@@ -206,6 +248,7 @@ impl Worklist {
 
     /// Returns true if type variable `a` appears before `b` in the worklist
     /// (earlier index = declared earlier).
+    #[instrument(skip(self), fields(a = %a, b = %b), name = "worklist.before", target = "worklist", level = "trace")]
     pub fn before(&self, a: &str, b: &str) -> bool {
         let mut pos_a = None;
         let mut pos_b = None;

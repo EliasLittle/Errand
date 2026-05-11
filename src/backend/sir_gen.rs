@@ -17,6 +17,7 @@ use crate::backend::sir::{
 };
 use crate::backend::worklist::ErrandType;
 use crate::frontend::ast::{GenericArg, Id, Parameter, Program, TypeExpression};
+use tracing::instrument;
 
 /// Generates SIR from PreIR in a single interleaved pass: each instruction is
 /// typed via `Analyzer` and emitted simultaneously.
@@ -30,6 +31,12 @@ pub struct SirGen {
 impl SirGen {
     // ── Public API ─────────────────────────────────────────────────────────────
 
+    #[instrument(
+        skip(analyzer),
+        name = "sir_gen.new",
+        target = "sir_gen",
+        level = "trace"
+    )]
     fn new(analyzer: Analyzer) -> Self {
         SirGen {
             analyzer,
@@ -38,6 +45,13 @@ impl SirGen {
     }
 
     /// Build a complete `SIRModule` from a `PreIR`.
+    #[instrument(
+        skip(preir, program),
+        fields(preir_len = preir.instructions.len()),
+        name = "sir_gen.emit_sir_module",
+        target = "sir_gen",
+        level = "debug"
+    )]
     pub fn emit_sir_module(preir: PreIR, program: &Program) -> Result<SIRModule, String> {
         let analyzer = Analyzer::new(preir, program);
         let mut gen = SirGen::new(analyzer);
@@ -216,6 +230,13 @@ impl SirGen {
 
     /// Emit SIR for a function body rooted at `root_idx`.
     /// Resets the index map so local indices start at 0.
+    #[instrument(
+        skip(self),
+        fields(root_idx),
+        name = "sir_gen.emit_body_sir",
+        target = "sir_gen",
+        level = "trace"
+    )]
     fn emit_body_sir(&mut self, root_idx: instr_index) -> Result<SIR, String> {
         self.preir_to_sir.clear();
         let mut sir = SIR {
@@ -229,6 +250,17 @@ impl SirGen {
 
     /// Emit SIR for the main region: walk `instr_start..instr_end` in order,
     /// skipping top-level declarations (they have their own entry points).
+    #[instrument(
+        skip(self, region_data),
+        fields(
+            instr_start = region_data.instr_start,
+            instr_end = region_data.instr_end,
+            return_loc = region_data.return_loc
+        ),
+        name = "sir_gen.emit_region_sir",
+        target = "sir_gen",
+        level = "trace"
+    )]
     fn emit_region_sir(&mut self, region_data: &RegionData) -> Result<SIR, String> {
         self.preir_to_sir.clear();
         let mut sir = SIR {
@@ -258,6 +290,13 @@ impl SirGen {
 
     /// Emit the instructions contained in a `Region`, then emit the Region
     /// node itself with adjusted local bounds.
+    #[instrument(
+        skip(self, rd, sir),
+        fields(global_idx, instr_start = rd.instr_start, instr_end = rd.instr_end),
+        name = "sir_gen.emit_region_instr",
+        target = "sir_gen",
+        level = "trace"
+    )]
     fn emit_region_instr(
         &mut self,
         global_idx: instr_index,
@@ -305,6 +344,13 @@ impl SirGen {
     /// a sequential scan; instead they must be emitted lazily inside the arm
     /// body's `emit_region_instr` call so that their SIR indices fall within
     /// the Region's `instr_start..instr_end` range.
+    #[instrument(
+        skip(self),
+        fields(start, end),
+        name = "sir_gen.collect_arm_owned_preir",
+        target = "sir_gen",
+        level = "trace"
+    )]
     fn collect_arm_owned_preir(
         &self,
         start: instr_index,
@@ -322,6 +368,13 @@ impl SirGen {
     }
 
     /// Recursively mark `idx` and all PreIR instructions inside it as arm-owned.
+    #[instrument(
+        skip(self, owned),
+        fields(idx),
+        name = "sir_gen.mark_arm_owned_preir",
+        target = "sir_gen",
+        level = "trace"
+    )]
     fn mark_arm_owned_preir(&self, idx: instr_index, owned: &mut HashSet<instr_index>) {
         if owned.contains(&idx) {
             return;
@@ -350,6 +403,13 @@ impl SirGen {
     /// `WhileLoop`'s body `Region` empty in SIR because `preir_to_sir` is already populated.
     /// Skip the operand `Region` and its `instr_start..instr_end` range whenever we see a
     /// control-flow instruction that owns them.
+    #[instrument(
+        skip(self),
+        fields(start, end),
+        name = "sir_gen.control_flow_operand_skip_indices",
+        target = "sir_gen",
+        level = "trace"
+    )]
     fn control_flow_operand_skip_indices(
         &self,
         start: instr_index,
@@ -373,6 +433,13 @@ impl SirGen {
         skip
     }
 
+    #[instrument(
+        skip(preir, skip),
+        fields(body),
+        name = "sir_gen.mark_region_body_skip",
+        target = "sir_gen",
+        level = "trace"
+    )]
     fn mark_region_body_skip(preir: &PreIR, body: instr_index, skip: &mut HashSet<instr_index>) {
         if let Some(Instr::Region(rd)) = preir.get_instruction(body) {
             skip.insert(body);
@@ -385,6 +452,13 @@ impl SirGen {
     /// Walk `instr_start..instr_end` in PreIR order for region emission: defer match-arm-owned
     /// instructions and control-flow-owned region bodies, optionally skip or analyze nested
     /// module-level declarations.
+    #[instrument(
+        skip(self, sir),
+        fields(instr_start, instr_end, nested_decls),
+        name = "sir_gen.emit_region_instruction_range",
+        target = "sir_gen",
+        level = "trace"
+    )]
     fn emit_region_instruction_range(
         &mut self,
         instr_start: instr_index,
@@ -416,6 +490,13 @@ impl SirGen {
 
     /// Type the instruction at `global_idx` via `Analyzer`, emit a `SIRInstr`
     /// with remapped local indices, and return the local index.
+    #[instrument(
+        skip(self, sir),
+        fields(global_idx),
+        name = "sir_gen.analyze_and_emit",
+        target = "sir_gen",
+        level = "trace"
+    )]
     fn analyze_and_emit(
         &mut self,
         global_idx: instr_index,
@@ -491,6 +572,12 @@ impl SirGen {
 
     /// Return a new `Instr` with all operand `instr_index` values remapped from
     /// global PreIR space to local SIR space, emitting dependencies first.
+    #[instrument(
+        skip(self, instr, sir),
+        name = "sir_gen.remap_operands",
+        target = "sir_gen",
+        level = "trace"
+    )]
     fn remap_operands(&mut self, instr: Instr, sir: &mut SIR) -> Result<Instr, String> {
         match instr {
             Instr::Literal(_)
@@ -514,6 +601,13 @@ impl SirGen {
         }
     }
 
+    #[instrument(
+        skip(self, data, sir),
+        fields(enum_name = %data.enum_name, variant = %data.variant),
+        name = "sir_gen.remap_enum_variant_construct",
+        target = "sir_gen",
+        level = "trace"
+    )]
     fn remap_enum_variant_construct(
         &mut self,
         data: EnumVariantConstructData,
@@ -530,6 +624,13 @@ impl SirGen {
         }))
     }
 
+    #[instrument(
+        skip(self, data, sir),
+        fields(enum_name = %data.enum_name),
+        name = "sir_gen.remap_match_instr",
+        target = "sir_gen",
+        level = "trace"
+    )]
     fn remap_match_instr(&mut self, data: MatchData, sir: &mut SIR) -> Result<Instr, String> {
         let scrutinee = self.analyze_and_emit(data.scrutinee, sir)?;
 
@@ -597,6 +698,13 @@ impl SirGen {
         }))
     }
 
+    #[instrument(
+        skip(self, data, sir),
+        fields(name = %data.name),
+        name = "sir_gen.remap_var_decl",
+        target = "sir_gen",
+        level = "trace"
+    )]
     fn remap_var_decl(&mut self, data: VarDeclData, sir: &mut SIR) -> Result<Instr, String> {
         let value = self.analyze_and_emit(data.value, sir)?;
         Ok(Instr::VarDecl(VarDeclData {
@@ -606,6 +714,12 @@ impl SirGen {
         }))
     }
 
+    #[instrument(
+        skip(self, data, sir),
+        name = "sir_gen.remap_un_op",
+        target = "sir_gen",
+        level = "trace"
+    )]
     fn remap_un_op(&mut self, data: UnOpPl, sir: &mut SIR) -> Result<Instr, String> {
         let operand = self.analyze_and_emit(data.operand, sir)?;
         Ok(Instr::UnOp(UnOpPl {
@@ -614,6 +728,12 @@ impl SirGen {
         }))
     }
 
+    #[instrument(
+        skip(self, data, sir),
+        name = "sir_gen.remap_bin_op",
+        target = "sir_gen",
+        level = "trace"
+    )]
     fn remap_bin_op(&mut self, data: BinOpPl, sir: &mut SIR) -> Result<Instr, String> {
         let left = self.analyze_and_emit(data.left, sir)?;
         let right = self.analyze_and_emit(data.right, sir)?;
@@ -624,6 +744,13 @@ impl SirGen {
         }))
     }
 
+    #[instrument(
+        skip(self, data, sir),
+        fields(name = %data.name),
+        name = "sir_gen.remap_fn_call",
+        target = "sir_gen",
+        level = "trace"
+    )]
     fn remap_fn_call(&mut self, data: FnCallPl, sir: &mut SIR) -> Result<Instr, String> {
         let mut arguments = Vec::new();
         for arg_idx in data.arguments {
@@ -635,6 +762,13 @@ impl SirGen {
         }))
     }
 
+    #[instrument(
+        skip(self, sir),
+        fields(operand),
+        name = "sir_gen.remap_typeof",
+        target = "sir_gen",
+        level = "trace"
+    )]
     fn remap_typeof(&mut self, operand: instr_index, sir: &mut SIR) -> Result<Instr, String> {
         // Emit the operand so its analysis cache is populated, then
         // resolve its (mangled) type name and replace this instruction
@@ -654,6 +788,12 @@ impl SirGen {
         Ok(Instr::Literal(LiteralPl::Symbol(name)))
     }
 
+    #[instrument(
+        skip(self, data, sir),
+        name = "sir_gen.remap_if_statement",
+        target = "sir_gen",
+        level = "trace"
+    )]
     fn remap_if_statement(
         &mut self,
         data: IfStatementData,
@@ -672,12 +812,25 @@ impl SirGen {
         }))
     }
 
+    #[instrument(
+        skip(self, data, sir),
+        name = "sir_gen.remap_while_loop",
+        target = "sir_gen",
+        level = "trace"
+    )]
     fn remap_while_loop(&mut self, data: WhileLoopData, sir: &mut SIR) -> Result<Instr, String> {
         let condition = self.analyze_and_emit(data.condition, sir)?;
         let body = self.analyze_and_emit(data.body, sir)?;
         Ok(Instr::WhileLoop(WhileLoopData { condition, body }))
     }
 
+    #[instrument(
+        skip(self, data, sir),
+        fields(iterator = %data.iterator),
+        name = "sir_gen.remap_for_loop",
+        target = "sir_gen",
+        level = "trace"
+    )]
     fn remap_for_loop(&mut self, data: ForLoopData, sir: &mut SIR) -> Result<Instr, String> {
         let range = self.analyze_and_emit(data.range, sir)?;
         let body = self.analyze_and_emit(data.body, sir)?;
@@ -688,6 +841,12 @@ impl SirGen {
         }))
     }
 
+    #[instrument(
+        skip(self, data, sir),
+        name = "sir_gen.remap_return",
+        target = "sir_gen",
+        level = "trace"
+    )]
     fn remap_return(&mut self, data: ReturnData, sir: &mut SIR) -> Result<Instr, String> {
         let value = data
             .value
@@ -696,6 +855,13 @@ impl SirGen {
         Ok(Instr::Return(ReturnData { value }))
     }
 
+    #[instrument(
+        skip(self, data, sir),
+        fields(name = %data.name, is_foreign = data.is_foreign),
+        name = "sir_gen.remap_func_decl",
+        target = "sir_gen",
+        level = "trace"
+    )]
     fn remap_func_decl(&mut self, data: FuncData, sir: &mut SIR) -> Result<Instr, String> {
         let body_index = self.analyze_and_emit(data.body_index, sir)?;
         Ok(Instr::FuncDecl(FuncData {
@@ -710,6 +876,12 @@ impl SirGen {
     // ── Generic finalization (module post-pass) ─────────────────────────────────
 
     /// Collapse `App` types, patch `new`/enum names, and add mangled struct/enum layouts.
+    #[instrument(
+        skip(self, module),
+        name = "sir_gen.finalize_generics",
+        target = "sir_gen",
+        level = "debug"
+    )]
     fn finalize_generics(&mut self, module: &mut SIRModule) -> Result<(), String> {
         Self::apply_collapse_patch(module, &self.analyzer);
         self.monomorph_generic_struct_constructors(module)?;
@@ -720,6 +892,12 @@ impl SirGen {
         Ok(())
     }
 
+    #[instrument(
+        skip(module, analyzer),
+        name = "sir_gen.apply_collapse_patch",
+        target = "sir_gen",
+        level = "trace"
+    )]
     fn apply_collapse_patch(module: &mut SIRModule, analyzer: &Analyzer) {
         for_each_sir_body_mut(module, |sir| {
             Self::collapse_sir_types(sir, analyzer);
@@ -729,6 +907,12 @@ impl SirGen {
         });
     }
 
+    #[instrument(
+        skip(sir, analyzer),
+        name = "sir_gen.collapse_sir_types",
+        target = "sir_gen",
+        level = "trace"
+    )]
     fn collapse_sir_types(sir: &mut SIR, analyzer: &Analyzer) {
         for si in &mut sir.instructions {
             if let Some(ty) = si.ty.take() {
@@ -737,6 +921,12 @@ impl SirGen {
         }
     }
 
+    #[instrument(
+        skip(sir),
+        name = "sir_gen.patch_mangled_names",
+        target = "sir_gen",
+        level = "trace"
+    )]
     fn patch_mangled_names(sir: &mut SIR) {
         let mut new_symbol_patches: Vec<(usize, String)> = Vec::new();
         for (_i, si) in sir.instructions.iter_mut().enumerate() {
@@ -775,6 +965,12 @@ impl SirGen {
     }
 
     /// Same key scheme as [`crate::backend::sir_lowering`] overload resolution.
+    #[instrument(
+        skip(ty),
+        name = "sir_gen.sir_type_key_for_dispatch",
+        target = "sir_gen",
+        level = "trace"
+    )]
     fn sir_type_key_for_dispatch(ty: Option<&ErrandType>) -> String {
         match ty {
             Some(ErrandType::Con(n)) => n.clone(),
@@ -783,6 +979,12 @@ impl SirGen {
         }
     }
 
+    #[instrument(
+        skip(ty, subst),
+        name = "sir_gen.subst_errand_type",
+        target = "sir_gen",
+        level = "trace"
+    )]
     fn subst_errand_type(ty: &ErrandType, subst: &HashMap<String, ErrandType>) -> ErrandType {
         match ty {
             ErrandType::Var(n) => subst.get(n).cloned().unwrap_or_else(|| ty.clone()),
@@ -812,6 +1014,13 @@ impl SirGen {
         }
     }
 
+    #[instrument(
+        skip(te, arg, type_params, subst),
+        fields(type_param_count = type_params.len()),
+        name = "sir_gen.unify_field_type_with_arg_ty",
+        target = "sir_gen",
+        level = "trace"
+    )]
     fn unify_field_type_with_arg_ty(
         te: &TypeExpression,
         arg: &ErrandType,
@@ -883,6 +1092,13 @@ impl SirGen {
         }
     }
 
+    #[instrument(
+        skip(sd, arg_tys),
+        fields(struct_name = %sd.name, arg_count = arg_tys.len()),
+        name = "sir_gen.infer_subst_from_generic_ctor_call",
+        target = "sir_gen",
+        level = "trace"
+    )]
     fn infer_subst_from_generic_ctor_call(
         sd: &StructData,
         arg_tys: &[ErrandType],
@@ -913,6 +1129,13 @@ impl SirGen {
         Some(subst)
     }
 
+    #[instrument(
+        skip(sd, subst),
+        fields(struct_name = %sd.name),
+        name = "sir_gen.mangle_generic_struct_name",
+        target = "sir_gen",
+        level = "trace"
+    )]
     fn mangle_generic_struct_name(sd: &StructData, subst: &HashMap<String, ErrandType>) -> String {
         let mut s = sd.name.clone();
         for tp in &sd.type_params {
@@ -924,6 +1147,12 @@ impl SirGen {
         s
     }
 
+    #[instrument(
+        skip(sir, subst, analyzer),
+        name = "sir_gen.apply_subst_to_sir_body",
+        target = "sir_gen",
+        level = "trace"
+    )]
     fn apply_subst_to_sir_body(
         sir: &mut SIR,
         subst: &HashMap<String, ErrandType>,
@@ -938,6 +1167,13 @@ impl SirGen {
         }
     }
 
+    #[instrument(
+        skip(sir),
+        fields(base = %base, mangled = %mangled),
+        name = "sir_gen.patch_new_symbol_in_body",
+        target = "sir_gen",
+        level = "trace"
+    )]
     fn patch_new_symbol_in_body(sir: &mut SIR, base: &str, mangled: &str) {
         let mut patches: Vec<(usize, String)> = Vec::new();
         for si in &sir.instructions {
@@ -962,6 +1198,13 @@ impl SirGen {
         }
     }
 
+    #[instrument(
+        skip_all,
+        fields(ctor_name = %ctor_name),
+        name = "sir_gen.collect_generic_ctor_call_shapes",
+        target = "sir_gen",
+        level = "trace"
+    )]
     fn collect_generic_ctor_call_shapes(
         sir: &SIR,
         ctor_name: &str,
@@ -1001,6 +1244,13 @@ impl SirGen {
         }
     }
 
+    #[instrument(
+        skip_all,
+        fields(ctor_name = %ctor_name),
+        name = "sir_gen.gather_all_generic_ctor_call_shapes",
+        target = "sir_gen",
+        level = "trace"
+    )]
     fn gather_all_generic_ctor_call_shapes(
         module: &SIRModule,
         ctor_name: &str,
@@ -1012,6 +1262,12 @@ impl SirGen {
         });
     }
 
+    #[instrument(
+        skip(self, module),
+        name = "sir_gen.monomorph_generic_struct_constructors",
+        target = "sir_gen",
+        level = "debug"
+    )]
     fn monomorph_generic_struct_constructors(&self, module: &mut SIRModule) -> Result<(), String> {
         let generic_structs: Vec<StructData> = self
             .analyzer
@@ -1118,6 +1374,12 @@ impl SirGen {
         Ok(())
     }
 
+    #[instrument(
+        skip(sir, mangled),
+        name = "sir_gen.collect_mangled_symbols_from_sir",
+        target = "sir_gen",
+        level = "trace"
+    )]
     fn collect_mangled_symbols_from_sir(sir: &SIR, mangled: &mut HashSet<String>) {
         for si in &sir.instructions {
             if let Instr::Literal(LiteralPl::Symbol(s)) = &si.instr {
@@ -1128,6 +1390,13 @@ impl SirGen {
         }
     }
 
+    #[instrument(
+        skip(module, preir),
+        fields(preir_len = preir.instructions.len()),
+        name = "sir_gen.ensure_mangled_layouts",
+        target = "sir_gen",
+        level = "trace"
+    )]
     fn ensure_mangled_layouts(module: &mut SIRModule, preir: &PreIR) -> Result<(), String> {
         let mut mangled: HashSet<String> = HashSet::new();
         for_each_sir_body(module, |sir| {
@@ -1192,6 +1461,12 @@ impl SirGen {
 
 // ── Module-wide SIR body iteration ───────────────────────────────────────────
 
+#[instrument(
+    skip_all,
+    name = "sir_gen.for_each_sir_body_mut",
+    target = "sir_gen",
+    level = "trace"
+)]
 fn for_each_sir_body_mut(module: &mut SIRModule, mut f: impl FnMut(&mut SIR)) {
     f(&mut module.main);
     for overloads in module.functions.values_mut() {
@@ -1203,6 +1478,12 @@ fn for_each_sir_body_mut(module: &mut SIRModule, mut f: impl FnMut(&mut SIR)) {
     }
 }
 
+#[instrument(
+    skip_all,
+    name = "sir_gen.for_each_sir_body",
+    target = "sir_gen",
+    level = "trace"
+)]
 fn for_each_sir_body(module: &SIRModule, mut f: impl FnMut(&SIR)) {
     f(&module.main);
     for overloads in module.functions.values() {
@@ -1214,6 +1495,13 @@ fn for_each_sir_body(module: &SIRModule, mut f: impl FnMut(&SIR)) {
     }
 }
 
+#[instrument(
+    skip(n),
+    fields(name = %n),
+    name = "sir_gen.primitive_name_to_type_expr",
+    target = "sir_gen",
+    level = "trace"
+)]
 fn primitive_name_to_type_expr(n: &str) -> Result<TypeExpression, String> {
     Ok(match n {
         "Int" => TypeExpression::Int,
@@ -1232,6 +1520,12 @@ fn primitive_name_to_type_expr(n: &str) -> Result<TypeExpression, String> {
     })
 }
 
+#[instrument(
+    skip(te, m),
+    name = "sir_gen.subst_type_expr",
+    target = "sir_gen",
+    level = "trace"
+)]
 fn subst_type_expr(te: &TypeExpression, m: &HashMap<String, TypeExpression>) -> TypeExpression {
     match te {
         TypeExpression::Struct(id, None, None) if m.contains_key(&id.name) => m[&id.name].clone(),
@@ -1261,6 +1555,13 @@ fn subst_type_expr(te: &TypeExpression, m: &HashMap<String, TypeExpression>) -> 
     }
 }
 
+#[instrument(
+    skip(m, defs),
+    fields(mangled_len = m.len(), def_count = defs.len()),
+    name = "sir_gen.parse_mangled_struct",
+    target = "sir_gen",
+    level = "trace"
+)]
 fn parse_mangled_struct(
     m: &str,
     defs: &[StructData],
@@ -1284,6 +1585,13 @@ fn parse_mangled_struct(
     None
 }
 
+#[instrument(
+    skip(sd, subst),
+    fields(struct_name = %sd.name),
+    name = "sir_gen.build_struct_layout_subst",
+    target = "sir_gen",
+    level = "trace"
+)]
 fn build_struct_layout_subst(
     sd: &StructData,
     subst: &HashMap<String, TypeExpression>,
@@ -1296,6 +1604,13 @@ fn build_struct_layout_subst(
     )))
 }
 
+#[instrument(
+    skip(m, defs),
+    fields(mangled_len = m.len(), def_count = defs.len()),
+    name = "sir_gen.parse_mangled_enum",
+    target = "sir_gen",
+    level = "trace"
+)]
 fn parse_mangled_enum(
     m: &str,
     defs: &[EnumData],
@@ -1319,6 +1634,13 @@ fn parse_mangled_enum(
     None
 }
 
+#[instrument(
+    skip(ed, subst),
+    fields(enum_name = %ed.name),
+    name = "sir_gen.build_enum_layout_subst",
+    target = "sir_gen",
+    level = "trace"
+)]
 fn build_enum_layout_subst(
     ed: &EnumData,
     subst: &HashMap<String, TypeExpression>,
@@ -1357,6 +1679,12 @@ fn build_enum_layout_subst(
 // ─── Utilities ────────────────────────────────────────────────────────────────
 
 /// Field order, `byte_offset`, and `total_size` for a struct or enum variant payload.
+#[instrument(
+    skip_all,
+    name = "sir_gen.sir_layout_struct_fields_from_types",
+    target = "sir_gen",
+    level = "trace"
+)]
 fn sir_layout_struct_fields_from_types(
     field_name_ty: impl Iterator<Item = (String, ErrandType)>,
 ) -> SIRStructLayout {
@@ -1403,6 +1731,12 @@ pub(crate) fn errand_type_name(ty: &ErrandType) -> String {
     }
 }
 
+#[instrument(
+    skip(ty),
+    name = "sir_gen.errand_type_size",
+    target = "sir_gen",
+    level = "trace"
+)]
 fn errand_type_size(ty: &ErrandType) -> usize {
     match ty {
         ErrandType::Con(n) => match n.as_str() {

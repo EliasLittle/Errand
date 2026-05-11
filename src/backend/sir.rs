@@ -1,6 +1,8 @@
 use std::collections::HashMap;
 use std::fmt::{Display, Formatter, Result as FmtResult};
 
+use tracing::instrument;
+
 use crate::backend::preir::{instr_index, Instr};
 use crate::backend::worklist::ErrandType;
 
@@ -90,6 +92,13 @@ pub struct SIRModule {
 
 impl SIR {
     /// Format all instructions as `%N : Ty = instr` (declarations without `%N =`).
+    #[instrument(
+        skip(self),
+        fields(instr_count = self.instructions.len(), return_loc = self.return_loc),
+        name = "sir.format_all",
+        target = "sir",
+        level = "trace"
+    )]
     pub fn format_all(&self) -> String {
         let mut out = String::new();
         for (i, si) in self.instructions.iter().enumerate() {
@@ -112,6 +121,18 @@ impl SIR {
 }
 
 impl SIRModule {
+    #[instrument(
+        skip(self),
+        fields(
+            function_names = self.functions.len(),
+            struct_names = self.structs.len(),
+            enum_names = self.enums.len(),
+            main_instrs = self.main.instructions.len()
+        ),
+        name = "sir.format_all_module",
+        target = "sir",
+        level = "trace"
+    )]
     pub fn format_all(&self) -> String {
         let mut out = String::new();
         out.push_str("=== SIR: main ===\n");

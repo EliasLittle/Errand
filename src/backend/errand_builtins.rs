@@ -1,12 +1,18 @@
 use crate::backend::worklist::ErrandType;
 use crate::frontend::ast::{GenericArg, TypeExpression};
 use std::collections::HashMap;
+use tracing::instrument;
 
 /// Add built-in data constructors to the type inference context
 ///
 /// These are the primitive types and their constructors that Errand supports:
 /// - Int, Int32, Float, Bool, String, Unit
 /// - Built-in constructors like true/false for Bool
+#[instrument(
+    name = "errand_builtins.add_builtin_data_constructors",
+    target = "errand_builtins",
+    level = "trace"
+)]
 pub fn add_builtin_data_constructors() -> HashMap<String, ErrandType> {
     const ENTRIES: &[(&str, &str)] = &[("true", "Bool"), ("false", "Bool"), ("unit", "Unit")];
     HashMap::from_iter(
@@ -16,6 +22,12 @@ pub fn add_builtin_data_constructors() -> HashMap<String, ErrandType> {
     )
 }
 
+#[instrument(
+    skip_all,
+    name = "errand_builtins.builtin_printf",
+    target = "errand_builtins",
+    level = "trace"
+)]
 fn builtin_printf() -> ErrandType {
     ErrandType::Arrow(
         Box::new(ErrandType::Con("String".to_string())),
@@ -26,6 +38,12 @@ fn builtin_printf() -> ErrandType {
     )
 }
 
+#[instrument(
+    skip_all,
+    name = "errand_builtins.builtin_malloc",
+    target = "errand_builtins",
+    level = "trace"
+)]
 fn builtin_malloc() -> ErrandType {
     ErrandType::Arrow(
         Box::new(ErrandType::Con("Int".to_string())),
@@ -33,6 +51,12 @@ fn builtin_malloc() -> ErrandType {
     )
 }
 
+#[instrument(
+    skip_all,
+    name = "errand_builtins.builtin_free",
+    target = "errand_builtins",
+    level = "trace"
+)]
 fn builtin_free() -> ErrandType {
     ErrandType::Arrow(
         Box::new(ErrandType::Con("Int".to_string())),
@@ -40,6 +64,12 @@ fn builtin_free() -> ErrandType {
     )
 }
 
+#[instrument(
+    skip_all,
+    name = "errand_builtins.builtin_as_ptr",
+    target = "errand_builtins",
+    level = "trace"
+)]
 fn builtin_as_ptr() -> ErrandType {
     ErrandType::Arrow(
         Box::new(ErrandType::Con("String".to_string())),
@@ -47,6 +77,12 @@ fn builtin_as_ptr() -> ErrandType {
     )
 }
 
+#[instrument(
+    skip_all,
+    name = "errand_builtins.builtin_as_string",
+    target = "errand_builtins",
+    level = "trace"
+)]
 fn builtin_as_string() -> ErrandType {
     ErrandType::Arrow(
         Box::new(ErrandType::Con("Int".to_string())),
@@ -54,6 +90,12 @@ fn builtin_as_string() -> ErrandType {
     )
 }
 
+#[instrument(
+    skip_all,
+    name = "errand_builtins.builtin_strlen",
+    target = "errand_builtins",
+    level = "trace"
+)]
 fn builtin_strlen() -> ErrandType {
     ErrandType::Arrow(
         Box::new(ErrandType::Con("String".to_string())),
@@ -61,6 +103,12 @@ fn builtin_strlen() -> ErrandType {
     )
 }
 
+#[instrument(
+    skip_all,
+    name = "errand_builtins.builtin_strcpy",
+    target = "errand_builtins",
+    level = "trace"
+)]
 fn builtin_strcpy() -> ErrandType {
     ErrandType::Arrow(
         Box::new(ErrandType::Con("String".to_string())),
@@ -71,6 +119,12 @@ fn builtin_strcpy() -> ErrandType {
     )
 }
 
+#[instrument(
+    skip_all,
+    name = "errand_builtins.builtin_getfield",
+    target = "errand_builtins",
+    level = "trace"
+)]
 fn builtin_getfield() -> ErrandType {
     ErrandType::Arrow(
         Box::new(ErrandType::Var("_struct".to_string())),
@@ -84,6 +138,12 @@ fn builtin_getfield() -> ErrandType {
     )
 }
 
+#[instrument(
+    skip_all,
+    name = "errand_builtins.builtin_new",
+    target = "errand_builtins",
+    level = "trace"
+)]
 fn builtin_new() -> ErrandType {
     ErrandType::Arrow(
         Box::new(ErrandType::Con("String".to_string())),
@@ -103,6 +163,11 @@ fn builtin_new() -> ErrandType {
 /// - printf: String -> a -> ... -> Unit (variadic)
 /// - malloc: Int -> Int (for memory allocation, returns pointer as int)
 /// - free: Int -> Unit (for memory deallocation)
+#[instrument(
+    name = "errand_builtins.add_builtin_functions",
+    target = "errand_builtins",
+    level = "trace"
+)]
 pub fn add_builtin_functions() -> HashMap<String, ErrandType> {
     const ENTRIES: &[(&str, fn() -> ErrandType)] = &[
         ("printf", builtin_printf),
@@ -128,6 +193,12 @@ pub fn add_builtin_functions() -> HashMap<String, ErrandType> {
 }
 
 /// Convert from Errand's frontend TypeExpression to ErrandType for inference.
+#[instrument(
+    skip(type_expr),
+    name = "errand_builtins.type_expr_to_errand_type",
+    target = "errand_builtins",
+    level = "trace"
+)]
 pub fn type_expr_to_errand_type(type_expr: &TypeExpression) -> ErrandType {
     type_expr_to_errand_type_with_params(type_expr, &[])
 }
@@ -136,6 +207,13 @@ pub fn type_expr_to_errand_type(type_expr: &TypeExpression) -> ErrandType {
 // Structs should be ErrandType::Product, Enums ErrandType::Sum
 // Parametric types should be ErrandType::Forall
 /// Like [`type_expr_to_errand_type`], but names in `type_params` map to [`ErrandType::Var`].
+#[instrument(
+    skip(type_expr, type_params),
+    fields(type_param_count = type_params.len()),
+    name = "errand_builtins.type_expr_to_errand_type_with_params",
+    target = "errand_builtins",
+    level = "trace"
+)]
 pub fn type_expr_to_errand_type_with_params(
     type_expr: &TypeExpression,
     type_params: &[String],
