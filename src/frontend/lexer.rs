@@ -2,6 +2,8 @@ use std::fmt;
 use std::io::Write;
 use std::mem::Discriminant;
 
+use tracing::instrument;
+
 #[derive(Debug, Clone, PartialEq)]
 pub enum TokenType {
     Int(i64),
@@ -210,8 +212,16 @@ pub struct Lexer {
 impl Lexer {
     /// Takes ownership of the source text and expands it to UTF-32 scalars once.
     /// Pass the `String` from `read_to_string` directly to avoid an extra full-buffer copy.
+    #[instrument(
+        skip_all,
+        fields(source_len = tracing::field::Empty),
+        name = "lexer.new",
+        target = "lexer",
+        level = "trace"
+    )]
     pub fn new(source: impl Into<String>) -> Self {
         let chars: Vec<char> = source.into().chars().collect();
+        tracing::Span::current().record("source_len", chars.len());
         let current_char = if chars.is_empty() { '\0' } else { chars[0] };
         Lexer {
             chars,
@@ -220,6 +230,15 @@ impl Lexer {
             column: 1,
             current_char,
         }
+    }
+
+    /// Fills `#[instrument(..., fields(... = Empty))]` slots for the active span (Chrome/Perfetto `args`).
+    fn record_lex_cursor(&self) {
+        let span = tracing::Span::current();
+        span.record("line", self.line);
+        span.record("column", self.column);
+        span.record("offset", self.current);
+        span.record("at", tracing::field::debug(&self.current_char));
     }
 
     fn advance(&mut self) {
@@ -289,21 +308,40 @@ impl Lexer {
         self.current_char == '\0'
     }
 
+    #[instrument(
+        skip(self),
+        fields(
+            line = tracing::field::Empty,
+            column = tracing::field::Empty,
+            offset = tracing::field::Empty,
+            at = tracing::field::Empty
+        ),
+        name = "lexer.skip_whitespace",
+        target = "lexer",
+        level = "trace"
+    )]
     fn skip_whitespace(&mut self) -> Result<Token, String> {
+        self.record_lex_cursor();
         while self.current_char.is_whitespace() && self.current_char != '\n' {
             self.advance();
         }
         self.read_token()
     }
 
+    #[instrument(
+        skip(self),
+        fields(
+            line = tracing::field::Empty,
+            column = tracing::field::Empty,
+            offset = tracing::field::Empty,
+            at = tracing::field::Empty
+        ),
+        name = "lexer.read_block_comment",
+        target = "lexer",
+        level = "trace"
+    )]
     fn read_block_comment(&mut self) -> Result<Token, String> {
-        let span = tracing::trace_span!(
-            "lexer.read_block_comment",
-            line = self.line,
-            column = self.column
-        );
-        let _guard = span.enter();
-
+        self.record_lex_cursor();
         let start_line = self.line;
         let start_column = self.column;
         let mut header = String::new();
@@ -364,7 +402,20 @@ impl Lexer {
         })
     }
 
+    #[instrument(
+        skip(self),
+        fields(
+            line = tracing::field::Empty,
+            column = tracing::field::Empty,
+            offset = tracing::field::Empty,
+            at = tracing::field::Empty
+        ),
+        name = "lexer.read_inline_comment",
+        target = "lexer",
+        level = "trace"
+    )]
     fn read_inline_comment(&mut self) -> Result<Token, String> {
+        self.record_lex_cursor();
         let start_line = self.line;
         let start_column = self.column;
         let mut comment = String::new();
@@ -384,24 +435,44 @@ impl Lexer {
         })
     }
 
+    #[instrument(
+        skip(self),
+        fields(
+            line = tracing::field::Empty,
+            column = tracing::field::Empty,
+            offset = tracing::field::Empty,
+            at = tracing::field::Empty,
+            block = tracing::field::Empty
+        ),
+        name = "lexer.read_comment",
+        target = "lexer",
+        level = "trace"
+    )]
     fn read_comment(&mut self) -> Result<Token, String> {
-        let is_block = self.is_block_comment();
-        let span = tracing::trace_span!(
-            "lexer.read_comment",
-            line = self.line,
-            column = self.column,
-            block = is_block
-        );
-        let _guard = span.enter();
-
-        if is_block {
+        self.record_lex_cursor();
+        let block = self.is_block_comment();
+        tracing::Span::current().record("block", block);
+        if block {
             self.read_block_comment()
         } else {
             self.read_inline_comment()
         }
     }
 
+    #[instrument(
+        skip(self),
+        fields(
+            line = tracing::field::Empty,
+            column = tracing::field::Empty,
+            offset = tracing::field::Empty,
+            at = tracing::field::Empty
+        ),
+        name = "lexer.read_number",
+        target = "lexer",
+        level = "trace"
+    )]
     fn read_number(&mut self) -> Result<Token, String> {
+        self.record_lex_cursor();
         let start_line = self.line;
         let start_column = self.column;
         let mut number = String::new();
@@ -436,7 +507,20 @@ impl Lexer {
         }
     }
 
+    #[instrument(
+        skip(self),
+        fields(
+            line = tracing::field::Empty,
+            column = tracing::field::Empty,
+            offset = tracing::field::Empty,
+            at = tracing::field::Empty
+        ),
+        name = "lexer.read_identifier_or_keyword",
+        target = "lexer",
+        level = "trace"
+    )]
     fn read_identifier_or_keyword(&mut self) -> Result<Token, String> {
+        self.record_lex_cursor();
         let start_line = self.line;
         let start_column = self.column;
         let mut identifier = String::new();
@@ -478,11 +562,20 @@ impl Lexer {
         })
     }
 
+    #[instrument(
+        skip(self),
+        fields(
+            line = tracing::field::Empty,
+            column = tracing::field::Empty,
+            offset = tracing::field::Empty,
+            at = tracing::field::Empty
+        ),
+        name = "lexer.read_string",
+        target = "lexer",
+        level = "trace"
+    )]
     fn read_string(&mut self) -> Result<Token, String> {
-        let span =
-            tracing::trace_span!("lexer.read_string", line = self.line, column = self.column);
-        let _guard = span.enter();
-
+        self.record_lex_cursor();
         let start_line = self.line;
         let start_column = self.column;
         let mut string = String::new();
@@ -530,7 +623,20 @@ impl Lexer {
         })
     }
 
+    #[instrument(
+        skip(self),
+        fields(
+            line = tracing::field::Empty,
+            column = tracing::field::Empty,
+            offset = tracing::field::Empty,
+            at = tracing::field::Empty
+        ),
+        name = "lexer.read_token",
+        target = "lexer",
+        level = "trace"
+    )]
     pub fn read_token(&mut self) -> Result<Token, String> {
+        self.record_lex_cursor();
         let mut advance_char = true;
         let tok = match self.current_char {
             '(' => self.ok_token(TokenType::LParen),
@@ -648,10 +754,21 @@ impl Lexer {
         tok
     }
 
+    #[instrument(
+        skip(self),
+        fields(
+            file = %file_path,
+            line = tracing::field::Empty,
+            column = tracing::field::Empty,
+            offset = tracing::field::Empty,
+            at = tracing::field::Empty,
+            source_len = tracing::field::Empty
+        ),
+        name = "lexer.lex",
+        target = "lexer",
+        level = "info"
+    )]
     pub fn lex(&mut self, file_path: &str) -> Result<Vec<Token>, String> {
-        let span = tracing::info_span!("lexer.lex", file = %file_path);
-        let _guard = span.enter();
-
         // Reset scan position (buffer unchanged; `lex` may be called again).
         self.current = 0;
         self.line = 1;
@@ -661,6 +778,10 @@ impl Lexer {
         } else {
             self.chars[0]
         };
+
+        let span = tracing::Span::current();
+        span.record("source_len", self.chars.len());
+        self.record_lex_cursor();
 
         // Start lexing
         let mut tokens = Vec::new();
@@ -690,8 +811,21 @@ impl Lexer {
     }
 
     /// Debug helper: not used on the normal compile path; only traces when called.
+    #[instrument(
+        skip(self),
+        fields(
+            count = tokens.len(),
+            line = tracing::field::Empty,
+            column = tracing::field::Empty,
+            offset = tracing::field::Empty,
+            at = tracing::field::Empty
+        ),
+        name = "lexer.print_tokens",
+        target = "lexer",
+        level = "trace"
+    )]
     pub fn print_tokens(&self, tokens: &[Token]) {
-        let _span = tracing::trace_span!("lexer.print_tokens", count = tokens.len()).entered();
+        self.record_lex_cursor();
         for token in tokens {
             tracing::trace!(token = %token, "print_tokens");
         }

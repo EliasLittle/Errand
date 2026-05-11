@@ -48,6 +48,7 @@ use super::ast::{
 use super::lexer::{token_type, Token, TokenType};
 use std::iter::Peekable;
 use std::vec::IntoIter;
+use tracing::instrument;
 
 // --- Cursor / token stream ---
 
@@ -61,6 +62,13 @@ pub struct Parser {
 }
 
 impl Parser {
+    #[instrument(
+        skip(tokens),
+        fields(token_count = tokens.len()),
+        name = "parser.new",
+        target = "parser",
+        level = "trace"
+    )]
     pub fn new(tokens: Vec<Token>) -> Self {
         let mut parser = Parser {
             tokens: tokens.into_iter().peekable(),
@@ -74,8 +82,19 @@ impl Parser {
     // --- Top-level ---
 
     /// Core parsing function that returns a Program AST
+    #[instrument(
+        skip(self),
+        fields(
+            current = tracing::field::Empty,
+            token_line = tracing::field::Empty,
+            token_column = tracing::field::Empty
+        ),
+        name = "parser.parse",
+        target = "parser",
+        level = "debug"
+    )]
     pub fn parse(&mut self) -> Result<Program, Vec<String>> {
-        let _span = tracing::debug_span!(target: "parser", "parser.parse_program").entered();
+        self.record_parse_cursor();
         let mut expressions = Vec::new();
 
         while !self.at_end() {
@@ -187,13 +206,36 @@ impl Parser {
         while self.eat(&TokenType::Newline) {}
     }
 
+    /// Fills `#[instrument(..., fields(... = Empty))]` slots for the active span (Chrome/Perfetto `args`).
+    fn record_parse_cursor(&self) {
+        let span = tracing::Span::current();
+        span.record("current", tracing::field::debug(&self.current_type()));
+        if let Some(tok) = &self.current {
+            span.record("token_line", tok.line);
+            span.record("token_column", tok.column);
+        }
+    }
+
     /// Parses zero or more comma-separated items until `close` is the current token (`close` is not consumed).
+    #[instrument(
+        skip(self, parse_elem),
+        fields(
+            ?close,
+            current = tracing::field::Empty,
+            token_line = tracing::field::Empty,
+            token_column = tracing::field::Empty
+        ),
+        name = "parser.parse_comma_separated_until",
+        target = "parser",
+        level = "trace"
+    )]
     fn parse_comma_separated_until<T>(
         &mut self,
         close: &TokenType,
         expected_sep_msg: &'static str,
         mut parse_elem: impl FnMut(&mut Self) -> Result<T, String>,
     ) -> Result<Vec<T>, String> {
+        self.record_parse_cursor();
         let mut out = Vec::new();
         while !self.at(close) {
             out.push(parse_elem(self)?);
@@ -208,7 +250,19 @@ impl Parser {
 
     /// Parse expressions (functions, structs, if statements, for statements, return statements)
     /// TODO: Change to parse_statement()
+    #[instrument(
+        skip(self),
+        fields(
+            current = tracing::field::Empty,
+            token_line = tracing::field::Empty,
+            token_column = tracing::field::Empty
+        ),
+        name = "parser.parse_expression",
+        target = "parser",
+        level = "trace"
+    )]
     pub fn parse_expression(&mut self) -> Result<Expression, String> {
+        self.record_parse_cursor();
         tracing::trace!(target: "parser","Parsing expression| current:{:?}", self.current_type());
         let result = match self.current_type() {
             Some(TokenType::Foreign) => self.function(),
@@ -245,11 +299,24 @@ impl Parser {
 
     /// Bottom-up operator-precedence parsing of expressions.
     /// Operators, literals, and calls (including parenthesized expressions).
+    #[instrument(
+        skip(self, lhs),
+        fields(
+            min_precedence,
+            current = tracing::field::Empty,
+            token_line = tracing::field::Empty,
+            token_column = tracing::field::Empty
+        ),
+        name = "parser.parse_expr_bp",
+        target = "parser",
+        level = "trace"
+    )]
     fn parse_expr_bp(
         &mut self,
         lhs: Expression,
         min_precedence: i32,
     ) -> Result<Expression, String> {
+        self.record_parse_cursor();
         tracing::trace!(
             target: "parser",
             lhs = ?lhs,
@@ -351,12 +418,27 @@ impl Parser {
         }
     }
 
+    #[instrument(
+        skip(self, lhs, rhs),
+        fields(
+            line = op.line,
+            column = op.column,
+            ?op.token_type,
+            current = tracing::field::Empty,
+            token_line = tracing::field::Empty,
+            token_column = tracing::field::Empty
+        ),
+        name = "parser.apply_infix_operator",
+        target = "parser",
+        level = "trace"
+    )]
     fn apply_infix_operator(
         &mut self,
         lhs: Expression,
         op: &Token,
         rhs: Expression,
     ) -> Result<Expression, String> {
+        self.record_parse_cursor();
         if let Some(bo) = Self::binary_operator_for_token(&op.token_type) {
             return Ok(Self::binary_op(lhs, bo, rhs));
         }
@@ -376,14 +458,38 @@ impl Parser {
     // --- Primary expressions ---
 
     /// `primary()` followed by infix operators until precedence stops extension.
+    #[instrument(
+        skip(self),
+        fields(
+            current = tracing::field::Empty,
+            token_line = tracing::field::Empty,
+            token_column = tracing::field::Empty
+        ),
+        name = "parser.parse_full_expression",
+        target = "parser",
+        level = "trace"
+    )]
     fn parse_full_expression(&mut self) -> Result<Expression, String> {
+        self.record_parse_cursor();
         let primary_expr = self.primary()?;
         self.parse_expr_bp(primary_expr, 0)
     }
 
     /// prefix -> call -> literal
     /// primary ::= '-' inner_primary | '!' inner_primary
+    #[instrument(
+        skip(self),
+        fields(
+            current = tracing::field::Empty,
+            token_line = tracing::field::Empty,
+            token_column = tracing::field::Empty
+        ),
+        name = "parser.primary",
+        target = "parser",
+        level = "trace"
+    )]
     fn primary(&mut self) -> Result<Expression, String> {
+        self.record_parse_cursor();
         tracing::trace!(target: "parser","Parsing primary| current:{:?}", self.current_type());
         let prefix_op = self.check_prefix_operator();
 
@@ -400,7 +506,19 @@ impl Parser {
     }
 
     /// inner_primary ::= call | literal
+    #[instrument(
+        skip(self),
+        fields(
+            current = tracing::field::Empty,
+            token_line = tracing::field::Empty,
+            token_column = tracing::field::Empty
+        ),
+        name = "parser.inner_primary",
+        target = "parser",
+        level = "trace"
+    )]
     fn inner_primary(&mut self) -> Result<Expression, String> {
+        self.record_parse_cursor();
         tracing::trace!(target: "parser","Parsing inner primary| current:{:?}", self.current_type());
         match self.current_type() {
             Some(TokenType::Colon) => self.symbol(),
@@ -418,7 +536,19 @@ impl Parser {
         }
     }
 
+    #[instrument(
+        skip(self),
+        fields(
+            current = tracing::field::Empty,
+            token_line = tracing::field::Empty,
+            token_column = tracing::field::Empty
+        ),
+        name = "parser.check_prefix_operator",
+        target = "parser",
+        level = "trace"
+    )]
     fn check_prefix_operator(&mut self) -> Option<UnaryOperator> {
+        self.record_parse_cursor();
         tracing::trace!(target: "parser",
             "Checking prefix operator| current:{:?}",
             self.current_type()
@@ -438,7 +568,19 @@ impl Parser {
 
     /// Parse parenthesized expressions
     /// Does not allow
+    #[instrument(
+        skip(self),
+        fields(
+            current = tracing::field::Empty,
+            token_line = tracing::field::Empty,
+            token_column = tracing::field::Empty
+        ),
+        name = "parser.parenthesized_expression",
+        target = "parser",
+        level = "trace"
+    )]
     fn parenthesized_expression(&mut self) -> Result<Expression, String> {
+        self.record_parse_cursor();
         tracing::trace!(target: "parser",
             "Parsing parenthesized expression| current:{:?}",
             self.current_type()
@@ -453,7 +595,19 @@ impl Parser {
 
     /// identifier ::= IDENTIFIER(::Type) | IDENTIFIER '(' parameters ')' (call) | IDENTIFIER.IDENTIFIER (field access)
     /// Also handles enum variant construction: `EnumName::Variant(args)`
+    #[instrument(
+        skip(self),
+        fields(
+            current = tracing::field::Empty,
+            token_line = tracing::field::Empty,
+            token_column = tracing::field::Empty
+        ),
+        name = "parser.identifier",
+        target = "parser",
+        level = "trace"
+    )]
     fn identifier(&mut self) -> Result<Expression, String> {
+        self.record_parse_cursor();
         tracing::trace!(target: "parser","Parsing identifier| current:{:?}", self.current_type());
         let id = self.id()?;
 
@@ -504,7 +658,19 @@ impl Parser {
 
     // --- Symbols, identifiers & types ---
 
+    #[instrument(
+        skip(self),
+        fields(
+            current = tracing::field::Empty,
+            token_line = tracing::field::Empty,
+            token_column = tracing::field::Empty
+        ),
+        name = "parser.symbol",
+        target = "parser",
+        level = "trace"
+    )]
     fn symbol(&mut self) -> Result<Expression, String> {
+        self.record_parse_cursor();
         self.expect(&TokenType::Colon)?;
         if let Some(TokenType::Identifier(s)) = self.current_type().cloned() {
             self.bump();
@@ -514,7 +680,19 @@ impl Parser {
         }
     }
 
+    #[instrument(
+        skip(self),
+        fields(
+            current = tracing::field::Empty,
+            token_line = tracing::field::Empty,
+            token_column = tracing::field::Empty
+        ),
+        name = "parser.id",
+        target = "parser",
+        level = "trace"
+    )]
     fn id(&mut self) -> Result<Id, String> {
+        self.record_parse_cursor();
         match self.expect(&token_type("Identifier")?)?.token_type {
             TokenType::Identifier(id_str) => Ok(Id { name: id_str }),
             _ => {
@@ -524,7 +702,19 @@ impl Parser {
         }
     }
 
+    #[instrument(
+        skip(self),
+        fields(
+            current = tracing::field::Empty,
+            token_line = tracing::field::Empty,
+            token_column = tracing::field::Empty
+        ),
+        name = "parser.type_expr",
+        target = "parser",
+        level = "trace"
+    )]
     fn type_expr(&mut self) -> Result<TypeExpression, String> {
+        self.record_parse_cursor();
         tracing::trace!(target: "parser","Parsing type expression| current:{:?}", self.current_type());
 
         let id = self.id()?; // Parse the base identifier
@@ -555,7 +745,19 @@ impl Parser {
     }
 
     /// Comma-separated type arguments inside `< ... >` (opening `<` already consumed).
+    #[instrument(
+        skip(self),
+        fields(
+            current = tracing::field::Empty,
+            token_line = tracing::field::Empty,
+            token_column = tracing::field::Empty
+        ),
+        name = "parser.generic_type_args",
+        target = "parser",
+        level = "trace"
+    )]
     fn generic_type_args(&mut self) -> Result<Vec<GenericArg>, String> {
+        self.record_parse_cursor();
         let args = self.parse_comma_separated_until(
             &TokenType::GreaterThan,
             "Expected comma or '>' in generic type argument list",
@@ -569,7 +771,19 @@ impl Parser {
     }
 
     /// Type parameter names on `struct Foo<T, U>` / `enum Bar<T>`.
+    #[instrument(
+        skip(self),
+        fields(
+            current = tracing::field::Empty,
+            token_line = tracing::field::Empty,
+            token_column = tracing::field::Empty
+        ),
+        name = "parser.type_param_names",
+        target = "parser",
+        level = "trace"
+    )]
     fn type_param_names(&mut self) -> Result<Vec<Id>, String> {
+        self.record_parse_cursor();
         let names = self.parse_comma_separated_until(
             &TokenType::GreaterThan,
             "Expected comma or '>' in type parameter list",
@@ -580,7 +794,19 @@ impl Parser {
     }
 
     /// Optional `<T, U, …>` after a struct or enum name.
+    #[instrument(
+        skip(self),
+        fields(
+            current = tracing::field::Empty,
+            token_line = tracing::field::Empty,
+            token_column = tracing::field::Empty
+        ),
+        name = "parser.parse_optional_type_params",
+        target = "parser",
+        level = "trace"
+    )]
     fn parse_optional_type_params(&mut self) -> Result<Vec<Id>, String> {
+        self.record_parse_cursor();
         if self.eat(&TokenType::LessThan) {
             self.type_param_names()
         } else {
@@ -591,7 +817,20 @@ impl Parser {
     // --- Literals ---
 
     /// Parse literals (String, int, float, boolean)
+    #[instrument(
+        skip(self),
+        fields(
+            ?token_type,
+            current = tracing::field::Empty,
+            token_line = tracing::field::Empty,
+            token_column = tracing::field::Empty
+        ),
+        name = "parser.literal",
+        target = "parser",
+        level = "trace"
+    )]
     fn literal(&mut self, token_type: &TokenType) -> Result<Expression, String> {
+        self.record_parse_cursor();
         tracing::trace!(target: "parser",
             "Parsing literal| current:{:?} expected:{:?}",
             self.current_type(),
@@ -612,7 +851,21 @@ impl Parser {
 
     /// Parse function definitions
     /// Currently only supports standard block function definitions
+    #[instrument(
+        skip(self),
+        fields(
+            current = tracing::field::Empty,
+            token_line = tracing::field::Empty,
+            token_column = tracing::field::Empty,
+            foreign = tracing::field::Empty,
+            name = tracing::field::Empty
+        ),
+        name = "parser.function",
+        target = "parser",
+        level = "trace"
+    )]
     fn function(&mut self) -> Result<Expression, String> {
+        self.record_parse_cursor();
         tracing::trace!(target: "parser","Parsing function| current:{:?}", self.current_type());
         let mut foreign = false;
         if self.eat(&TokenType::Foreign) {
@@ -620,6 +873,9 @@ impl Parser {
         }
         self.expect(&TokenType::Function)?;
         let id = self.id()?;
+        let span = tracing::Span::current();
+        span.record("foreign", foreign);
+        span.record("name", tracing::field::display(&id.name));
         self.expect(&TokenType::LParen)?;
         let arguments = self.parameters()?;
         self.expect(&TokenType::RParen)?;
@@ -659,10 +915,24 @@ impl Parser {
     //     ...
     // end
     /// Parse struct definitions
+    #[instrument(
+        skip(self),
+        fields(
+            current = tracing::field::Empty,
+            token_line = tracing::field::Empty,
+            token_column = tracing::field::Empty,
+            name = tracing::field::Empty
+        ),
+        name = "parser.structure",
+        target = "parser",
+        level = "trace"
+    )]
     fn structure(&mut self) -> Result<Expression, String> {
+        self.record_parse_cursor();
         tracing::trace!(target: "parser","Parsing structure| current:{:?}", self.current_type());
         self.expect(&TokenType::Struct)?;
         let id = self.id()?;
+        tracing::Span::current().record("name", tracing::field::display(&id.name));
         let type_params = self.parse_optional_type_params()?;
         self.expect(&TokenType::Newline)?;
         let fields = self.field_parameters()?;
@@ -681,10 +951,24 @@ impl Parser {
     // end
     /// Parse enum definitions.
     /// Each variant is a bare identifier on its own line.
+    #[instrument(
+        skip(self),
+        fields(
+            current = tracing::field::Empty,
+            token_line = tracing::field::Empty,
+            token_column = tracing::field::Empty,
+            name = tracing::field::Empty
+        ),
+        name = "parser.enum_def",
+        target = "parser",
+        level = "trace"
+    )]
     fn enum_def(&mut self) -> Result<Expression, String> {
+        self.record_parse_cursor();
         tracing::trace!(target: "parser","Parsing enum| current:{:?}", self.current_type());
         self.expect(&TokenType::Enum)?;
         let id = self.id()?;
+        tracing::Span::current().record("name", tracing::field::display(&id.name));
         let type_params = self.parse_optional_type_params()?;
         self.expect(&TokenType::Newline)?;
         let variants = self.enum_variants()?;
@@ -703,7 +987,19 @@ impl Parser {
     ///   `Move::(Int, Int)`        → tuple variant; fields auto-named _0, _1, …
     ///   `Write::String`           → single-type variant; field auto-named _0
     ///   `Point::{x::Int, y::Int}` → struct variant with named fields
+    #[instrument(
+        skip(self),
+        fields(
+            current = tracing::field::Empty,
+            token_line = tracing::field::Empty,
+            token_column = tracing::field::Empty
+        ),
+        name = "parser.enum_variants",
+        target = "parser",
+        level = "trace"
+    )]
     fn enum_variants(&mut self) -> Result<Vec<EnumVariant>, String> {
+        self.record_parse_cursor();
         tracing::trace!(target: "parser","Parsing enum variants| current:{:?}", self.current_type());
         let mut variants = Vec::new();
         while self.at_identifier() {
@@ -763,7 +1059,19 @@ impl Parser {
     }
 
     /// Parse a comma-separated list of `TypeExpression`s up to `)`.
+    #[instrument(
+        skip(self),
+        fields(
+            current = tracing::field::Empty,
+            token_line = tracing::field::Empty,
+            token_column = tracing::field::Empty
+        ),
+        name = "parser.type_list",
+        target = "parser",
+        level = "trace"
+    )]
     fn type_list(&mut self) -> Result<Vec<TypeExpression>, String> {
+        self.record_parse_cursor();
         self.parse_comma_separated_until(
             &TokenType::RParen,
             "Expected comma or right parenthesis in type list",
@@ -773,7 +1081,19 @@ impl Parser {
 
     /// Parse comma-separated `name::Type` field pairs inside `{ … }`.
     /// Does NOT consume the closing `}`.
+    #[instrument(
+        skip(self),
+        fields(
+            current = tracing::field::Empty,
+            token_line = tracing::field::Empty,
+            token_column = tracing::field::Empty
+        ),
+        name = "parser.inline_field_list",
+        target = "parser",
+        level = "trace"
+    )]
     fn inline_field_list(&mut self) -> Result<Vec<FieldDefinition>, String> {
+        self.record_parse_cursor();
         self.parse_comma_separated_until(
             &TokenType::RBrace,
             "Expected comma or right brace in struct variant field list",
@@ -787,7 +1107,19 @@ impl Parser {
     }
 
     /// Parse expressions until 'END' token
+    #[instrument(
+        skip(self),
+        fields(
+            current = tracing::field::Empty,
+            token_line = tracing::field::Empty,
+            token_column = tracing::field::Empty
+        ),
+        name = "parser.block",
+        target = "parser",
+        level = "trace"
+    )]
     fn block(&mut self) -> Result<Expression, String> {
+        self.record_parse_cursor();
         tracing::trace!(target: "parser","Parsing block| Starting block: {:?}", self.current_type());
         let mut expressions = Vec::new();
         while !self.at(&TokenType::End) {
@@ -800,7 +1132,19 @@ impl Parser {
     // --- Delimited lists (comma-separated) ---
 
     /// Parse expressions until 'RParen' token
+    #[instrument(
+        skip(self),
+        fields(
+            current = tracing::field::Empty,
+            token_line = tracing::field::Empty,
+            token_column = tracing::field::Empty
+        ),
+        name = "parser.parameters",
+        target = "parser",
+        level = "trace"
+    )]
     fn parameters(&mut self) -> Result<Vec<Parameter>, String> {
+        self.record_parse_cursor();
         tracing::trace!(target: "parser","Parsing parameters| current:{:?}", self.current_type());
         self.parse_comma_separated_until(
             &TokenType::RParen,
@@ -826,7 +1170,19 @@ impl Parser {
 
     /// Parse field definitions
     /// id::type
+    #[instrument(
+        skip(self),
+        fields(
+            current = tracing::field::Empty,
+            token_line = tracing::field::Empty,
+            token_column = tracing::field::Empty
+        ),
+        name = "parser.field_parameters",
+        target = "parser",
+        level = "trace"
+    )]
     fn field_parameters(&mut self) -> Result<Vec<FieldDefinition>, String> {
+        self.record_parse_cursor();
         tracing::trace!(target: "parser",
             "Parsing field parameters| current:{:?}",
             self.current_type()
@@ -844,7 +1200,19 @@ impl Parser {
     }
 
     /// Parse arguments of a function call
+    #[instrument(
+        skip(self),
+        fields(
+            current = tracing::field::Empty,
+            token_line = tracing::field::Empty,
+            token_column = tracing::field::Empty
+        ),
+        name = "parser.arguments",
+        target = "parser",
+        level = "trace"
+    )]
     fn arguments(&mut self) -> Result<Vec<Expression>, String> {
+        self.record_parse_cursor();
         tracing::trace!(target: "parser","Parsing arguments| current:{:?}", self.current_type());
         self.parse_comma_separated_until(
             &TokenType::RParen,
@@ -858,7 +1226,19 @@ impl Parser {
     /// Parse if-elseif-else-end expressions
     /// TODO: Support both block and inline if statements
     /// inline should be within parse_expr_bp() and blocks should be within parse_expression()
+    #[instrument(
+        skip(self),
+        fields(
+            current = tracing::field::Empty,
+            token_line = tracing::field::Empty,
+            token_column = tracing::field::Empty
+        ),
+        name = "parser.if_statement",
+        target = "parser",
+        level = "trace"
+    )]
     fn if_statement(&mut self) -> Result<Expression, String> {
+        self.record_parse_cursor();
         tracing::trace!(target: "parser","Parsing if statement| current:{:?}", self.current_type());
         self.expect(&TokenType::If)?;
         let condition = self.parse_expression()?;
@@ -897,7 +1277,19 @@ impl Parser {
     ///     ...
     /// end
     /// ```
+    #[instrument(
+        skip(self),
+        fields(
+            current = tracing::field::Empty,
+            token_line = tracing::field::Empty,
+            token_column = tracing::field::Empty
+        ),
+        name = "parser.match_expr",
+        target = "parser",
+        level = "trace"
+    )]
     fn match_expr(&mut self) -> Result<Expression, String> {
+        self.record_parse_cursor();
         tracing::trace!(target: "parser",
             "Parsing match expression| current:{:?}",
             self.current_type()
@@ -925,7 +1317,19 @@ impl Parser {
     /// - `_`                          → Wildcard
     /// - `EnumName::Variant`          → EnumVariant with no bindings
     /// - `EnumName::Variant(x, y)`    → EnumVariant with positional bindings
+    #[instrument(
+        skip(self),
+        fields(
+            current = tracing::field::Empty,
+            token_line = tracing::field::Empty,
+            token_column = tracing::field::Empty
+        ),
+        name = "parser.match_pattern",
+        target = "parser",
+        level = "trace"
+    )]
     fn match_pattern(&mut self) -> Result<MatchPattern, String> {
+        self.record_parse_cursor();
         tracing::trace!(target: "parser","Parsing match pattern| current:{:?}", self.current_type());
         // Wildcard
         if let Some(TokenType::Identifier(name)) = self.current_type() {
@@ -956,7 +1360,19 @@ impl Parser {
         })
     }
 
+    #[instrument(
+        skip(self),
+        fields(
+            current = tracing::field::Empty,
+            token_line = tracing::field::Empty,
+            token_column = tracing::field::Empty
+        ),
+        name = "parser.while_statement",
+        target = "parser",
+        level = "trace"
+    )]
     fn while_statement(&mut self) -> Result<Expression, String> {
+        self.record_parse_cursor();
         tracing::trace!(target: "parser","Parsing while statement| current:{:?}", self.current_type());
         self.expect(&TokenType::While)?;
         let condition = self.parse_full_expression()?;
@@ -972,7 +1388,19 @@ impl Parser {
         })
     }
 
+    #[instrument(
+        skip(self),
+        fields(
+            current = tracing::field::Empty,
+            token_line = tracing::field::Empty,
+            token_column = tracing::field::Empty
+        ),
+        name = "parser.for_statement",
+        target = "parser",
+        level = "trace"
+    )]
     fn for_statement(&mut self) -> Result<Expression, String> {
+        self.record_parse_cursor();
         tracing::trace!(target: "parser","Parsing for statement| current:{:?}", self.current_type());
         self.expect(&TokenType::For)?;
         let iterator = self.id()?;
@@ -988,7 +1416,19 @@ impl Parser {
         })
     }
 
+    #[instrument(
+        skip(self),
+        fields(
+            current = tracing::field::Empty,
+            token_line = tracing::field::Empty,
+            token_column = tracing::field::Empty
+        ),
+        name = "parser.return_statement",
+        target = "parser",
+        level = "trace"
+    )]
     fn return_statement(&mut self) -> Result<Expression, String> {
+        self.record_parse_cursor();
         tracing::trace!(target: "parser",
             "Parsing return statement| current:{:?}",
             self.current_type()
@@ -1000,7 +1440,19 @@ impl Parser {
         Ok(Expression::Return(Some(Box::new(value))))
     }
 
+    #[instrument(
+        skip(self),
+        fields(
+            current = tracing::field::Empty,
+            token_line = tracing::field::Empty,
+            token_column = tracing::field::Empty
+        ),
+        name = "parser.print_statement",
+        target = "parser",
+        level = "trace"
+    )]
     fn print_statement(&mut self) -> Result<Expression, String> {
+        self.record_parse_cursor();
         tracing::trace!(target: "parser","Parsing print statement| current:{:?}", self.current_type());
         self.expect(&TokenType::Print)?;
         let value = self.parse_full_expression()?;
