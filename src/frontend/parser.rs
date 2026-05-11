@@ -184,20 +184,37 @@ impl Parser {
     /// Expect a specific token type or error
     /// Returns the token if it matches the expected type, otherwise returns an error
     /// Used for tokens like identifiers, keywords, etc.
+    #[instrument(
+        skip(self),
+        fields(
+            expected = tracing::field::debug(token_type),
+            current = tracing::field::Empty,
+            token_line = tracing::field::Empty,
+            token_column = tracing::field::Empty
+        ),
+        name = "parser.expect",
+        target = "parser",
+        level = "trace"
+    )]
     fn expect(&mut self, token_type: &TokenType) -> Result<Token, String> {
-        tracing::trace!(target: "parser","Expecting {:?}", token_type);
+        self.record_parse_cursor();
         if let Some(token) = self.bump() {
-            tracing::trace!(target: "parser","Expecting| actual token:{:?}", token);
             if token.var() == token_type.var() {
                 Ok(token)
             } else {
+                tracing::trace!(
+                    target: "parser",
+                    expected = ?token_type,
+                    found = ?token.token_type,
+                    "expect mismatch"
+                );
                 Err(format!(
                     "Expected {:?}, found {:?}",
                     token_type, token.token_type
                 ))
             }
         } else {
-            tracing::trace!(target: "parser","Unexpected end of input");
+            tracing::trace!(target: "parser", "expect: unexpected end of input");
             Err("Unexpected end of input".to_string())
         }
     }
