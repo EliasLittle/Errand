@@ -1,0 +1,107 @@
++-- Type-inference focused fixture. Exercises the demand-driven analyzer in
++-- `src/backend/analysis/` across many surfaces in a single runnable program:
++--   - overloaded foreign functions / multiple dispatch (`strlen(Int)` vs `strlen(String)`)
++--   - struct + enum metadata registration, field access, and constructors
++--   - recursion and mutual recursion (existential instantiation + occurs check)
++--   - `while` loops, `if`, and `return`
++--   - every arithmetic / comparison / logical operator plus unary negate and not
++--   - `match` with unit / single-payload / tuple variant bindings and a wildcard
++--   - `typeof` over concrete Int / Float / String / Bool / struct types
+
+foreign fn printf(a::Int):: Int
+foreign fn strlen(a::Int):: Int
+
+fn strlen(a::String)
+    return strlen(as_ptr(a))
+end
+
+struct Point
+    x::Int
+    y::Int
+end
+
+enum Shape
+    Circle::Int
+    Rect::(Int, Int)
+    Dot
+end
+
+fn sq_distance(a::Point, b::Point)
+    dx = a.x - b.x
+    dy = a.y - b.y
+    return dx * dx + dy * dy
+end
+
+fn power(base, exp)
+    if exp <= 0
+        return 1
+    end
+    return base * power(base, exp - 1)
+end
+
+fn is_even(n)
+    if n == 0
+        return true
+    end
+    return is_odd(n - 1)
+end
+
+fn is_odd(n)
+    if n == 0
+        return false
+    end
+    return is_even(n - 1)
+end
+
+fn sum_to(n)
+    total = 0
+    i = 1
+    while i <= n
+        total = total + i
+        i = i + 1
+    end
+    return total
+end
+
+p = Point(1, 2)
+q::Point = new(:Point, 4, 6)
+printf("dist %d\n", sq_distance(p, q))
+
+printf("power %d\n", power(2, 10))
+printf("sum %d\n", sum_to(100))
+neg = -sum_to(5)
+printf("neg %d\n", neg)
+
+even = is_even(10)
+odd = is_odd(7)
+both = even && odd
+either = even || odd
+printf("even %d odd %d both %d either %d\n", even, odd, both, either)
+if !is_odd(4)
+    printf("four is not odd\n")
+end
+printf("ne %d\n", power(2, 3) != 8)
+
+pi = 3.14
+greeting = "hi"
+flag = true
+count = 42
+printf("types %s %s %s %s %s\n", typeof(p), typeof(pi), typeof(greeting), typeof(flag), typeof(count))
+printf("strlen %d\n", strlen("hello"))
+
+s1 = Shape::Rect(3, 4)
+s2 = Shape::Circle(5)
+s3 = Shape::Dot
+match s1
+    Shape::Circle(r) -> printf("circle %d\n", r)
+    Shape::Rect(w, h) -> printf("rect %d\n", w * h)
+    Shape::Dot -> printf("dot\n")
+end
+match s2
+    Shape::Circle(r) -> printf("circle %d\n", 3 * r * r)
+    _ -> printf("other\n")
+end
+match s3
+    Shape::Dot -> printf("dot\n")
+    _ -> printf("other\n")
+end

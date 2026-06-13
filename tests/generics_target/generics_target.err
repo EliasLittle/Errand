@@ -1,0 +1,67 @@
++-- DEVELOPMENT TARGET: generics do not yet compile + run end-to-end. This
++-- fixture documents the goal program for that work and is wired into the
++-- golden harness as an `#[ignore]`d test. Run it on demand with:
++--   cargo test --test compile_run_golden -- --ignored
++-- Once it passes, drop the `#[ignore]` (or fold the case into `CASES`).
++--
++-- It exercises the generic type-inference paths in `src/backend/analysis/`:
++--   - generic struct / enum metadata + monomorphization to concrete types
++--   - nested generic instantiation (`Pair<Int, Box<Int>>`)
++--   - generic-returning functions inferred from call-site argument types
++--   - `match` over generic enums with payload bindings (`scrutinee_subst`)
+
+foreign fn printf(a::Int):: Int
+
+struct Pair<A, B>
+    first::A
+    second::B
+end
+
+struct Box<T>
+    value::T
+end
+
+enum Option<T>
+    Some::T
+    None
+end
+
+enum Result<T, E>
+    Ok::T
+    Err::E
+end
+
+fn make_pair(a, b)
+    return Pair(a, b)
+end
+
+nested::Pair<Int, Box<Int>> = Pair(7, Box(9))
+printf("nested %d %d\n", nested.first, nested.second.value)
+
+p::Pair<Int, Bool> = Pair(2, true)
+printf("pair %d %d\n", p.first, p.second)
+
+q = make_pair(10, 20)
+printf("inferred %d %d\n", q.first, q.second)
+
+o::Option<Int> = Option::Some(42)
+n::Option<Int> = Option::None
+match o
+    Option::Some(x) -> printf("some %d\n", x)
+    Option::None -> printf("none\n")
+end
+match n
+    Option::Some(x) -> printf("some %d\n", x)
+    Option::None -> printf("none\n")
+end
+
+r::Result<Int, String> = Result::Ok(7)
+e::Result<Int, String> = Result::Err("bad")
+match r
+    Result::Ok(v) -> printf("ok %d\n", v)
+    Result::Err(s) -> printf("err %s\n", s)
+end
+match e
+    Result::Ok(v) -> printf("ok %d\n", v)
+    Result::Err(s) -> printf("err %s\n", s)
+end

@@ -1,0 +1,13 @@
+# exit: 0
+dist 25
+power 1024
+sum 5050
+neg -15
+even 1 odd 1 both 1 either 1
+four is not odd
+ne 0
+types Point Float String Bool Int
+strlen 5
+rect 12
+circle 75
+dot
