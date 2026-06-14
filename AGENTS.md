@@ -27,14 +27,14 @@ entries throughout the pipeline.
 The long-term goal is to **gradually eliminate `src/frontend/lower.rs`** by moving
 each transformation it performs into the appropriate later compiler phase:
 
-- Desugaring that only needs name information → PreIR generation (`preir_gen.rs`)
+- Desugaring that only needs name information → FIR generation (`fir_gen.rs`)
 - Transformations that require type information → analysis (`analysis.rs`) or SIR
   generation (`sir_gen.rs`)
-- Recognition of syntactic patterns (e.g. enum variant access) → PreIR generation
+- Recognition of syntactic patterns (e.g. enum variant access) → FIR generation
 
 **Do not add new transformations to `lower.rs`.** Remaining frontend desugar is
 limited to `printf` string temporaries and implicit `return` on functions; other
-desugaring lives in `preir_gen.rs` (or later phases). New features should place
+desugaring lives in `fir_gen.rs` (or later phases). New features should place
 their lowering logic in the backend from the start.
 
 ## Naming: clarity over brevity

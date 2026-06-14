@@ -2,7 +2,7 @@
 
 ## Overview
 
-This document describes the implementation of a worklist-based type inference system for Errand's PreIR (Pre-Intermediate Representation), adapted from the DK (Dunfield-Krishnaswami) algorithm used in System F-omega.
+This document describes the implementation of a worklist-based type inference system for Errand's FIR (First Intermediate Representation), adapted from the DK (Dunfield-Krishnaswami) algorithm used in System F-omega.
 
 ## Architecture
 
@@ -73,7 +73,7 @@ Comprehensive support for all Errand binary operators:
 
 ```rust
 use errand::backend::worklist::{ErrandInference, ErrandType};
-use errand::backend::preir::{Instr, LiteralPl};
+use errand::backend::fir::{Instr, LiteralPl};
 
 let mut inference = ErrandInference::new();
 let instr = Instr::Literal(LiteralPl::Int(42));
@@ -135,7 +135,7 @@ let mut inference = ErrandInference::with_context(var_context, func_context);
 
 ### Index-based References
 
-Unlike tree-structured CoreTerms, Errand's PreIR uses flat instruction sequences with index-based references (`InstrIndex`). The current implementation simplifies this by not fully tracking cross-instruction constraints.
+Unlike tree-structured CoreTerms, Errand's FIR uses flat instruction sequences with index-based references (`InstrIndex`). The current implementation simplifies this by not fully tracking cross-instruction constraints.
 
 ## Limitations and Future Work
 

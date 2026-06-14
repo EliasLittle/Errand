@@ -1,8 +1,8 @@
 pub mod analysis;
 pub mod errand_builtins;
 pub mod ir_lowering;
-pub mod preir;
-pub mod preir_gen;
+pub mod fir;
+pub mod fir_gen;
 pub mod sir;
 pub mod sir_gen;
 pub mod sir_lowering;

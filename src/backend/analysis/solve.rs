@@ -7,7 +7,7 @@
 
 use std::collections::HashMap;
 
-use crate::backend::preir::{
+use crate::backend::fir::{
     InstrIndex, BinOpPl, FnCallPl, Instr, LiteralPl, ReturnData, UnOpPl, VarRefData,
 };
 use crate::backend::worklist::{
@@ -94,7 +94,7 @@ impl Analyzer {
         result_ty: ErrandType,
     ) -> TypeResult<()> {
         let arg_instr = self
-            .preir
+            .fir
             .get_instruction(arg_idx)
             .cloned()
             .ok_or_else(|| {

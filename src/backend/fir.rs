@@ -3,15 +3,15 @@ use crate::frontend::ast::{
 };
 use std::fmt::{Display, Formatter, Result as FmtResult};
 
-// ─── PreIR container & pretty-printing ───────────────────────────────────────
+// ─── FIR container & pretty-printing ───────────────────────────────────────
 
 #[derive(Debug, Clone)]
-pub struct PreIR {
+pub struct FIR {
     pub main: Instr,
     pub instructions: Vec<Instr>,
 }
 
-impl PreIR {
+impl FIR {
     /// Parenthesized recursive formatting for an operand index, or `%idx` if missing.
     fn format_operand_idx(&self, idx: InstrIndex) -> String {
         match self.get_instruction(idx) {
@@ -20,9 +20,9 @@ impl PreIR {
         }
     }
 
-    /// Creates a new `PreIR` instance with an empty `Region` instruction as its main body.
+    /// Creates a new `FIR` instance with an empty `Region` instruction as its main body.
     pub fn init() -> Self {
-        PreIR {
+        FIR {
             main: Instr::Region(RegionData {
                 instr_start: 0,
                 instr_end: 0,
@@ -288,9 +288,9 @@ pub enum Instr {
     // Compiler intrinsics, each with a dedicated emitter in `sir_lowering` and
     // dispatched directly in the central instruction match like any other
     // variant (rather than via a separate enum). `Typeof` is the only one
-    // recognized during PreIR generation, because it must be analyzed; the
+    // recognized during FIR generation, because it must be analyzed; the
     // rest are introduced during SIR generation by rewriting the matching
-    // `FnCall`s, so PreIR and analysis only ever see the original `FnCall`.
+    // `FnCall`s, so FIR and analysis only ever see the original `FnCall`.
     /// `typeof(operand)`: yields a `String` naming the operand's resolved type.
     /// The operand is type-checked during analysis; SIR generation rewrites
     /// this into a `Literal(Symbol(_))` once the type is known.
@@ -418,7 +418,7 @@ pub struct EnumVariantData {
 }
 
 /// Construction of a data-carrying enum variant, e.g. `Message::Move(1, 2)`.
-/// `arg_indices` are the PreIR indices of the compiled argument values, in
+/// `arg_indices` are the FIR indices of the compiled argument values, in
 /// declaration order.
 #[derive(Debug, Clone, PartialEq)]
 pub struct EnumVariantConstructData {
@@ -434,7 +434,7 @@ pub struct MatchArmData {
     pub tag: Option<i64>,
     /// Positional variable names bound to extracted fields; empty for unit variants.
     pub bindings: Vec<String>,
-    /// PreIR index of the compiled arm body.
+    /// FIR index of the compiled arm body.
     pub body: InstrIndex,
 }
 

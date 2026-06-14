@@ -5,8 +5,8 @@ use crate::backend::analysis::Analyzer;
 use crate::backend::errand_builtins::{
     type_expr_to_errand_type, type_expr_to_errand_type_with_params,
 };
-use crate::backend::preir::PreIR;
-use crate::backend::preir::{
+use crate::backend::fir::FIR;
+use crate::backend::fir::{
     InstrIndex, BinOpPl, EnumData, EnumVariantConstructData, FnCallPl, ForLoopData, FuncData,
     IfStatementData, Instr, LiteralPl, MatchArmData, MatchData, RegionData, ReturnData, StructData,
     UnOpPl, VarDeclData, WhileLoopData,
@@ -19,13 +19,13 @@ use crate::backend::worklist::ErrandType;
 use crate::frontend::ast::{GenericArg, Id, Parameter, Program, TypeExpression};
 use tracing::instrument;
 
-/// Generates SIR from PreIR in a single interleaved pass: each instruction is
+/// Generates SIR from FIR in a single interleaved pass: each instruction is
 /// typed via `Analyzer` and emitted simultaneously.
 pub struct SirGen {
     pub analyzer: Analyzer,
-    /// Maps global PreIR instruction index -> local SIR index for the function
+    /// Maps global FIR instruction index -> local SIR index for the function
     /// currently being processed.  Reset for each function / main.
-    preir_to_sir: HashMap<InstrIndex, InstrIndex>,
+    fir_to_sir: HashMap<InstrIndex, InstrIndex>,
 }
 
 impl SirGen {
@@ -40,20 +40,20 @@ impl SirGen {
     fn new(analyzer: Analyzer) -> Self {
         SirGen {
             analyzer,
-            preir_to_sir: HashMap::new(),
+            fir_to_sir: HashMap::new(),
         }
     }
 
-    /// Build a complete `SIRModule` from a `PreIR`.
+    /// Build a complete `SIRModule` from a `FIR`.
     #[instrument(
-        skip(preir, program),
-        fields(preir_len = preir.instructions.len()),
+        skip(fir, program),
+        fields(fir_len = fir.instructions.len()),
         name = "sir_gen.emit_sir_module",
         target = "sir_gen",
         level = "debug"
     )]
-    pub fn emit_sir_module(preir: PreIR, program: &Program) -> Result<SIRModule, String> {
-        let analyzer = Analyzer::new(preir, program);
+    pub fn emit_sir_module(fir: FIR, program: &Program) -> Result<SIRModule, String> {
+        let analyzer = Analyzer::new(fir, program);
         let mut gen = SirGen::new(analyzer);
 
         // Collect function and struct metadata before any mutable borrows.
@@ -67,7 +67,7 @@ impl SirGen {
 
         let function_meta: Vec<FuncMeta> = gen
             .analyzer
-            .preir
+            .fir
             .instructions
             .iter()
             .filter_map(|instr| {
@@ -88,7 +88,7 @@ impl SirGen {
         // Build struct layouts from StructDecl instructions.
         let struct_layouts: HashMap<String, SIRStructLayout> =
             gen.analyzer
-                .preir
+                .fir
                 .instructions
                 .iter()
                 .filter_map(|instr| {
@@ -110,7 +110,7 @@ impl SirGen {
         // Process main first so module-level variables enter module_context
         // before any function body is analyzed.
         gen.analyzer.setup_function_context(&[]);
-        let region_data = match gen.analyzer.preir.main.clone() {
+        let region_data = match gen.analyzer.fir.main.clone() {
             Instr::Region(rd) => rd,
             _ => return Err("main is not a Region".into()),
         };
@@ -169,7 +169,7 @@ impl SirGen {
         // Collect enum layouts from EnumDecl instructions, computing tagged-union sizes.
         let enum_layouts: HashMap<String, SIREnumLayout> = gen
             .analyzer
-            .preir
+            .fir
             .instructions
             .iter()
             .filter_map(|instr| {
@@ -226,7 +226,7 @@ impl SirGen {
         Ok(module)
     }
 
-    // ── Emission (PreIR → SIR) ─────────────────────────────────────────────────
+    // ── Emission (FIR → SIR) ─────────────────────────────────────────────────
 
     /// Emit SIR for a function body rooted at `root_idx`.
     /// Resets the index map so local indices start at 0.
@@ -238,7 +238,7 @@ impl SirGen {
         level = "trace"
     )]
     fn emit_body_sir(&mut self, root_idx: InstrIndex) -> Result<SIR, String> {
-        self.preir_to_sir.clear();
+        self.fir_to_sir.clear();
         let mut sir = SIR {
             instructions: Vec::new(),
             return_loc: 0,
@@ -262,7 +262,7 @@ impl SirGen {
         level = "trace"
     )]
     fn emit_region_sir(&mut self, region_data: &RegionData) -> Result<SIR, String> {
-        self.preir_to_sir.clear();
+        self.fir_to_sir.clear();
         let mut sir = SIR {
             instructions: Vec::new(),
             return_loc: 0,
@@ -281,7 +281,7 @@ impl SirGen {
         )?;
 
         sir.return_loc = self
-            .preir_to_sir
+            .fir_to_sir
             .get(&region_data.return_loc)
             .copied()
             .unwrap_or(0);
@@ -309,7 +309,7 @@ impl SirGen {
 
         let new_end = sir.instructions.len() as InstrIndex;
         let new_return_loc = self
-            .preir_to_sir
+            .fir_to_sir
             .get(&rd.return_loc)
             .copied()
             .unwrap_or(new_start);
@@ -334,73 +334,73 @@ impl SirGen {
             instr: remapped_region,
             ty,
         });
-        self.preir_to_sir.insert(global_idx, local_idx);
+        self.fir_to_sir.insert(global_idx, local_idx);
 
         Ok(local_idx)
     }
 
-    /// Collect all PreIR instruction indices that are "owned" by match arm body
-    /// Regions within the given PreIR range. These must not be pre-emitted in
+    /// Collect all FIR instruction indices that are "owned" by match arm body
+    /// Regions within the given FIR range. These must not be pre-emitted in
     /// a sequential scan; instead they must be emitted lazily inside the arm
     /// body's `emit_region_instr` call so that their SIR indices fall within
     /// the Region's `instr_start..instr_end` range.
     #[instrument(
         skip(self),
         fields(start, end),
-        name = "sir_gen.collect_arm_owned_preir",
+        name = "sir_gen.collect_arm_owned_fir",
         target = "sir_gen",
         level = "trace"
     )]
-    fn collect_arm_owned_preir(
+    fn collect_arm_owned_fir(
         &self,
         start: InstrIndex,
         end: InstrIndex,
     ) -> HashSet<InstrIndex> {
         let mut owned = HashSet::new();
         for i in start..end {
-            if let Some(Instr::Match(data)) = self.analyzer.preir.get_instruction(i) {
+            if let Some(Instr::Match(data)) = self.analyzer.fir.get_instruction(i) {
                 for arm in &data.arms {
-                    self.mark_arm_owned_preir(arm.body, &mut owned);
+                    self.mark_arm_owned_fir(arm.body, &mut owned);
                 }
             }
         }
         owned
     }
 
-    /// Recursively mark `idx` and all PreIR instructions inside it as arm-owned.
+    /// Recursively mark `idx` and all FIR instructions inside it as arm-owned.
     #[instrument(
         skip(self, owned),
         fields(idx),
-        name = "sir_gen.mark_arm_owned_preir",
+        name = "sir_gen.mark_arm_owned_fir",
         target = "sir_gen",
         level = "trace"
     )]
-    fn mark_arm_owned_preir(&self, idx: InstrIndex, owned: &mut HashSet<InstrIndex>) {
+    fn mark_arm_owned_fir(&self, idx: InstrIndex, owned: &mut HashSet<InstrIndex>) {
         if owned.contains(&idx) {
             return;
         }
         owned.insert(idx);
-        match self.analyzer.preir.get_instruction(idx) {
+        match self.analyzer.fir.get_instruction(idx) {
             Some(Instr::Region(data)) => {
                 let start = data.instr_start;
                 let end = data.instr_end;
                 for i in start..end {
-                    self.mark_arm_owned_preir(i, owned);
+                    self.mark_arm_owned_fir(i, owned);
                 }
             }
             Some(Instr::Match(data)) => {
                 for arm in &data.arms {
-                    self.mark_arm_owned_preir(arm.body, owned);
+                    self.mark_arm_owned_fir(arm.body, owned);
                 }
             }
             _ => {}
         }
     }
 
-    /// PreIR lays out `while cond do (block)` as: `cond…`, `block` statements, the block's
+    /// FIR lays out `while cond do (block)` as: `cond…`, `block` statements, the block's
     /// `Region` node, then the `WhileLoop`. A linear scan would emit the block twice (once
     /// while walking the parent range, again when lowering the `WhileLoop`), leaving the
-    /// `WhileLoop`'s body `Region` empty in SIR because `preir_to_sir` is already populated.
+    /// `WhileLoop`'s body `Region` empty in SIR because `fir_to_sir` is already populated.
     /// Skip the operand `Region` and its `instr_start..instr_end` range whenever we see a
     /// control-flow instruction that owns them.
     #[instrument(
@@ -416,15 +416,15 @@ impl SirGen {
         end: InstrIndex,
     ) -> HashSet<InstrIndex> {
         let mut skip = HashSet::new();
-        let preir = &self.analyzer.preir;
+        let fir = &self.analyzer.fir;
         for i in start..end {
-            match preir.get_instruction(i) {
-                Some(Instr::WhileLoop(d)) => Self::mark_region_body_skip(preir, d.body, &mut skip),
-                Some(Instr::ForLoop(d)) => Self::mark_region_body_skip(preir, d.body, &mut skip),
+            match fir.get_instruction(i) {
+                Some(Instr::WhileLoop(d)) => Self::mark_region_body_skip(fir, d.body, &mut skip),
+                Some(Instr::ForLoop(d)) => Self::mark_region_body_skip(fir, d.body, &mut skip),
                 Some(Instr::IfStatement(d)) => {
-                    Self::mark_region_body_skip(preir, d.then_branch, &mut skip);
+                    Self::mark_region_body_skip(fir, d.then_branch, &mut skip);
                     if let Some(e) = d.else_branch {
-                        Self::mark_region_body_skip(preir, e, &mut skip);
+                        Self::mark_region_body_skip(fir, e, &mut skip);
                     }
                 }
                 _ => {}
@@ -434,14 +434,14 @@ impl SirGen {
     }
 
     #[instrument(
-        skip(preir, skip),
+        skip(fir, skip),
         fields(body),
         name = "sir_gen.mark_region_body_skip",
         target = "sir_gen",
         level = "trace"
     )]
-    fn mark_region_body_skip(preir: &PreIR, body: InstrIndex, skip: &mut HashSet<InstrIndex>) {
-        if let Some(Instr::Region(rd)) = preir.get_instruction(body) {
+    fn mark_region_body_skip(fir: &FIR, body: InstrIndex, skip: &mut HashSet<InstrIndex>) {
+        if let Some(Instr::Region(rd)) = fir.get_instruction(body) {
             skip.insert(body);
             for j in rd.instr_start..rd.instr_end {
                 skip.insert(j);
@@ -449,7 +449,7 @@ impl SirGen {
         }
     }
 
-    /// Walk `instr_start..instr_end` in PreIR order for region emission: defer match-arm-owned
+    /// Walk `instr_start..instr_end` in FIR order for region emission: defer match-arm-owned
     /// instructions and control-flow-owned region bodies, optionally skip or analyze nested
     /// module-level declarations.
     #[instrument(
@@ -466,10 +466,10 @@ impl SirGen {
         sir: &mut SIR,
         nested_decls: bool,
     ) -> Result<(), String> {
-        let arm_owned = self.collect_arm_owned_preir(instr_start, instr_end);
+        let arm_owned = self.collect_arm_owned_fir(instr_start, instr_end);
         let cf_skip = self.control_flow_operand_skip_indices(instr_start, instr_end);
         for i in instr_start..instr_end {
-            match self.analyzer.preir.get_instruction(i) {
+            match self.analyzer.fir.get_instruction(i) {
                 Some(Instr::FuncDecl(_))
                 | Some(Instr::StructDecl(_))
                 | Some(Instr::EnumDecl(_)) => {
@@ -502,16 +502,16 @@ impl SirGen {
         global_idx: InstrIndex,
         sir: &mut SIR,
     ) -> Result<InstrIndex, String> {
-        if let Some(&local) = self.preir_to_sir.get(&global_idx) {
+        if let Some(&local) = self.fir_to_sir.get(&global_idx) {
             return Ok(local);
         }
 
         let instr = self
             .analyzer
-            .preir
+            .fir
             .get_instruction(global_idx)
             .cloned()
-            .ok_or_else(|| format!("invalid PreIR index: {global_idx}"))?;
+            .ok_or_else(|| format!("invalid FIR index: {global_idx}"))?;
 
         // Region instructions: emit contained body first, then the Region node.
         if let Instr::Region(ref rd) = instr {
@@ -563,7 +563,7 @@ impl SirGen {
             instr: remapped,
             ty,
         });
-        self.preir_to_sir.insert(global_idx, local_idx);
+        self.fir_to_sir.insert(global_idx, local_idx);
 
         Ok(local_idx)
     }
@@ -571,7 +571,7 @@ impl SirGen {
     // ── Operand remapping (during emission) ───────────────────────────────────
 
     /// Return a new `Instr` with all operand `InstrIndex` values remapped from
-    /// global PreIR space to local SIR space, emitting dependencies first.
+    /// global FIR space to local SIR space, emitting dependencies first.
     #[instrument(
         skip(self, instr, sir),
         name = "sir_gen.remap_operands",
@@ -599,7 +599,7 @@ impl SirGen {
             Instr::FuncDecl(data) => self.remap_func_decl(data, sir),
             Instr::Region(_) => unreachable!("Region handled before remap_operands"),
             // Builtin operations are produced by `remap_fn_call`, never present
-            // in the PreIR fed into remapping.
+            // in the FIR fed into remapping.
             Instr::New(_)
             | Instr::Printf(_)
             | Instr::MemLoad(_)
@@ -608,7 +608,7 @@ impl SirGen {
             | Instr::Ffi(_)
             | Instr::AsPtr(_)
             | Instr::AsString(_) => {
-                unreachable!("builtin operations are produced by remap_fn_call, not present in PreIR")
+                unreachable!("builtin operations are produced by remap_fn_call, not present in FIR")
             }
         }
     }
@@ -908,7 +908,7 @@ impl SirGen {
         // Monomorph clones template bodies with substituted types; run collapse+patch again
         // so `App` normalizes and `new`/enum symbols pick up mangled names.
         Self::apply_collapse_patch(module, &self.analyzer);
-        Self::ensure_mangled_layouts(module, &self.analyzer.preir)?;
+        Self::ensure_mangled_layouts(module, &self.analyzer.fir)?;
         Ok(())
     }
 
@@ -1291,7 +1291,7 @@ impl SirGen {
     fn monomorph_generic_struct_constructors(&self, module: &mut SIRModule) -> Result<(), String> {
         let generic_structs: Vec<StructData> = self
             .analyzer
-            .preir
+            .fir
             .instructions
             .iter()
             .filter_map(|i| {
@@ -1411,13 +1411,13 @@ impl SirGen {
     }
 
     #[instrument(
-        skip(module, preir),
-        fields(preir_len = preir.instructions.len()),
+        skip(module, fir),
+        fields(fir_len = fir.instructions.len()),
         name = "sir_gen.ensure_mangled_layouts",
         target = "sir_gen",
         level = "trace"
     )]
-    fn ensure_mangled_layouts(module: &mut SIRModule, preir: &PreIR) -> Result<(), String> {
+    fn ensure_mangled_layouts(module: &mut SIRModule, fir: &FIR) -> Result<(), String> {
         let mut mangled: HashSet<String> = HashSet::new();
         for_each_sir_body(module, |sir| {
             for si in &sir.instructions {
@@ -1430,7 +1430,7 @@ impl SirGen {
             Self::collect_mangled_symbols_from_sir(sir, &mut mangled);
         });
 
-        let struct_defs: Vec<StructData> = preir
+        let struct_defs: Vec<StructData> = fir
             .instructions
             .iter()
             .filter_map(|i| {
@@ -1445,7 +1445,7 @@ impl SirGen {
                 }
             })
             .collect();
-        let enum_defs: Vec<EnumData> = preir
+        let enum_defs: Vec<EnumData> = fir
             .instructions
             .iter()
             .filter_map(|i| {

@@ -3,7 +3,7 @@ use std::fmt::{Display, Formatter, Result as FmtResult};
 
 use tracing::instrument;
 
-use crate::backend::preir::{InstrIndex, Instr};
+use crate::backend::fir::{InstrIndex, Instr};
 use crate::backend::worklist::ErrandType;
 
 /// One typed instruction in SIR. Operand indices are local to this SIR instance.

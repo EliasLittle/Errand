@@ -15,7 +15,7 @@ use cranelift_module::FuncId;
 use cranelift_module::{FuncOrDataId, Linkage, Module};
 use cranelift_object::ObjectModule;
 
-use crate::backend::preir::{
+use crate::backend::fir::{
     InstrIndex, BinOpPl, EnumVariantConstructData, EnumVariantData, IfStatementData, Instr,
     LiteralPl, MatchData, ReturnData, UnOpPl, VarDeclData, VarRefData, WhileLoopData,
 };

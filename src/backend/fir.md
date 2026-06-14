@@ -1,11 +1,11 @@
-# PreIR Design
+# FIR Design
 
-PreIR is an intermediate representation used in the Errand compiler between the typed AST and later backend passes. It is a flat, index-based IR suitable for type checking (worklist inference) and future lowering.
+FIR is an intermediate representation used in the Errand compiler between the typed AST and later backend passes. It is a flat, index-based IR suitable for type checking (worklist inference) and future lowering.
 
 ## Data Layout
 
 ```
-PreIR
+FIR
 ├── main: Instr          -- Root region (entry point)
 └── instructions: Vec<Instr>   -- Flat instruction pool
 ```
@@ -32,7 +32,7 @@ These produce a value at their index (referenced as `%N`).
 | **FnCall** | `FnCallPl` | Function call |
 | **IfStatement** | `IfStatementData` | Conditional expression |
 | **WhileLoop** | `WhileLoopData` | While loop expression |
-| **ForLoop** | `ForLoopData` | Reserved IR shape; **not emitted** by `preir_gen` today — `for` is lowered to `WhileLoop` plus `Region` (see below) |
+| **ForLoop** | `ForLoopData` | Reserved IR shape; **not emitted** by `fir_gen` today — `for` is lowered to `WhileLoop` plus `Region` (see below) |
 | **Return** | `ReturnData` | Return from function |
 | **Region** | `RegionData` | Block of instructions (sequence) |
 | **EnumVariantAccess** | `EnumVariantData` | Unit variant reference `E::V` |
@@ -117,7 +117,7 @@ These define names; they do not produce a value in the same way. Formatted witho
 | `range` | `InstrIndex` | Range expression (e.g. list) |
 | `body` | `InstrIndex` | Loop body (Region) |
 
-The current PreIR generator does **not** emit `Instr::ForLoop`. Source `for` loops are desugared in [`preir_gen.rs`](preir_gen.rs) into index variables, `length` / `get`, and a `WhileLoop` wrapped in a `Region`. The `ForLoop` variant remains for possible future use or other pipeline paths; the worklist type checker reports it as unsupported if it appears.
+The current FIR generator does **not** emit `Instr::ForLoop`. Source `for` loops are desugared in [`fir_gen.rs`](fir_gen.rs) into index variables, `length` / `get`, and a `WhileLoop` wrapped in a `Region`. The `ForLoop` variant remains for possible future use or other pipeline paths; the worklist type checker reports it as unsupported if it appears.
 
 ### Return (`ReturnData`)
 
@@ -180,7 +180,7 @@ Single field: operand `InstrIndex`. Lowered from a `typeof(...)` call in the AST
 
 ---
 
-## Compilation Order (`compile_preir` in `preir_gen`)
+## Compilation Order (`compile_fir` in `fir_gen`)
 
 1. **Pass 1 — declarations**: For each top-level `StructDefinition` / `EnumDefinition`, emit `StructDecl` / `EnumDecl` (metadata only; no function bodies).
 2. **Pass 2 — synthetic struct constructors**: For each struct, emit the compiler-generated constructor as a `FuncDecl` (body compiled in this pass).
@@ -194,7 +194,7 @@ Nested expressions (inside bodies) use the same lowering helpers; nested struct/
 ## Pipeline Position
 
 ```
-Parse → Lower → Type inference → … → PreIR gen (`compile_preir`) → [Optional: worklist type check] → SIR / lowering → Codegen
+Parse → Lower → Type inference → … → FIR gen (`compile_fir`) → [Optional: worklist type check] → SIR / lowering → Codegen
 ```
 
-PreIR is produced by `compile_preir()` from the AST (typically after typing). It is consumed by the worklist type checker (`--type-check-preir`) and can be dumped for debugging (`--dump-ir`).
+FIR is produced by `compile_fir()` from the AST (typically after typing). It is consumed by the worklist type checker (`--type-check-fir`) and can be dumped for debugging (`--dump-ir`).

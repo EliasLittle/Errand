@@ -1,6 +1,6 @@
 use Errand::backend::ir_lowering::IRLoweringPass;
-use Errand::backend::preir::PreIR;
-use Errand::backend::preir_gen::compile_preir;
+use Errand::backend::fir::FIR;
+use Errand::backend::fir_gen::compile_fir;
 use Errand::backend::sir::SIRModule;
 use Errand::backend::sir_gen::SirGen;
 use Errand::frontend::ast::Program;
@@ -37,7 +37,7 @@ struct Cli {
     #[arg(long, value_enum)]
     arch: Option<Arch>,
 
-    /// Generate SIR (typed IR) from PreIR and dump to file
+    /// Generate SIR (typed IR) from FIR and dump to file
     #[arg(long)]
     verbose: bool,
 
@@ -84,9 +84,9 @@ fn print_ast(path: &str, extension: &str, ast: &Program) {
     info!(path = %ast_file_path, "AST written to file");
 }
 
-fn dump_verbose_preir(file_path: &str, preir: &PreIR) {
-    let verbir = preir.format_all();
-    let main_ir = preir.format_main();
+fn dump_verbose_fir(file_path: &str, fir: &FIR) {
+    let verbir = fir.format_all();
+    let main_ir = fir.format_main();
 
     let verbir_path = derived_output_path(file_path, "verbir");
     let main_ir_path = derived_output_path(file_path, "ir");
@@ -175,20 +175,20 @@ fn run_compile(cli: &Cli) -> Result<(), String> {
         print_ast(file_path, "ast", &ast);
     }
 
-    info!("generating PreIR");
-    let preir = {
-        let _preir = tracing::info_span!("compile.preir").entered();
-        compile_preir(&ast).map_err(|e| format!("PreIR generation failed: {}", e))?
+    info!("generating FIR");
+    let fir = {
+        let _fir = tracing::info_span!("compile.fir").entered();
+        compile_fir(&ast).map_err(|e| format!("FIR generation failed: {}", e))?
     };
 
     if cli.verbose {
-        dump_verbose_preir(file_path, &preir);
+        dump_verbose_fir(file_path, &fir);
     }
 
     info!("generating SIR");
     let sir_module = {
         let _sir = tracing::info_span!("compile.sir").entered();
-        SirGen::emit_sir_module(preir.clone(), &ast)
+        SirGen::emit_sir_module(fir.clone(), &ast)
             .map_err(|e| format!("SIR generation failed: {}", e))?
     };
     info!("SIR generation complete");

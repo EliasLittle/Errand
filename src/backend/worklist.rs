@@ -3,9 +3,9 @@ use std::fmt::{self, Display, Formatter};
 
 use tracing::instrument;
 
-use crate::backend::preir::{InstrIndex, Instr};
+use crate::backend::fir::{InstrIndex, Instr};
 
-/// Type inference for Errand's PreIR using the DK Worklist Algorithm.
+/// Type inference for Errand's FIR using the DK Worklist Algorithm.
 /// This module contains only the constraint-solver data types and the `Worklist`
 /// itself.  All analysis logic lives in `analysis::Analyzer`.
 

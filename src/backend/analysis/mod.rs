@@ -4,9 +4,9 @@ use crate::backend::errand_builtins::{
     add_builtin_data_constructors, add_builtin_functions, type_expr_to_errand_type,
     type_expr_to_errand_type_with_params,
 };
-use crate::backend::preir::{
+use crate::backend::fir::{
     InstrIndex, BinOpPl, EnumData, EnumVariantConstructData, EnumVariantData, EnumVariantInfo,
-    FnCallPl, FuncData, IfStatementData, Instr, LiteralPl, MatchData, PreIR, RegionData,
+    FnCallPl, FuncData, IfStatementData, Instr, LiteralPl, MatchData, FIR, RegionData,
     ReturnData, StructData, UnOpPl, VarDeclData, VarRefData, WhileLoopData,
 };
 use crate::backend::worklist::{
@@ -103,16 +103,16 @@ impl TypePool {
 
 // ─── Analyzer ─────────────────────────────────────────────────────────────────
 
-/// Metadata gathered in a single pre-pass over the `PreIR` before analysis.
-struct PreIRMetadata {
+/// Metadata gathered in a single pre-pass over the `FIR` before analysis.
+struct FIRMetadata {
     global_defs: HashMap<String, TypeIndex>,
     enum_variants: HashMap<String, Vec<EnumVariantInfo>>,
     enum_type_params: HashMap<String, Vec<String>>,
 }
 
-/// Demand-driven semantic analysis over `PreIR`, analogous to Zig's `Sema`.
+/// Demand-driven semantic analysis over `FIR`, analogous to Zig's `Sema`.
 ///
-/// The `Analyzer` owns the `PreIR`, a `TypePool` for interned types, per-function
+/// The `Analyzer` owns the `FIR`, a `TypePool` for interned types, per-function
 /// and module variable contexts, and the constraint-solving `Worklist`.
 /// Results are cached by instruction index so each instruction is typed at most once.
 ///
@@ -120,12 +120,12 @@ struct PreIRMetadata {
 /// in the [`solve`] submodule.
 pub struct Analyzer {
     pub pool: TypePool,
-    pub preir: PreIR,
+    pub fir: FIR,
     /// Term variable context for the current function (cleared per function).
     var_context: HashMap<String, TypeIndex>,
     /// Module-level variable context (survives function boundaries).
     module_context: HashMap<String, TypeIndex>,
-    /// Cache: PreIR `InstrIndex` → resolved `TypeIndex`.
+    /// Cache: FIR `InstrIndex` → resolved `TypeIndex`.
     analysis_cache: HashMap<InstrIndex, TypeIndex>,
     /// Global symbol table: function / struct / builtin names → `TypeIndex`.
     pub global_defs: HashMap<String, TypeIndex>,
@@ -141,29 +141,29 @@ pub struct Analyzer {
 impl Analyzer {
     // ── Public API ─────────────────────────────────────────────────────────────
 
-    /// Build an `Analyzer` from a compiled `PreIR` and the source `Program`.
+    /// Build an `Analyzer` from a compiled `FIR` and the source `Program`.
     ///
     /// Performs the global definition-collection pass (builtins + function
     /// placeholders + struct constructors) before returning.
     #[instrument(
-        skip(preir, _program),
-        fields(preir_len = preir.instructions.len()),
+        skip(fir, _program),
+        fields(fir_len = fir.instructions.len()),
         name = "analysis.new",
         target = "analysis",
         level = "debug"
     )]
-    pub fn new(preir: PreIR, _program: &Program) -> Self {
+    pub fn new(fir: FIR, _program: &Program) -> Self {
         let mut pool = TypePool::new();
         let mut worklist = Worklist::new();
-        let PreIRMetadata {
+        let FIRMetadata {
             global_defs,
             enum_variants,
             enum_type_params,
-        } = Self::scan_preir_metadata(&preir, &mut pool, &mut worklist);
+        } = Self::scan_fir_metadata(&fir, &mut pool, &mut worklist);
 
         Analyzer {
             pool,
-            preir,
+            fir,
             var_context: HashMap::new(),
             module_context: HashMap::new(),
             analysis_cache: HashMap::new(),
@@ -189,7 +189,7 @@ impl Analyzer {
         }
 
         let instr = self
-            .preir
+            .fir
             .get_instruction(idx)
             .ok_or_else(|| {
                 ErrandTypeError::UnsupportedOperation(format!("invalid instr index {idx}"))
@@ -376,36 +376,36 @@ impl Analyzer {
         &self.trace
     }
 
-    // ── PreIR metadata scan (one-time pre-pass) ───────────────────────────────
+    // ── FIR metadata scan (one-time pre-pass) ───────────────────────────────
 
-    /// Single forward pass over the `PreIR` that pre-populates the `global_defs`
+    /// Single forward pass over the `FIR` that pre-populates the `global_defs`
     /// table (builtins + function placeholders + struct constructors + enum
     /// names) together with the enum variant / type-parameter tables, before any
     /// per-instruction analysis.
     ///
     /// Builtins are registered first so user function placeholders never shadow
     /// them.  Struct and enum declarations are emitted before their synthetic
-    /// constructor functions (see `preir_gen`), so a struct's constructor arrow
+    /// constructor functions (see `fir_gen`), so a struct's constructor arrow
     /// type wins over the function placeholder of the same name.
     #[instrument(
-        skip(preir, pool, worklist),
-        fields(preir_len = preir.instructions.len()),
-        name = "analysis.scan_preir_metadata",
+        skip(fir, pool, worklist),
+        fields(fir_len = fir.instructions.len()),
+        name = "analysis.scan_fir_metadata",
         target = "analysis",
         level = "debug"
     )]
-    fn scan_preir_metadata(
-        preir: &PreIR,
+    fn scan_fir_metadata(
+        fir: &FIR,
         pool: &mut TypePool,
         worklist: &mut Worklist,
-    ) -> PreIRMetadata {
+    ) -> FIRMetadata {
         let mut global_defs: HashMap<String, TypeIndex> = HashMap::new();
         let mut enum_variants: HashMap<String, Vec<EnumVariantInfo>> = HashMap::new();
         let mut enum_type_params: HashMap<String, Vec<String>> = HashMap::new();
 
         Self::register_builtin_defs(&mut global_defs, pool);
 
-        for instr in &preir.instructions {
+        for instr in &fir.instructions {
             match instr {
                 Instr::FuncDecl(FuncData { name, .. }) => {
                     Self::register_function_placeholder(name, &mut global_defs, pool, worklist);
@@ -426,7 +426,7 @@ impl Analyzer {
             }
         }
 
-        PreIRMetadata {
+        FIRMetadata {
             global_defs,
             enum_variants,
             enum_type_params,
@@ -1028,7 +1028,7 @@ impl Analyzer {
     ) -> TypeResult<TypeIndex> {
         let mut last_ty = self.pool.unit;
         for i in instr_start..instr_end {
-            if let Some(instr) = self.preir.get_instruction(i) {
+            if let Some(instr) = self.fir.get_instruction(i) {
                 match instr {
                     Instr::FuncDecl(_) | Instr::StructDecl(_) | Instr::EnumDecl(_) => continue,
                     Instr::VarDecl(_) => {

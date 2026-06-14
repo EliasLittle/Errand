@@ -1,9 +1,9 @@
 use crate::backend::errand_builtins::{
     add_builtin_data_constructors, add_builtin_functions, type_expr_to_errand_type,
 };
-use crate::backend::preir::{
+use crate::backend::fir::{
     InstrIndex, BinOpPl, EnumData, EnumVariantConstructData, EnumVariantData, EnumVariantInfo,
-    FnCallPl, FuncData, IfStatementData, Instr, LiteralPl, MatchArmData, MatchData, PreIR,
+    FnCallPl, FuncData, IfStatementData, Instr, LiteralPl, MatchArmData, MatchData, FIR,
     RegionData, ReturnData, StructData, UnOpPl, VarDeclData, VarRefData, WhileLoopData,
 };
 use crate::backend::worklist::ErrandType;
@@ -18,19 +18,19 @@ use std::collections::HashMap;
 // Public API — program-level lowering and typing-context extraction
 // ---------------------------------------------------------------------------
 
-/// Build flat PreIR from a program: metadata passes, function bodies, then main region.
-pub fn compile_preir(program: &Program) -> Result<PreIR, String> {
+/// Build flat FIR from a program: metadata passes, function bodies, then main region.
+pub fn compile_fir(program: &Program) -> Result<FIR, String> {
     let _span = tracing::debug_span!(
-        target: "preir",
-        "preir.compile",
+        target: "fir",
+        "fir.compile",
         top_level_exprs = program.expressions.len()
     )
     .entered();
-    tracing::debug!(target: "preir", "compile PreIR: metadata pass");
+    tracing::debug!(target: "fir", "compile FIR: metadata pass");
 
     let enum_names = collect_enum_names(program);
-    let mut ctx = PreIR::init();
-    let mut gen = PreIrGen {
+    let mut ctx = FIR::init();
+    let mut gen = FirGen {
         ir: &mut ctx,
         enum_names: &enum_names,
     };
@@ -59,7 +59,7 @@ pub fn compile_preir(program: &Program) -> Result<PreIR, String> {
         }
     }
 
-    tracing::debug!(target: "preir", "compile PreIR: struct constructors");
+    tracing::debug!(target: "fir", "compile FIR: struct constructors");
 
     // Pass 2: synthetic struct constructors before any user function bodies
     for expr in &program.expressions {
@@ -93,7 +93,7 @@ pub fn compile_preir(program: &Program) -> Result<PreIR, String> {
         }
     }
 
-    tracing::debug!(target: "preir", "compile PreIR: user and foreign functions");
+    tracing::debug!(target: "fir", "compile FIR: user and foreign functions");
 
     // Pass 3: user-defined (and foreign) functions.
     for expr in &program.expressions {
@@ -112,7 +112,7 @@ pub fn compile_preir(program: &Program) -> Result<PreIR, String> {
         }
     }
 
-    tracing::debug!(target: "preir", "compile PreIR: main region");
+    tracing::debug!(target: "fir", "compile FIR: main region");
 
     // Pass 4: compile top-level statements into the main region
     let mut main_instructions = Vec::new();
@@ -144,12 +144,12 @@ pub fn compile_preir(program: &Program) -> Result<PreIR, String> {
     });
 
     tracing::debug!(
-        target: "preir",
+        target: "fir",
         instructions = gen.ir.instructions.len(),
-        "compile PreIR complete"
+        "compile FIR complete"
     );
 
-    Ok(PreIR {
+    Ok(FIR {
         main,
         instructions: std::mem::take(&mut gen.ir.instructions),
     })
@@ -160,8 +160,8 @@ pub fn extract_typing_context(
     program: &Program,
 ) -> (HashMap<String, ErrandType>, HashMap<String, ErrandType>) {
     let _span = tracing::trace_span!(
-        target: "preir",
-        "preir.extract_typing_context",
+        target: "fir",
+        "fir.extract_typing_context",
         top_level = program.expressions.len()
     )
     .entered();
@@ -170,7 +170,7 @@ pub fn extract_typing_context(
     let mut function_types = add_builtin_functions();
 
     for expr in &program.expressions {
-        tracing::trace!(target: "preir", expr = ?expr, "typing context scan");
+        tracing::trace!(target: "fir", expr = ?expr, "typing context scan");
         if let Expression::FunctionDefinition {
             id,
             parameters,
@@ -220,16 +220,16 @@ fn build_function_type(
 }
 
 // ---------------------------------------------------------------------------
-// PreIrGen — recursive AST → instruction lowering (one dispatcher + per-form)
+// FirGen — recursive AST → instruction lowering (one dispatcher + per-form)
 // ---------------------------------------------------------------------------
 
-/// Mutable PreIR builder with shared enum metadata (lexer-style context object).
-struct PreIrGen<'a> {
-    ir: &'a mut PreIR,
+/// Mutable FIR builder with shared enum metadata (lexer-style context object).
+struct FirGen<'a> {
+    ir: &'a mut FIR,
     enum_names: &'a HashMap<String, Vec<String>>,
 }
 
-impl<'a> PreIrGen<'a> {
+impl<'a> FirGen<'a> {
     fn emit(&mut self, instr: Instr) -> InstrIndex {
         self.ir.emit_instruction(instr)
     }
@@ -311,12 +311,12 @@ impl<'a> PreIrGen<'a> {
     }
 }
 
-fn compile_literal(gen: &mut PreIrGen<'_>, lit: LiteralPl) -> Result<InstrIndex, String> {
+fn compile_literal(gen: &mut FirGen<'_>, lit: LiteralPl) -> Result<InstrIndex, String> {
     Ok(gen.emit(Instr::Literal(lit)))
 }
 
 fn compile_identifier(
-    gen: &mut PreIrGen<'_>,
+    gen: &mut FirGen<'_>,
     id: &Id,
     type_expr: &Option<TypeExpression>,
 ) -> Result<InstrIndex, String> {
@@ -336,7 +336,7 @@ fn compile_identifier(
 }
 
 fn compile_unary_op(
-    gen: &mut PreIrGen<'_>,
+    gen: &mut FirGen<'_>,
     operator: &crate::frontend::ast::UnaryOperator,
     operand: &Expression,
 ) -> Result<InstrIndex, String> {
@@ -348,7 +348,7 @@ fn compile_unary_op(
 }
 
 fn compile_binary_op(
-    gen: &mut PreIrGen<'_>,
+    gen: &mut FirGen<'_>,
     operator: &BinaryOperator,
     left: &Expression,
     right: &Expression,
@@ -380,7 +380,7 @@ fn compile_binary_op(
 }
 
 fn compile_field_access(
-    gen: &mut PreIrGen<'_>,
+    gen: &mut FirGen<'_>,
     left: &Expression,
     right: &Expression,
 ) -> Result<InstrIndex, String> {
@@ -404,7 +404,7 @@ fn compile_field_access(
 
 /// Built-in calls that lower to dedicated `Instr` variants (not overload dispatch).
 fn try_emit_builtin_call(
-    gen: &mut PreIrGen<'_>,
+    gen: &mut FirGen<'_>,
     id: &Id,
     arguments: &[Expression],
 ) -> Option<Result<InstrIndex, String>> {
@@ -415,7 +415,7 @@ fn try_emit_builtin_call(
 }
 
 fn compile_typeof_call(
-    gen: &mut PreIrGen<'_>,
+    gen: &mut FirGen<'_>,
     arguments: &[Expression],
 ) -> Result<InstrIndex, String> {
     if arguments.len() != 1 {
@@ -429,7 +429,7 @@ fn compile_typeof_call(
 }
 
 fn compile_function_call(
-    gen: &mut PreIrGen<'_>,
+    gen: &mut FirGen<'_>,
     id: &Id,
     arguments: &[Expression],
 ) -> Result<InstrIndex, String> {
@@ -455,7 +455,7 @@ fn compile_function_call(
 }
 
 fn compile_function_definition(
-    gen: &mut PreIrGen<'_>,
+    gen: &mut FirGen<'_>,
     id: &Id,
     parameters: &[Parameter],
     body: &Expression,
@@ -469,7 +469,7 @@ fn compile_function_definition(
 }
 
 fn compile_struct_definition(
-    gen: &mut PreIrGen<'_>,
+    gen: &mut FirGen<'_>,
     id: &Id,
     type_params: &[Id],
     fields: &[FieldDefinition],
@@ -479,7 +479,7 @@ fn compile_struct_definition(
 }
 
 fn compile_enum_definition(
-    gen: &mut PreIrGen<'_>,
+    gen: &mut FirGen<'_>,
     id: &Id,
     type_params: &[Id],
     variants: &[EnumVariant],
@@ -489,7 +489,7 @@ fn compile_enum_definition(
 }
 
 fn compile_enum_variant_access(
-    gen: &mut PreIrGen<'_>,
+    gen: &mut FirGen<'_>,
     enum_name: &str,
     variant: &str,
 ) -> Result<InstrIndex, String> {
@@ -500,7 +500,7 @@ fn compile_enum_variant_access(
 }
 
 fn compile_enum_variant_construct(
-    gen: &mut PreIrGen<'_>,
+    gen: &mut FirGen<'_>,
     enum_name: &str,
     variant: &str,
     args: &[Expression],
@@ -519,7 +519,7 @@ fn compile_enum_variant_construct(
 }
 
 fn compile_match(
-    gen: &mut PreIrGen<'_>,
+    gen: &mut FirGen<'_>,
     value: &Expression,
     cases: &[MatchCase],
 ) -> Result<InstrIndex, String> {
@@ -569,7 +569,7 @@ fn compile_match(
 }
 
 fn compile_if(
-    gen: &mut PreIrGen<'_>,
+    gen: &mut FirGen<'_>,
     condition: &Expression,
     then_branch: &Expression,
     else_branch: Option<&Expression>,
@@ -589,7 +589,7 @@ fn compile_if(
 }
 
 fn compile_while(
-    gen: &mut PreIrGen<'_>,
+    gen: &mut FirGen<'_>,
     condition: &Expression,
     body: &Expression,
 ) -> Result<InstrIndex, String> {
@@ -603,7 +603,7 @@ fn compile_while(
 
 /// Desugar `for iter in range ...` to index, `while`, and `get` / `length` (mirrors former `lower.rs`).
 fn compile_for_loop(
-    gen: &mut PreIrGen<'_>,
+    gen: &mut FirGen<'_>,
     iterator: &Id,
     range: &Expression,
     body: &Expression,
@@ -685,7 +685,7 @@ fn compile_for_loop(
 }
 
 fn compile_block(
-    gen: &mut PreIrGen<'_>,
+    gen: &mut FirGen<'_>,
     expressions: &[Box<Expression>],
 ) -> Result<InstrIndex, String> {
     let instr_start = gen.ir.instructions.len() as InstrIndex;
@@ -703,7 +703,7 @@ fn compile_block(
 }
 
 fn compile_return(
-    gen: &mut PreIrGen<'_>,
+    gen: &mut FirGen<'_>,
     expr: Option<&Expression>,
 ) -> Result<InstrIndex, String> {
     let value_idx = if let Some(return_expr) = expr {
@@ -714,7 +714,7 @@ fn compile_return(
     Ok(gen.emit(Instr::Return(ReturnData { value: value_idx })))
 }
 
-fn compile_print(gen: &mut PreIrGen<'_>, expr: &Expression) -> Result<InstrIndex, String> {
+fn compile_print(gen: &mut FirGen<'_>, expr: &Expression) -> Result<InstrIndex, String> {
     let _value_idx = gen.compile_expression(expr)?;
     Err("Print expressions not yet implemented in new IR".to_string())
 }
@@ -1035,14 +1035,14 @@ mod tests {
             ],
         };
 
-        let preir = compile_preir(&program).expect("Compilation should succeed");
+        let fir = compile_fir(&program).expect("Compilation should succeed");
 
         // Should have at least 2 instructions: literal 42, and the assignment creates a unit
-        assert!(preir.instructions.len() >= 1);
+        assert!(fir.instructions.len() >= 1);
 
         // Check that we have a literal instruction
         assert!(matches!(
-            preir.instructions[0],
+            fir.instructions[0],
             Instr::Literal(LiteralPl::Int(42))
         ));
     }
@@ -1088,10 +1088,10 @@ mod tests {
             }],
         };
 
-        let preir = compile_preir(&program).expect("Compilation should succeed");
+        let fir = compile_fir(&program).expect("Compilation should succeed");
 
         // Should have instructions for the function body and a unit return
-        assert!(preir.instructions.len() >= 1);
+        assert!(fir.instructions.len() >= 1);
     }
 
     #[test]
@@ -1123,12 +1123,12 @@ mod tests {
             ],
         };
 
-        let preir = compile_preir(&program).expect("Compilation should succeed");
+        let fir = compile_fir(&program).expect("Compilation should succeed");
 
         // Get the formatted output to verify structure
-        let formatted_output = preir.format_all();
+        let formatted_output = fir.format_all();
 
-        // Verify the output contains expected elements (see `PreIR::format_all`).
+        // Verify the output contains expected elements (see `FIR::format_all`).
         assert!(formatted_output.contains("%0"));
         assert!(formatted_output.contains("Main:"));
 
@@ -1137,14 +1137,14 @@ mod tests {
         assert!(formatted_output.contains("var y ="));
 
         // Print for manual verification
-        println!("\n=== PreIR Formatting Test Output ===");
+        println!("\n=== FIR Formatting Test Output ===");
         println!("{}", formatted_output);
-        println!("=== End PreIR Formatting Test Output ===\n");
+        println!("=== End FIR Formatting Test Output ===\n");
     }
 
     #[test]
     fn format_func_decl_invalid_body_index_does_not_panic() {
-        let preir = PreIR {
+        let fir = FIR {
             main: Instr::Region(RegionData {
                 instr_start: 0,
                 instr_end: 0,
@@ -1158,7 +1158,7 @@ mod tests {
                 is_foreign: false,
             })],
         };
-        let s = preir.format_instr_with_context(&preir.instructions[0]);
+        let s = fir.format_instr_with_context(&fir.instructions[0]);
         assert!(s.contains("f"));
         assert!(s.contains("<invalid>"));
     }
