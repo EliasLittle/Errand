@@ -281,6 +281,16 @@ impl Analyzer {
             | Instr::EnumVariantConstruct(_)
             | Instr::Match(_) => Ok(()),
             Instr::Typeof(_) => self.solve_inference_typeof(ty),
+            Instr::New(_)
+            | Instr::Printf(_)
+            | Instr::MemLoad(_)
+            | Instr::MemStore(_)
+            | Instr::GetField(_)
+            | Instr::Ffi(_)
+            | Instr::AsPtr(_)
+            | Instr::AsString(_) => {
+                unreachable!("builtin operations are introduced during SIR generation, after analysis")
+            }
         }
     }
 

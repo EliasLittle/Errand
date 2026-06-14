@@ -1,6 +1,4 @@
 pub mod analysis;
-pub mod built_in_methods;
-pub mod cranelift_compiler;
 pub mod errand_builtins;
 pub mod ir_lowering;
 pub mod preir;

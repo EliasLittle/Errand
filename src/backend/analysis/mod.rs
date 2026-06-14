@@ -528,6 +528,19 @@ impl Analyzer {
             Instr::Match(data) => self.analyze_match(data),
             Instr::Typeof(operand) => self.analyze_typeof(*operand),
             Instr::ForLoop(_) => Err(ErrandTypeError::UnsupportedOperation("ForLoop".into())),
+            // The other builtin operations are introduced during SIR generation
+            // (after analysis) by rewriting `FnCall`s, so analysis only ever
+            // sees the original call, never these variants.
+            Instr::New(_)
+            | Instr::Printf(_)
+            | Instr::MemLoad(_)
+            | Instr::MemStore(_)
+            | Instr::GetField(_)
+            | Instr::Ffi(_)
+            | Instr::AsPtr(_)
+            | Instr::AsString(_) => {
+                unreachable!("builtin operations are introduced during SIR generation, after analysis")
+            }
         }
     }
 
@@ -1248,5 +1261,13 @@ fn fmt_instr(instr: &Instr) -> &'static str {
         Instr::EnumVariantConstruct(_) => "enum_construct",
         Instr::Match(_) => "match",
         Instr::Typeof(_) => "typeof",
+        Instr::New(_)
+        | Instr::Printf(_)
+        | Instr::MemLoad(_)
+        | Instr::MemStore(_)
+        | Instr::GetField(_)
+        | Instr::Ffi(_)
+        | Instr::AsPtr(_)
+        | Instr::AsString(_) => "builtin",
     }
 }

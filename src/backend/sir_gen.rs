@@ -598,6 +598,18 @@ impl SirGen {
             Instr::Return(data) => self.remap_return(data, sir),
             Instr::FuncDecl(data) => self.remap_func_decl(data, sir),
             Instr::Region(_) => unreachable!("Region handled before remap_operands"),
+            // Builtin operations are produced by `remap_fn_call`, never present
+            // in the PreIR fed into remapping.
+            Instr::New(_)
+            | Instr::Printf(_)
+            | Instr::MemLoad(_)
+            | Instr::MemStore(_)
+            | Instr::GetField(_)
+            | Instr::Ffi(_)
+            | Instr::AsPtr(_)
+            | Instr::AsString(_) => {
+                unreachable!("builtin operations are produced by remap_fn_call, not present in PreIR")
+            }
         }
     }
 
@@ -756,10 +768,18 @@ impl SirGen {
         for arg_idx in data.arguments {
             arguments.push(self.analyze_and_emit(arg_idx, sir)?);
         }
-        Ok(Instr::FnCall(FnCallPl {
-            name: data.name,
-            arguments,
-        }))
+        // Rewrite calls to compiler intrinsics into their dedicated builtin
+        // instructions so codegen dispatches on them like any other
+        // instruction, instead of matching on the function name. Analysis has
+        // already typed this as a `FnCall`, so the rewrite is purely
+        // structural and happens only after typing.
+        match Instr::builtin_from_call(&data.name, &arguments) {
+            Some(builtin) => Ok(builtin),
+            None => Ok(Instr::FnCall(FnCallPl {
+                name: data.name,
+                arguments,
+            })),
+        }
     }
 
     #[instrument(
@@ -946,8 +966,8 @@ impl SirGen {
                     }) => {
                         *enum_name = m.clone();
                     }
-                    Instr::FnCall(fc) if fc.name == "new" && !fc.arguments.is_empty() => {
-                        new_symbol_patches.push((fc.arguments[0] as usize, m.clone()));
+                    Instr::New(arguments) if !arguments.is_empty() => {
+                        new_symbol_patches.push((arguments[0] as usize, m.clone()));
                     }
                     _ => {}
                 }

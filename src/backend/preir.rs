@@ -3,6 +3,8 @@ use crate::frontend::ast::{
 };
 use std::fmt::{Display, Formatter, Result as FmtResult};
 
+// ─── PreIR container & pretty-printing ───────────────────────────────────────
+
 #[derive(Debug, Clone)]
 pub struct PreIR {
     pub main: Instr,
@@ -217,6 +219,21 @@ impl PreIR {
                 let operand_str = self.format_operand_idx(*operand);
                 format!("typeof {}", operand_str)
             }
+            Instr::New(_)
+            | Instr::Printf(_)
+            | Instr::MemLoad(_)
+            | Instr::MemStore(_)
+            | Instr::GetField(_)
+            | Instr::Ffi(_)
+            | Instr::AsPtr(_)
+            | Instr::AsString(_) => {
+                let (name, arguments) = instr.as_builtin().unwrap();
+                let args: Vec<String> = arguments
+                    .iter()
+                    .map(|&arg_idx| self.format_operand_idx(arg_idx))
+                    .collect();
+                format!("builtin {}({})", name, args.join(", "))
+            }
         }
     }
 
@@ -242,6 +259,8 @@ impl PreIR {
     }
 }
 
+// ─── Instruction & operand data definitions ──────────────────────────────────
+
 pub type instr_index = i64;
 pub type decl_index = i64;
 
@@ -264,12 +283,77 @@ pub enum Instr {
     Match(MatchData),
     FuncDecl(FuncData),
     VarDecl(VarDeclData),
-    /// Built-in `typeof(operand)` instruction. The operand is type-checked
-    /// during analysis; the instruction itself yields a `String` whose value
-    /// is the resolved (possibly mangled) type name of the operand.
-    /// SIR generation rewrites this into a `Literal(Symbol(_))` once the
-    /// operand's type is known.
+
+    // ── Builtin operations ───────────────────────────────────────────────
+    // Compiler intrinsics, each with a dedicated emitter in `sir_lowering` and
+    // dispatched directly in the central instruction match like any other
+    // variant (rather than via a separate enum). `Typeof` is the only one
+    // recognized during PreIR generation, because it must be analyzed; the
+    // rest are introduced during SIR generation by rewriting the matching
+    // `FnCall`s, so PreIR and analysis only ever see the original `FnCall`.
+    /// `typeof(operand)`: yields a `String` naming the operand's resolved type.
+    /// The operand is type-checked during analysis; SIR generation rewrites
+    /// this into a `Literal(Symbol(_))` once the type is known.
     Typeof(instr_index),
+    /// `new(:Type, field0, field1, ...)` — allocate and initialize a struct.
+    New(Vec<instr_index>),
+    /// `printf(fmt, args...)` — variadic C `printf`.
+    Printf(Vec<instr_index>),
+    /// `_mem_load(ptr, offset)` — load an `i64` from `ptr + offset`.
+    MemLoad(Vec<instr_index>),
+    /// `_mem_store(ptr, offset, value)` — store `value` at `ptr + offset`.
+    MemStore(Vec<instr_index>),
+    /// `getfield(struct, :field, :Type)` — load a struct field by name.
+    GetField(Vec<instr_index>),
+    /// `ffi(:name, args...)` — call a foreign function by name.
+    Ffi(Vec<instr_index>),
+    /// `as_ptr(x)` — identity reinterpretation cast to a pointer.
+    AsPtr(Vec<instr_index>),
+    /// `as_string(x)` — identity reinterpretation cast to a string.
+    AsString(Vec<instr_index>),
+}
+
+impl Instr {
+    /// If `name` is a compiler intrinsic, build the corresponding builtin
+    /// instruction from the call's `arguments`; otherwise `None` (a user or
+    /// foreign call). This is the single place that classifies call names as
+    /// builtins, used by SIR generation to rewrite `FnCall`s.
+    pub fn builtin_from_call(name: &str, arguments: &[instr_index]) -> Option<Instr> {
+        let args = || arguments.to_vec();
+        Some(match name {
+            "new" => Instr::New(args()),
+            "printf" => Instr::Printf(args()),
+            "_mem_load" => Instr::MemLoad(args()),
+            "_mem_store" => Instr::MemStore(args()),
+            "getfield" => Instr::GetField(args()),
+            "ffi" => Instr::Ffi(args()),
+            "as_ptr" => Instr::AsPtr(args()),
+            "as_string" => Instr::AsString(args()),
+            _ => return None,
+        })
+    }
+
+    /// If this is a builtin operation (excluding `Typeof`), return its
+    /// source-level name and argument operand indices.
+    pub fn as_builtin(&self) -> Option<(&'static str, &[instr_index])> {
+        match self {
+            Instr::New(a) => Some(("new", a)),
+            Instr::Printf(a) => Some(("printf", a)),
+            Instr::MemLoad(a) => Some(("_mem_load", a)),
+            Instr::MemStore(a) => Some(("_mem_store", a)),
+            Instr::GetField(a) => Some(("getfield", a)),
+            Instr::Ffi(a) => Some(("ffi", a)),
+            Instr::AsPtr(a) => Some(("as_ptr", a)),
+            Instr::AsString(a) => Some(("as_string", a)),
+            _ => None,
+        }
+    }
+
+    /// True if this instruction is (or, like the historical builtin `FnCall`s,
+    /// is treated as) a function call for non-leaf detection.
+    pub fn is_call_like(&self) -> bool {
+        matches!(self, Instr::FnCall(_)) || self.as_builtin().is_some()
+    }
 }
 
 //
@@ -436,6 +520,8 @@ pub struct ReturnData {
 
 // Display implementations for pretty printing
 
+// ─── Display implementations ──────────────────────────────────────────────────
+
 impl Display for LiteralPl {
     fn fmt(&self, f: &mut Formatter<'_>) -> FmtResult {
         match self {
@@ -536,6 +622,18 @@ impl Display for Instr {
                 write!(f, "var {} = {}", data.name, data.value)
             }
             Instr::Typeof(operand) => write!(f, "typeof {}", operand),
+            Instr::New(_)
+            | Instr::Printf(_)
+            | Instr::MemLoad(_)
+            | Instr::MemStore(_)
+            | Instr::GetField(_)
+            | Instr::Ffi(_)
+            | Instr::AsPtr(_)
+            | Instr::AsString(_) => {
+                let (name, arguments) = self.as_builtin().unwrap();
+                let args: Vec<String> = arguments.iter().map(|arg| arg.to_string()).collect();
+                write!(f, "builtin {}({})", name, args.join(", "))
+            }
         }
     }
 }
