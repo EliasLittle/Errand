@@ -142,11 +142,6 @@ impl Parser {
         previous
     }
 
-    /// Look at current token without consuming
-    fn current(&self) -> Result<&Token, String> {
-        self.current.as_ref().ok_or("No current token".to_string())
-    }
-
     fn current_type(&self) -> Option<&TokenType> {
         self.current.as_ref().map(|t| &t.token_type)
     }

@@ -7,7 +7,7 @@ use crate::backend::errand_builtins::{
 };
 use crate::backend::preir::PreIR;
 use crate::backend::preir::{
-    instr_index, BinOpPl, EnumData, EnumVariantConstructData, FnCallPl, ForLoopData, FuncData,
+    InstrIndex, BinOpPl, EnumData, EnumVariantConstructData, FnCallPl, ForLoopData, FuncData,
     IfStatementData, Instr, LiteralPl, MatchArmData, MatchData, RegionData, ReturnData, StructData,
     UnOpPl, VarDeclData, WhileLoopData,
 };
@@ -25,7 +25,7 @@ pub struct SirGen {
     pub analyzer: Analyzer,
     /// Maps global PreIR instruction index -> local SIR index for the function
     /// currently being processed.  Reset for each function / main.
-    preir_to_sir: HashMap<instr_index, instr_index>,
+    preir_to_sir: HashMap<InstrIndex, InstrIndex>,
 }
 
 impl SirGen {
@@ -59,7 +59,7 @@ impl SirGen {
         // Collect function and struct metadata before any mutable borrows.
         struct FuncMeta {
             name: String,
-            body_index: instr_index,
+            body_index: InstrIndex,
             parameters: Vec<Parameter>,
             return_type: Option<crate::frontend::ast::TypeExpression>,
             is_foreign: bool,
@@ -237,7 +237,7 @@ impl SirGen {
         target = "sir_gen",
         level = "trace"
     )]
-    fn emit_body_sir(&mut self, root_idx: instr_index) -> Result<SIR, String> {
+    fn emit_body_sir(&mut self, root_idx: InstrIndex) -> Result<SIR, String> {
         self.preir_to_sir.clear();
         let mut sir = SIR {
             instructions: Vec::new(),
@@ -299,15 +299,15 @@ impl SirGen {
     )]
     fn emit_region_instr(
         &mut self,
-        global_idx: instr_index,
+        global_idx: InstrIndex,
         rd: RegionData,
         sir: &mut SIR,
-    ) -> Result<instr_index, String> {
-        let new_start = sir.instructions.len() as instr_index;
+    ) -> Result<InstrIndex, String> {
+        let new_start = sir.instructions.len() as InstrIndex;
 
         self.emit_region_instruction_range(rd.instr_start, rd.instr_end, sir, true)?;
 
-        let new_end = sir.instructions.len() as instr_index;
+        let new_end = sir.instructions.len() as InstrIndex;
         let new_return_loc = self
             .preir_to_sir
             .get(&rd.return_loc)
@@ -329,7 +329,7 @@ impl SirGen {
             })
             .ok();
 
-        let local_idx = sir.instructions.len() as instr_index;
+        let local_idx = sir.instructions.len() as InstrIndex;
         sir.instructions.push(SIRInstr {
             instr: remapped_region,
             ty,
@@ -353,9 +353,9 @@ impl SirGen {
     )]
     fn collect_arm_owned_preir(
         &self,
-        start: instr_index,
-        end: instr_index,
-    ) -> HashSet<instr_index> {
+        start: InstrIndex,
+        end: InstrIndex,
+    ) -> HashSet<InstrIndex> {
         let mut owned = HashSet::new();
         for i in start..end {
             if let Some(Instr::Match(data)) = self.analyzer.preir.get_instruction(i) {
@@ -375,7 +375,7 @@ impl SirGen {
         target = "sir_gen",
         level = "trace"
     )]
-    fn mark_arm_owned_preir(&self, idx: instr_index, owned: &mut HashSet<instr_index>) {
+    fn mark_arm_owned_preir(&self, idx: InstrIndex, owned: &mut HashSet<InstrIndex>) {
         if owned.contains(&idx) {
             return;
         }
@@ -412,9 +412,9 @@ impl SirGen {
     )]
     fn control_flow_operand_skip_indices(
         &self,
-        start: instr_index,
-        end: instr_index,
-    ) -> HashSet<instr_index> {
+        start: InstrIndex,
+        end: InstrIndex,
+    ) -> HashSet<InstrIndex> {
         let mut skip = HashSet::new();
         let preir = &self.analyzer.preir;
         for i in start..end {
@@ -440,7 +440,7 @@ impl SirGen {
         target = "sir_gen",
         level = "trace"
     )]
-    fn mark_region_body_skip(preir: &PreIR, body: instr_index, skip: &mut HashSet<instr_index>) {
+    fn mark_region_body_skip(preir: &PreIR, body: InstrIndex, skip: &mut HashSet<InstrIndex>) {
         if let Some(Instr::Region(rd)) = preir.get_instruction(body) {
             skip.insert(body);
             for j in rd.instr_start..rd.instr_end {
@@ -461,8 +461,8 @@ impl SirGen {
     )]
     fn emit_region_instruction_range(
         &mut self,
-        instr_start: instr_index,
-        instr_end: instr_index,
+        instr_start: InstrIndex,
+        instr_end: InstrIndex,
         sir: &mut SIR,
         nested_decls: bool,
     ) -> Result<(), String> {
@@ -499,9 +499,9 @@ impl SirGen {
     )]
     fn analyze_and_emit(
         &mut self,
-        global_idx: instr_index,
+        global_idx: InstrIndex,
         sir: &mut SIR,
-    ) -> Result<instr_index, String> {
+    ) -> Result<InstrIndex, String> {
         if let Some(&local) = self.preir_to_sir.get(&global_idx) {
             return Ok(local);
         }
@@ -558,7 +558,7 @@ impl SirGen {
             })
             .ok();
 
-        let local_idx = sir.instructions.len() as instr_index;
+        let local_idx = sir.instructions.len() as InstrIndex;
         sir.instructions.push(SIRInstr {
             instr: remapped,
             ty,
@@ -570,7 +570,7 @@ impl SirGen {
 
     // ── Operand remapping (during emission) ───────────────────────────────────
 
-    /// Return a new `Instr` with all operand `instr_index` values remapped from
+    /// Return a new `Instr` with all operand `InstrIndex` values remapped from
     /// global PreIR space to local SIR space, emitting dependencies first.
     #[instrument(
         skip(self, instr, sir),
@@ -789,7 +789,7 @@ impl SirGen {
         target = "sir_gen",
         level = "trace"
     )]
-    fn remap_typeof(&mut self, operand: instr_index, sir: &mut SIR) -> Result<Instr, String> {
+    fn remap_typeof(&mut self, operand: InstrIndex, sir: &mut SIR) -> Result<Instr, String> {
         // Emit the operand so its analysis cache is populated, then
         // resolve its (mangled) type name and replace this instruction
         // with a Symbol literal carrying that name.  The operand SIR

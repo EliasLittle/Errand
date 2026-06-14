@@ -16,7 +16,7 @@ use cranelift_module::{FuncOrDataId, Linkage, Module};
 use cranelift_object::ObjectModule;
 
 use crate::backend::preir::{
-    instr_index, BinOpPl, EnumVariantConstructData, EnumVariantData, IfStatementData, Instr,
+    InstrIndex, BinOpPl, EnumVariantConstructData, EnumVariantData, IfStatementData, Instr,
     LiteralPl, MatchData, ReturnData, UnOpPl, VarDeclData, VarRefData, WhileLoopData,
 };
 use crate::backend::sir::{SIREnumLayout, SIRFunctionInfo, SIRModule, SIR};
@@ -1322,7 +1322,7 @@ impl SIRLoweringPass {
     /// Emit every argument operand in order, returning their Cranelift values.
     fn compile_args(
         &mut self,
-        arg_indices: &[instr_index],
+        arg_indices: &[InstrIndex],
         sir: &SIR,
         builder: &mut FunctionBuilder,
         value_map: &mut Vec<Option<Value>>,
@@ -1354,7 +1354,7 @@ impl SIRLoweringPass {
     )]
     fn emit_new(
         &mut self,
-        arg_indices: &[instr_index],
+        arg_indices: &[InstrIndex],
         sir: &SIR,
         builder: &mut FunctionBuilder,
         value_map: &mut Vec<Option<Value>>,
@@ -1423,7 +1423,7 @@ impl SIRLoweringPass {
     )]
     fn emit_printf(
         &mut self,
-        arg_indices: &[instr_index],
+        arg_indices: &[InstrIndex],
         sir: &SIR,
         builder: &mut FunctionBuilder,
         value_map: &mut Vec<Option<Value>>,
@@ -1456,7 +1456,7 @@ impl SIRLoweringPass {
     /// `_mem_load(ptr, offset)` — load an i64 from `ptr + offset`.
     fn emit_mem_load(
         &mut self,
-        arg_indices: &[instr_index],
+        arg_indices: &[InstrIndex],
         sir: &SIR,
         builder: &mut FunctionBuilder,
         value_map: &mut Vec<Option<Value>>,
@@ -1475,7 +1475,7 @@ impl SIRLoweringPass {
     /// `_mem_store(ptr, offset, value)` — store `value` at `ptr + offset`.
     fn emit_mem_store(
         &mut self,
-        arg_indices: &[instr_index],
+        arg_indices: &[InstrIndex],
         sir: &SIR,
         builder: &mut FunctionBuilder,
         value_map: &mut Vec<Option<Value>>,
@@ -1504,7 +1504,7 @@ impl SIRLoweringPass {
     )]
     fn emit_getfield(
         &mut self,
-        arg_indices: &[instr_index],
+        arg_indices: &[InstrIndex],
         sir: &SIR,
         builder: &mut FunctionBuilder,
         value_map: &mut Vec<Option<Value>>,
@@ -1551,7 +1551,7 @@ impl SIRLoweringPass {
     )]
     fn emit_ffi(
         &mut self,
-        arg_indices: &[instr_index],
+        arg_indices: &[InstrIndex],
         sir: &SIR,
         builder: &mut FunctionBuilder,
         value_map: &mut Vec<Option<Value>>,
@@ -1600,7 +1600,7 @@ impl SIRLoweringPass {
     /// is already an i64 pointer/handle, so it passes through unchanged.
     fn emit_identity_cast(
         &mut self,
-        arg_indices: &[instr_index],
+        arg_indices: &[InstrIndex],
         sir: &SIR,
         builder: &mut FunctionBuilder,
         value_map: &mut Vec<Option<Value>>,
@@ -1629,7 +1629,7 @@ impl SIRLoweringPass {
     fn emit_user_call(
         &mut self,
         name: &str,
-        arg_indices: &[instr_index],
+        arg_indices: &[InstrIndex],
         sir: &SIR,
         builder: &mut FunctionBuilder,
         value_map: &mut Vec<Option<Value>>,
@@ -1849,7 +1849,7 @@ fn mark_nested_deps_children(sir: &SIR, idx: usize, nested: &mut HashSet<usize>)
 /// represented as `(i, i + 1)`. Returns empty for leaf / non-control-flow
 /// instructions.
 fn control_flow_child_ranges(instr: &Instr) -> Vec<(usize, usize)> {
-    let single = |idx: instr_index| (idx as usize, idx as usize + 1);
+    let single = |idx: InstrIndex| (idx as usize, idx as usize + 1);
     match instr {
         Instr::Region(d) => vec![
             (d.instr_start as usize, d.instr_end as usize),
@@ -1959,7 +1959,7 @@ fn bind_or_assign_var(
 
 /// Extract the string payload of a `Symbol`/`String` literal operand. Used for
 /// builtin arguments that name a type, field, or foreign function.
-fn symbol_from_instr(sir: &SIR, idx: instr_index) -> Option<String> {
+fn symbol_from_instr(sir: &SIR, idx: InstrIndex) -> Option<String> {
     match &sir.instructions.get(idx as usize)?.instr {
         Instr::Literal(LiteralPl::Symbol(s)) | Instr::Literal(LiteralPl::String(s)) => {
             Some(s.clone())

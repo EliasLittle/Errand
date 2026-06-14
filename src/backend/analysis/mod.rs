@@ -5,7 +5,7 @@ use crate::backend::errand_builtins::{
     type_expr_to_errand_type_with_params,
 };
 use crate::backend::preir::{
-    instr_index, BinOpPl, EnumData, EnumVariantConstructData, EnumVariantData, EnumVariantInfo,
+    InstrIndex, BinOpPl, EnumData, EnumVariantConstructData, EnumVariantData, EnumVariantInfo,
     FnCallPl, FuncData, IfStatementData, Instr, LiteralPl, MatchData, PreIR, RegionData,
     ReturnData, StructData, UnOpPl, VarDeclData, VarRefData, WhileLoopData,
 };
@@ -125,8 +125,8 @@ pub struct Analyzer {
     var_context: HashMap<String, TypeIndex>,
     /// Module-level variable context (survives function boundaries).
     module_context: HashMap<String, TypeIndex>,
-    /// Cache: PreIR `instr_index` → resolved `TypeIndex`.
-    analysis_cache: HashMap<instr_index, TypeIndex>,
+    /// Cache: PreIR `InstrIndex` → resolved `TypeIndex`.
+    analysis_cache: HashMap<InstrIndex, TypeIndex>,
     /// Global symbol table: function / struct / builtin names → `TypeIndex`.
     pub global_defs: HashMap<String, TypeIndex>,
     /// Enum variant info: enum_name → ordered variant descriptors.
@@ -183,7 +183,7 @@ impl Analyzer {
         target = "analysis",
         level = "trace"
     )]
-    pub fn analyze_instr(&mut self, idx: instr_index) -> TypeResult<TypeIndex> {
+    pub fn analyze_instr(&mut self, idx: InstrIndex) -> TypeResult<TypeIndex> {
         if let Some(&cached) = self.analysis_cache.get(&idx) {
             return Ok(cached);
         }
@@ -209,7 +209,7 @@ impl Analyzer {
         target = "analysis",
         level = "trace"
     )]
-    pub fn cached_type(&self, idx: instr_index) -> Option<TypeIndex> {
+    pub fn cached_type(&self, idx: InstrIndex) -> Option<TypeIndex> {
         self.analysis_cache.get(&idx).copied()
     }
 
@@ -923,7 +923,7 @@ impl Analyzer {
         target = "analysis",
         level = "trace"
     )]
-    fn analyze_typeof(&mut self, operand: instr_index) -> TypeResult<TypeIndex> {
+    fn analyze_typeof(&mut self, operand: InstrIndex) -> TypeResult<TypeIndex> {
         // `typeof(x)` evaluates to a string holding the type name of `x`.
         // Type-check the operand so its type is known by SIR emission, but the
         // result is always `String`.
@@ -1023,8 +1023,8 @@ impl Analyzer {
     )]
     fn analyze_region_range(
         &mut self,
-        instr_start: instr_index,
-        instr_end: instr_index,
+        instr_start: InstrIndex,
+        instr_end: InstrIndex,
     ) -> TypeResult<TypeIndex> {
         let mut last_ty = self.pool.unit;
         for i in instr_start..instr_end {

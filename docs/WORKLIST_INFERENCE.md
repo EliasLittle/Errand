@@ -135,7 +135,7 @@ let mut inference = ErrandInference::with_context(var_context, func_context);
 
 ### Index-based References
 
-Unlike tree-structured CoreTerms, Errand's PreIR uses flat instruction sequences with index-based references (`instr_index`). The current implementation simplifies this by not fully tracking cross-instruction constraints.
+Unlike tree-structured CoreTerms, Errand's PreIR uses flat instruction sequences with index-based references (`InstrIndex`). The current implementation simplifies this by not fully tracking cross-instruction constraints.
 
 ## Limitations and Future Work
 

@@ -13,7 +13,7 @@ pub struct PreIR {
 
 impl PreIR {
     /// Parenthesized recursive formatting for an operand index, or `%idx` if missing.
-    fn format_operand_idx(&self, idx: instr_index) -> String {
+    fn format_operand_idx(&self, idx: InstrIndex) -> String {
         match self.get_instruction(idx) {
             Some(instr) => format!("({})", self.format_instr_with_context(instr)),
             None => format!("%{}", idx),
@@ -32,14 +32,14 @@ impl PreIR {
         }
     }
 
-    pub fn emit_instruction(&mut self, instr: Instr) -> instr_index {
-        let index = self.instructions.len() as instr_index;
+    pub fn emit_instruction(&mut self, instr: Instr) -> InstrIndex {
+        let index = self.instructions.len() as InstrIndex;
         self.instructions.push(instr);
         index
     }
 
     /// Get an instruction by index, returning None if out of bounds
-    pub fn get_instruction(&self, index: instr_index) -> Option<&Instr> {
+    pub fn get_instruction(&self, index: InstrIndex) -> Option<&Instr> {
         if index >= 0 && (index as usize) < self.instructions.len() {
             Some(&self.instructions[index as usize])
         } else {
@@ -48,7 +48,7 @@ impl PreIR {
     }
 
     /// Format an instruction with context
-    pub fn format_instruction(&self, index: instr_index) -> String {
+    pub fn format_instruction(&self, index: InstrIndex) -> String {
         match self.get_instruction(index) {
             Some(instr) => {
                 if matches!(
@@ -243,7 +243,7 @@ impl PreIR {
         for (index, _instr) in self.instructions.iter().enumerate() {
             output.push_str(&format!(
                 "{}\n",
-                self.format_instruction(index as instr_index)
+                self.format_instruction(index as InstrIndex)
             ));
         }
 
@@ -261,8 +261,8 @@ impl PreIR {
 
 // ─── Instruction & operand data definitions ──────────────────────────────────
 
-pub type instr_index = i64;
-pub type decl_index = i64;
+pub type InstrIndex = i64;
+pub type DeclIndex = i64;
 
 #[derive(Debug, Clone, PartialEq)]
 pub enum Instr {
@@ -294,23 +294,23 @@ pub enum Instr {
     /// `typeof(operand)`: yields a `String` naming the operand's resolved type.
     /// The operand is type-checked during analysis; SIR generation rewrites
     /// this into a `Literal(Symbol(_))` once the type is known.
-    Typeof(instr_index),
+    Typeof(InstrIndex),
     /// `new(:Type, field0, field1, ...)` — allocate and initialize a struct.
-    New(Vec<instr_index>),
+    New(Vec<InstrIndex>),
     /// `printf(fmt, args...)` — variadic C `printf`.
-    Printf(Vec<instr_index>),
+    Printf(Vec<InstrIndex>),
     /// `_mem_load(ptr, offset)` — load an `i64` from `ptr + offset`.
-    MemLoad(Vec<instr_index>),
+    MemLoad(Vec<InstrIndex>),
     /// `_mem_store(ptr, offset, value)` — store `value` at `ptr + offset`.
-    MemStore(Vec<instr_index>),
+    MemStore(Vec<InstrIndex>),
     /// `getfield(struct, :field, :Type)` — load a struct field by name.
-    GetField(Vec<instr_index>),
+    GetField(Vec<InstrIndex>),
     /// `ffi(:name, args...)` — call a foreign function by name.
-    Ffi(Vec<instr_index>),
+    Ffi(Vec<InstrIndex>),
     /// `as_ptr(x)` — identity reinterpretation cast to a pointer.
-    AsPtr(Vec<instr_index>),
+    AsPtr(Vec<InstrIndex>),
     /// `as_string(x)` — identity reinterpretation cast to a string.
-    AsString(Vec<instr_index>),
+    AsString(Vec<InstrIndex>),
 }
 
 impl Instr {
@@ -318,7 +318,7 @@ impl Instr {
     /// instruction from the call's `arguments`; otherwise `None` (a user or
     /// foreign call). This is the single place that classifies call names as
     /// builtins, used by SIR generation to rewrite `FnCall`s.
-    pub fn builtin_from_call(name: &str, arguments: &[instr_index]) -> Option<Instr> {
+    pub fn builtin_from_call(name: &str, arguments: &[InstrIndex]) -> Option<Instr> {
         let args = || arguments.to_vec();
         Some(match name {
             "new" => Instr::New(args()),
@@ -335,7 +335,7 @@ impl Instr {
 
     /// If this is a builtin operation (excluding `Typeof`), return its
     /// source-level name and argument operand indices.
-    pub fn as_builtin(&self) -> Option<(&'static str, &[instr_index])> {
+    pub fn as_builtin(&self) -> Option<(&'static str, &[InstrIndex])> {
         match self {
             Instr::New(a) => Some(("new", a)),
             Instr::Printf(a) => Some(("printf", a)),
@@ -363,7 +363,7 @@ impl Instr {
 #[derive(Debug, Clone, PartialEq)]
 pub struct VarDeclData {
     pub name: String,
-    pub value: instr_index,
+    pub value: InstrIndex,
     /// LHS type annotation from the source assignment, if any.
     pub declared_type: Option<crate::frontend::ast::TypeExpression>,
 }
@@ -424,7 +424,7 @@ pub struct EnumVariantData {
 pub struct EnumVariantConstructData {
     pub enum_name: String,
     pub variant: String,
-    pub arg_indices: Vec<instr_index>,
+    pub arg_indices: Vec<InstrIndex>,
 }
 
 /// A single arm of a `match` expression.
@@ -435,13 +435,13 @@ pub struct MatchArmData {
     /// Positional variable names bound to extracted fields; empty for unit variants.
     pub bindings: Vec<String>,
     /// PreIR index of the compiled arm body.
-    pub body: instr_index,
+    pub body: InstrIndex,
 }
 
 /// A `match` expression over an enum value.
 #[derive(Debug, Clone, PartialEq)]
 pub struct MatchData {
-    pub scrutinee: instr_index,
+    pub scrutinee: InstrIndex,
     /// Name of the enum being matched, used for layout lookup at codegen time.
     pub enum_name: String,
     pub arms: Vec<MatchArmData>,
@@ -469,53 +469,53 @@ pub enum LiteralPl {
 #[derive(Debug, Clone, PartialEq)]
 pub struct UnOpPl {
     pub op: UnaryOperator,
-    pub operand: instr_index,
+    pub operand: InstrIndex,
 }
 
 #[derive(Debug, Clone, PartialEq)]
 pub struct BinOpPl {
     pub op: BinaryOperator,
-    pub left: instr_index,
-    pub right: instr_index,
+    pub left: InstrIndex,
+    pub right: InstrIndex,
 }
 
 #[derive(Debug, Clone, PartialEq)]
 pub struct FnCallPl {
     pub name: String,
-    pub arguments: Vec<instr_index>,
+    pub arguments: Vec<InstrIndex>,
 }
 
 #[derive(Debug, Clone, PartialEq)]
 pub struct IfStatementData {
-    pub condition: instr_index,
-    pub then_branch: instr_index,
-    pub else_branch: Option<instr_index>,
+    pub condition: InstrIndex,
+    pub then_branch: InstrIndex,
+    pub else_branch: Option<InstrIndex>,
 }
 
 #[derive(Debug, Clone, PartialEq)]
 pub struct WhileLoopData {
-    pub condition: instr_index,
-    pub body: instr_index,
+    pub condition: InstrIndex,
+    pub body: InstrIndex,
 }
 
 #[derive(Debug, Clone, PartialEq)]
 pub struct ForLoopData {
     pub iterator: String,
-    pub range: instr_index,
-    pub body: instr_index,
+    pub range: InstrIndex,
+    pub body: InstrIndex,
 }
 
 #[derive(Debug, Clone, PartialEq)]
 pub struct RegionData {
     // _start and _end define a slice into the instruction and declaration vectors
-    pub instr_start: instr_index,
-    pub instr_end: instr_index,
-    pub return_loc: instr_index,
+    pub instr_start: InstrIndex,
+    pub instr_end: InstrIndex,
+    pub return_loc: InstrIndex,
 }
 
 #[derive(Debug, Clone, PartialEq)]
 pub struct ReturnData {
-    pub value: Option<instr_index>,
+    pub value: Option<InstrIndex>,
 }
 
 // Display implementations for pretty printing

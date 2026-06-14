@@ -2,7 +2,7 @@ use crate::backend::errand_builtins::{
     add_builtin_data_constructors, add_builtin_functions, type_expr_to_errand_type,
 };
 use crate::backend::preir::{
-    instr_index, BinOpPl, EnumData, EnumVariantConstructData, EnumVariantData, EnumVariantInfo,
+    InstrIndex, BinOpPl, EnumData, EnumVariantConstructData, EnumVariantData, EnumVariantInfo,
     FnCallPl, FuncData, IfStatementData, Instr, LiteralPl, MatchArmData, MatchData, PreIR,
     RegionData, ReturnData, StructData, UnOpPl, VarDeclData, VarRefData, WhileLoopData,
 };
@@ -105,7 +105,8 @@ pub fn compile_preir(program: &Program) -> Result<PreIR, String> {
             foreign,
         } = expr
         {
-            let body_idx = gen.compile_expression(body)?;
+            let body = prepare_function_body(body, return_type_expr, *foreign);
+            let body_idx = gen.compile_expression(&body)?;
             let func = func_data_from_ast(id, parameters, body_idx, return_type_expr, *foreign);
             gen.emit(Instr::FuncDecl(func));
         }
@@ -116,7 +117,7 @@ pub fn compile_preir(program: &Program) -> Result<PreIR, String> {
     // Pass 4: compile top-level statements into the main region
     let mut main_instructions = Vec::new();
 
-    let instr_start = gen.ir.instructions.len() as instr_index;
+    let instr_start = gen.ir.instructions.len() as InstrIndex;
     for expr in &program.expressions {
         match expr {
             Expression::FunctionDefinition { .. } => continue,
@@ -128,7 +129,7 @@ pub fn compile_preir(program: &Program) -> Result<PreIR, String> {
             }
         }
     }
-    let instr_end = gen.ir.instructions.len() as instr_index;
+    let instr_end = gen.ir.instructions.len() as InstrIndex;
 
     let return_loc = if let Some(&last_instr) = main_instructions.last() {
         last_instr
@@ -229,11 +230,11 @@ struct PreIrGen<'a> {
 }
 
 impl<'a> PreIrGen<'a> {
-    fn emit(&mut self, instr: Instr) -> instr_index {
+    fn emit(&mut self, instr: Instr) -> InstrIndex {
         self.ir.emit_instruction(instr)
     }
 
-    fn compile_expression(&mut self, expr: &Expression) -> Result<instr_index, String> {
+    fn compile_expression(&mut self, expr: &Expression) -> Result<InstrIndex, String> {
         match expr {
             Expression::Int(n) => compile_literal(self, LiteralPl::Int(*n)),
             Expression::Float(f) => compile_literal(self, LiteralPl::Float(*f)),
@@ -310,7 +311,7 @@ impl<'a> PreIrGen<'a> {
     }
 }
 
-fn compile_literal(gen: &mut PreIrGen<'_>, lit: LiteralPl) -> Result<instr_index, String> {
+fn compile_literal(gen: &mut PreIrGen<'_>, lit: LiteralPl) -> Result<InstrIndex, String> {
     Ok(gen.emit(Instr::Literal(lit)))
 }
 
@@ -318,7 +319,7 @@ fn compile_identifier(
     gen: &mut PreIrGen<'_>,
     id: &Id,
     type_expr: &Option<TypeExpression>,
-) -> Result<instr_index, String> {
+) -> Result<InstrIndex, String> {
     if let Some(TypeExpression::Struct(variant_id, None, None)) = type_expr {
         if let Some(variants) = gen.enum_names.get(&id.name) {
             if variants.iter().any(|v| v == &variant_id.name) {
@@ -338,7 +339,7 @@ fn compile_unary_op(
     gen: &mut PreIrGen<'_>,
     operator: &crate::frontend::ast::UnaryOperator,
     operand: &Expression,
-) -> Result<instr_index, String> {
+) -> Result<InstrIndex, String> {
     let operand_idx = gen.compile_expression(operand)?;
     Ok(gen.emit(Instr::UnOp(UnOpPl {
         op: operator.clone(),
@@ -351,7 +352,7 @@ fn compile_binary_op(
     operator: &BinaryOperator,
     left: &Expression,
     right: &Expression,
-) -> Result<instr_index, String> {
+) -> Result<InstrIndex, String> {
     match operator {
         BinaryOperator::Assignment => {
             if let Expression::Identifier { id, type_expr } = left {
@@ -382,7 +383,7 @@ fn compile_field_access(
     gen: &mut PreIrGen<'_>,
     left: &Expression,
     right: &Expression,
-) -> Result<instr_index, String> {
+) -> Result<InstrIndex, String> {
     let field_symbol = match right {
         Expression::Identifier { id, .. } => id.name.clone(),
         other => {
@@ -406,7 +407,7 @@ fn try_emit_builtin_call(
     gen: &mut PreIrGen<'_>,
     id: &Id,
     arguments: &[Expression],
-) -> Option<Result<instr_index, String>> {
+) -> Option<Result<InstrIndex, String>> {
     match id.name.as_str() {
         "typeof" => Some(compile_typeof_call(gen, arguments)),
         _ => None,
@@ -416,7 +417,7 @@ fn try_emit_builtin_call(
 fn compile_typeof_call(
     gen: &mut PreIrGen<'_>,
     arguments: &[Expression],
-) -> Result<instr_index, String> {
+) -> Result<InstrIndex, String> {
     if arguments.len() != 1 {
         return Err(format!(
             "typeof expects exactly one argument, got {}",
@@ -431,9 +432,17 @@ fn compile_function_call(
     gen: &mut PreIrGen<'_>,
     id: &Id,
     arguments: &[Expression],
-) -> Result<instr_index, String> {
+) -> Result<InstrIndex, String> {
     if let Some(r) = try_emit_builtin_call(gen, id, arguments) {
         return r;
+    }
+    // `printf` string literals are C ABI / heap temporaries: desugar into a
+    // block that mallocs+copies each string, calls `printf`, then frees. The
+    // desugared call carries temp identifiers (not `String`s), so it does not
+    // re-enter this branch.
+    if id.name == "printf" && arguments.iter().any(|a| matches!(a, Expression::String(_))) {
+        let desugared = desugar_printf(id, arguments);
+        return gen.compile_expression(&desugared);
     }
     let mut arg_indices = Vec::new();
     for arg in arguments {
@@ -452,8 +461,9 @@ fn compile_function_definition(
     body: &Expression,
     return_type_expr: &Option<TypeExpression>,
     foreign: bool,
-) -> Result<instr_index, String> {
-    let body_idx = gen.compile_expression(body)?;
+) -> Result<InstrIndex, String> {
+    let body = prepare_function_body(body, return_type_expr, foreign);
+    let body_idx = gen.compile_expression(&body)?;
     let func = func_data_from_ast(id, parameters, body_idx, return_type_expr, foreign);
     Ok(gen.emit(Instr::FuncDecl(func)))
 }
@@ -463,7 +473,7 @@ fn compile_struct_definition(
     id: &Id,
     type_params: &[Id],
     fields: &[FieldDefinition],
-) -> Result<instr_index, String> {
+) -> Result<InstrIndex, String> {
     let struct_data = struct_data_from_ast(id, type_params, fields);
     Ok(gen.emit(Instr::StructDecl(struct_data)))
 }
@@ -473,7 +483,7 @@ fn compile_enum_definition(
     id: &Id,
     type_params: &[Id],
     variants: &[EnumVariant],
-) -> Result<instr_index, String> {
+) -> Result<InstrIndex, String> {
     let enum_data = enum_data_from_ast(id, type_params, variants);
     Ok(gen.emit(Instr::EnumDecl(enum_data)))
 }
@@ -482,7 +492,7 @@ fn compile_enum_variant_access(
     gen: &mut PreIrGen<'_>,
     enum_name: &str,
     variant: &str,
-) -> Result<instr_index, String> {
+) -> Result<InstrIndex, String> {
     Ok(gen.emit(Instr::EnumVariantAccess(EnumVariantData {
         enum_name: enum_name.to_string(),
         variant: variant.to_string(),
@@ -494,8 +504,8 @@ fn compile_enum_variant_construct(
     enum_name: &str,
     variant: &str,
     args: &[Expression],
-) -> Result<instr_index, String> {
-    let arg_indices: Vec<instr_index> = args
+) -> Result<InstrIndex, String> {
+    let arg_indices: Vec<InstrIndex> = args
         .iter()
         .map(|a| gen.compile_expression(a))
         .collect::<Result<Vec<_>, _>>()?;
@@ -512,7 +522,7 @@ fn compile_match(
     gen: &mut PreIrGen<'_>,
     value: &Expression,
     cases: &[MatchCase],
-) -> Result<instr_index, String> {
+) -> Result<InstrIndex, String> {
     let scrutinee_idx = gen.compile_expression(value)?;
 
     let enum_name = cases
@@ -563,7 +573,7 @@ fn compile_if(
     condition: &Expression,
     then_branch: &Expression,
     else_branch: Option<&Expression>,
-) -> Result<instr_index, String> {
+) -> Result<InstrIndex, String> {
     let condition_idx = gen.compile_expression(condition)?;
     let then_idx = gen.compile_expression(then_branch)?;
     let else_idx = if let Some(else_expr) = else_branch {
@@ -582,7 +592,7 @@ fn compile_while(
     gen: &mut PreIrGen<'_>,
     condition: &Expression,
     body: &Expression,
-) -> Result<instr_index, String> {
+) -> Result<InstrIndex, String> {
     let condition_idx = gen.compile_expression(condition)?;
     let body_idx = gen.compile_expression(body)?;
     Ok(gen.emit(Instr::WhileLoop(WhileLoopData {
@@ -597,8 +607,8 @@ fn compile_for_loop(
     iterator: &Id,
     range: &Expression,
     body: &Expression,
-) -> Result<instr_index, String> {
-    let instr_start = gen.ir.instructions.len() as instr_index;
+) -> Result<InstrIndex, String> {
+    let instr_start = gen.ir.instructions.len() as InstrIndex;
 
     let zero_idx = gen.emit(Instr::Literal(LiteralPl::Int(0)));
     let _index_init = gen.emit(Instr::VarDecl(VarDeclData {
@@ -622,7 +632,7 @@ fn compile_for_loop(
         right: len_call,
     }));
 
-    let body_region_start = gen.ir.instructions.len() as instr_index;
+    let body_region_start = gen.ir.instructions.len() as InstrIndex;
 
     let index_ref_get = gen.emit(Instr::VarRef(VarRefData {
         name: "%index".to_string(),
@@ -654,7 +664,7 @@ fn compile_for_loop(
         declared_type: Some(TypeExpression::Int),
     }));
 
-    let body_region_end = gen.ir.instructions.len() as instr_index;
+    let body_region_end = gen.ir.instructions.len() as InstrIndex;
     let while_body = gen.emit(Instr::Region(RegionData {
         instr_start: body_region_start,
         instr_end: body_region_end,
@@ -666,7 +676,7 @@ fn compile_for_loop(
         body: while_body,
     }));
 
-    let instr_end = gen.ir.instructions.len() as instr_index;
+    let instr_end = gen.ir.instructions.len() as InstrIndex;
     Ok(gen.emit(Instr::Region(RegionData {
         instr_start,
         instr_end,
@@ -677,13 +687,13 @@ fn compile_for_loop(
 fn compile_block(
     gen: &mut PreIrGen<'_>,
     expressions: &[Box<Expression>],
-) -> Result<instr_index, String> {
-    let instr_start = gen.ir.instructions.len() as instr_index;
+) -> Result<InstrIndex, String> {
+    let instr_start = gen.ir.instructions.len() as InstrIndex;
     let mut last_instr_idx = None;
     for expr in expressions {
         last_instr_idx = Some(gen.compile_expression(expr.as_ref())?);
     }
-    let instr_end = gen.ir.instructions.len() as instr_index;
+    let instr_end = gen.ir.instructions.len() as InstrIndex;
     let return_loc = last_instr_idx.unwrap_or_else(|| gen.emit(Instr::Literal(LiteralPl::Unit)));
     Ok(gen.emit(Instr::Region(RegionData {
         instr_start,
@@ -695,7 +705,7 @@ fn compile_block(
 fn compile_return(
     gen: &mut PreIrGen<'_>,
     expr: Option<&Expression>,
-) -> Result<instr_index, String> {
+) -> Result<InstrIndex, String> {
     let value_idx = if let Some(return_expr) = expr {
         Some(gen.compile_expression(return_expr)?)
     } else {
@@ -704,7 +714,7 @@ fn compile_return(
     Ok(gen.emit(Instr::Return(ReturnData { value: value_idx })))
 }
 
-fn compile_print(gen: &mut PreIrGen<'_>, expr: &Expression) -> Result<instr_index, String> {
+fn compile_print(gen: &mut PreIrGen<'_>, expr: &Expression) -> Result<InstrIndex, String> {
     let _value_idx = gen.compile_expression(expr)?;
     Err("Print expressions not yet implemented in new IR".to_string())
 }
@@ -754,7 +764,7 @@ fn enum_data_from_ast(id: &Id, type_params: &[Id], variants: &[EnumVariant]) -> 
 fn func_data_from_ast(
     id: &Id,
     parameters: &[Parameter],
-    body_index: instr_index,
+    body_index: InstrIndex,
     return_type: &Option<TypeExpression>,
     is_foreign: bool,
 ) -> FuncData {
@@ -823,6 +833,180 @@ fn build_struct_constructor_expression(
         body,
         return_type_expr,
         foreign: false,
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Frontend desugaring formerly performed in `frontend/lower.rs`
+// ---------------------------------------------------------------------------
+
+/// Apply body-level desugaring before lowering a function definition.
+/// Non-foreign functions gain an implicit `return` when they lack one; foreign
+/// declarations are left untouched (they have no real body to lower).
+fn prepare_function_body(
+    body: &Expression,
+    return_type_expr: &Option<TypeExpression>,
+    foreign: bool,
+) -> Expression {
+    if foreign {
+        body.clone()
+    } else {
+        ensure_implicit_return(body.clone(), return_type_expr)
+    }
+}
+
+/// Append an implicit `return` to a function body that has no explicit return.
+/// `Void` functions return unit; everything else returns `0` for now.
+fn ensure_implicit_return(
+    body: Expression,
+    return_type_expr: &Option<TypeExpression>,
+) -> Expression {
+    if has_return_statement(&body) {
+        return body;
+    }
+
+    let implicit_return = match return_type_expr {
+        Some(TypeExpression::Void) => Expression::Return(None),
+        _ => Expression::Return(Some(Box::new(Expression::Int(0)))),
+    };
+    // TODO: Change the return type and value to that of the last expression in the body
+
+    match body {
+        Expression::Block(mut expressions) => {
+            expressions.push(Box::new(implicit_return));
+            Expression::Block(expressions)
+        }
+        other => Expression::Block(vec![Box::new(other), Box::new(implicit_return)]),
+    }
+}
+
+/// Whether every syntactic statement position reaches an explicit `return`.
+/// Only walks statement positions — not operands, call arguments, etc.
+fn has_return_statement(expr: &Expression) -> bool {
+    match expr {
+        Expression::Return(_) => true,
+        Expression::Block(expressions) => expressions.iter().any(|e| has_return_statement(e)),
+        Expression::If {
+            then_branch,
+            else_branch,
+            ..
+        } => {
+            has_return_statement(then_branch)
+                || else_branch
+                    .as_ref()
+                    .map_or(false, |e| has_return_statement(e))
+        }
+        Expression::While { body, .. } => has_return_statement(body),
+        Expression::For { body, .. } => has_return_statement(body),
+        Expression::Match { cases, .. } => cases.iter().any(|c| has_return_statement(&c.body)),
+        _ => false,
+    }
+}
+
+/// Desugar a `printf` call containing string literals into a block of heap
+/// temporaries: each `String` arg is `malloc`'d, copied, passed by pointer, and
+/// freed after the call.
+fn desugar_printf(id: &Id, arguments: &[Expression]) -> Expression {
+    let mut block: Vec<Box<Expression>> = Vec::new();
+    let mut new_args: Vec<Expression> = Vec::new();
+    let mut tmp_counter = 0;
+
+    for arg in arguments {
+        if let Expression::String(s) = arg {
+            push_string_temp_for_printf(&mut block, &mut new_args, &mut tmp_counter, s.clone());
+        } else {
+            new_args.push(arg.clone());
+        }
+    }
+
+    block.push(Box::new(Expression::FunctionCall {
+        id: id.clone(),
+        arguments: new_args,
+    }));
+
+    for i in 0..tmp_counter {
+        block.push(Box::new(free_as_ptr_tmp(i)));
+    }
+
+    Expression::Block(block)
+}
+
+fn push_string_temp_for_printf(
+    block: &mut Vec<Box<Expression>>,
+    new_args: &mut Vec<Expression>,
+    tmp_counter: &mut usize,
+    s: String,
+) {
+    let tmp_name = format!("_tmp_str_{}", *tmp_counter);
+    *tmp_counter += 1;
+    let tmp_id = Id {
+        name: tmp_name.clone(),
+    };
+
+    let malloc_call = Expression::BinaryOp {
+        operator: BinaryOperator::Assignment,
+        left: Box::new(Expression::Identifier {
+            id: tmp_id.clone(),
+            type_expr: Some(TypeExpression::String),
+        }),
+        right: Box::new(Expression::FunctionCall {
+            id: Id {
+                name: "as_string".to_string(),
+            },
+            arguments: vec![Expression::FunctionCall {
+                id: Id {
+                    name: "malloc".to_string(),
+                },
+                arguments: vec![Expression::BinaryOp {
+                    operator: BinaryOperator::Add,
+                    left: Box::new(Expression::FunctionCall {
+                        id: Id {
+                            name: "strlen".to_string(),
+                        },
+                        arguments: vec![Expression::String(s.clone())],
+                    }),
+                    right: Box::new(Expression::Int(1)),
+                }],
+            }],
+        }),
+    };
+    let strcpy_call = Expression::FunctionCall {
+        id: Id {
+            name: "strcpy".to_string(),
+        },
+        arguments: vec![
+            Expression::Identifier {
+                id: tmp_id.clone(),
+                type_expr: Some(TypeExpression::String),
+            },
+            Expression::String(s.clone()),
+        ],
+    };
+    block.push(Box::new(malloc_call));
+    block.push(Box::new(strcpy_call));
+    new_args.push(Expression::Identifier {
+        id: tmp_id,
+        type_expr: Some(TypeExpression::String),
+    });
+}
+
+fn free_as_ptr_tmp(i: usize) -> Expression {
+    let tmp_id = Id {
+        name: format!("_tmp_str_{}", i),
+    };
+    Expression::FunctionCall {
+        id: Id {
+            name: "free".to_string(),
+        },
+        arguments: vec![Expression::FunctionCall {
+            id: Id {
+                name: "as_ptr".to_string(),
+            },
+            arguments: vec![Expression::Identifier {
+                id: tmp_id,
+                type_expr: Some(TypeExpression::String),
+            }],
+        }],
     }
 }
 

@@ -3,7 +3,7 @@ use std::fmt::{self, Display, Formatter};
 
 use tracing::instrument;
 
-use crate::backend::preir::{instr_index, Instr};
+use crate::backend::preir::{InstrIndex, Instr};
 
 /// Type inference for Errand's PreIR using the DK Worklist Algorithm.
 /// This module contains only the constraint-solver data types and the `Worklist`
@@ -82,7 +82,7 @@ pub enum Judgment {
     /// Application inference: `func_ty • arg` yields `result_ty` (DK algorithm).
     InfApp {
         func_ty: ErrandType,
-        arg_idx: instr_index,
+        arg_idx: InstrIndex,
         result_ty: ErrandType,
     },
 }

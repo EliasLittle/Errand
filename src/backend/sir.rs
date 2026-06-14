@@ -3,7 +3,7 @@ use std::fmt::{Display, Formatter, Result as FmtResult};
 
 use tracing::instrument;
 
-use crate::backend::preir::{instr_index, Instr};
+use crate::backend::preir::{InstrIndex, Instr};
 use crate::backend::worklist::ErrandType;
 
 /// One typed instruction in SIR. Operand indices are local to this SIR instance.
@@ -13,14 +13,14 @@ pub struct SIRInstr {
     pub ty: Option<ErrandType>,
 }
 
-/// Per-function (or main) typed IR. All instr_index references inside `instr`
+/// Per-function (or main) typed IR. All InstrIndex references inside `instr`
 /// fields are local indices into this SIR's `instructions` vec.
 #[derive(Debug, Clone)]
 pub struct SIR {
     pub instructions: Vec<SIRInstr>,
     /// Local index of the instruction whose value is this SIR's result.
     /// TODO: I think we might be able to remove this and just use the last instruction?
-    pub return_loc: instr_index,
+    pub return_loc: InstrIndex,
 }
 
 /// Metadata for one overload of a named function.

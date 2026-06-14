@@ -11,7 +11,7 @@ PreIR
 ```
 
 - **`main`**: A `Region` instruction that defines the program entry point. It references a slice of `instructions` and a return location.
-- **`instructions`**: A single flat vector of all instructions. Instructions refer to each other by **index** (`instr_index` = `i64`).
+- **`instructions`**: A single flat vector of all instructions. Instructions refer to each other by **index** (`InstrIndex` = `i64`).
 
 Index-based references mean: to get the value of instruction `%5`, look up `instructions[5]`.
 
@@ -38,7 +38,7 @@ These produce a value at their index (referenced as `%N`).
 | **EnumVariantAccess** | `EnumVariantData` | Unit variant reference `E::V` |
 | **EnumVariantConstruct** | `EnumVariantConstructData` | Variant construction with payload |
 | **Match** | `MatchData` | `match` on enum with tag-resolved arms |
-| **Typeof** | `instr_index` | Intrinsic: operand index; resolved during analysis / SIR |
+| **Typeof** | `InstrIndex` | Intrinsic: operand index; resolved during analysis / SIR |
 
 ### Declaration Instructions
 
@@ -77,45 +77,45 @@ These define names; they do not produce a value in the same way. Formatted witho
 | Field | Type | Description |
 |-------|------|-------------|
 | `op` | `UnaryOperator` | Negate, Not, etc. |
-| `operand` | `instr_index` | Index of operand instruction |
+| `operand` | `InstrIndex` | Index of operand instruction |
 
 ### BinOp (`BinOpPl`)
 
 | Field | Type | Description |
 |-------|------|-------------|
 | `op` | `BinaryOperator` | Add, Sub, Mul, Div, Mod, Pow, Eq, Lt, Gt, And, Or, etc. |
-| `left` | `instr_index` | Left operand |
-| `right` | `instr_index` | Right operand |
+| `left` | `InstrIndex` | Left operand |
+| `right` | `InstrIndex` | Right operand |
 
 ### FnCall (`FnCallPl`)
 
 | Field | Type | Description |
 |-------|------|-------------|
 | `name` | `String` | Function name |
-| `arguments` | `Vec<instr_index>` | Argument instruction indices |
+| `arguments` | `Vec<InstrIndex>` | Argument instruction indices |
 
 ### IfStatement (`IfStatementData`)
 
 | Field | Type | Description |
 |-------|------|-------------|
-| `condition` | `instr_index` | Condition (must be boolean) |
-| `then_branch` | `instr_index` | Then branch (Region or value) |
-| `else_branch` | `Option<instr_index>` | Else branch (optional) |
+| `condition` | `InstrIndex` | Condition (must be boolean) |
+| `then_branch` | `InstrIndex` | Then branch (Region or value) |
+| `else_branch` | `Option<InstrIndex>` | Else branch (optional) |
 
 ### WhileLoop (`WhileLoopData`)
 
 | Field | Type | Description |
 |-------|------|-------------|
-| `condition` | `instr_index` | Loop condition |
-| `body` | `instr_index` | Loop body (Region) |
+| `condition` | `InstrIndex` | Loop condition |
+| `body` | `InstrIndex` | Loop body (Region) |
 
 ### ForLoop (`ForLoopData`)
 
 | Field | Type | Description |
 |-------|------|-------------|
 | `iterator` | `String` | Loop variable name |
-| `range` | `instr_index` | Range expression (e.g. list) |
-| `body` | `instr_index` | Loop body (Region) |
+| `range` | `InstrIndex` | Range expression (e.g. list) |
+| `body` | `InstrIndex` | Loop body (Region) |
 
 The current PreIR generator does **not** emit `Instr::ForLoop`. Source `for` loops are desugared in [`preir_gen.rs`](preir_gen.rs) into index variables, `length` / `get`, and a `WhileLoop` wrapped in a `Region`. The `ForLoop` variant remains for possible future use or other pipeline paths; the worklist type checker reports it as unsupported if it appears.
 
@@ -123,15 +123,15 @@ The current PreIR generator does **not** emit `Instr::ForLoop`. Source `for` loo
 
 | Field | Type | Description |
 |-------|------|-------------|
-| `value` | `Option<instr_index>` | Return value (None = unit) |
+| `value` | `Option<InstrIndex>` | Return value (None = unit) |
 
 ### Region (`RegionData`)
 
 | Field | Type | Description |
 |-------|------|-------------|
-| `instr_start` | `instr_index` | Start index (inclusive) |
-| `instr_end` | `instr_index` | End index (exclusive) |
-| `return_loc` | `instr_index` | Index of instruction whose value is the region's result |
+| `instr_start` | `InstrIndex` | Start index (inclusive) |
+| `instr_end` | `InstrIndex` | End index (exclusive) |
+| `return_loc` | `InstrIndex` | Index of instruction whose value is the region's result |
 
 A Region represents a block: instructions `[instr_start..instr_end)` are executed in order; the value of the region is the value of the instruction at `return_loc`.
 
@@ -140,7 +140,7 @@ A Region represents a block: instructions `[instr_start..instr_end)` are execute
 | Field | Type | Description |
 |-------|------|-------------|
 | `name` | `String` | Variable name |
-| `value` | `instr_index` | Value instruction |
+| `value` | `InstrIndex` | Value instruction |
 
 ### FuncDecl (`FuncData`)
 
@@ -170,13 +170,13 @@ A Region represents a block: instructions `[instr_start..instr_end)` are execute
 
 | Field | Type | Description |
 |-------|------|-------------|
-| `scrutinee` | `instr_index` | Value being matched |
+| `scrutinee` | `InstrIndex` | Value being matched |
 | `enum_name` | `String` | Enum for layout / tag lookup |
 | `arms` | `Vec<MatchArmData>` | Arms with optional tag and bindings |
 
 ### Typeof (instruction variant)
 
-Single field: operand `instr_index`. Lowered from a `typeof(...)` call in the AST; not a normal `FnCall`.
+Single field: operand `InstrIndex`. Lowered from a `typeof(...)` call in the AST; not a normal `FnCall`.
 
 ---
 

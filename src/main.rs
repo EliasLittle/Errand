@@ -175,18 +175,10 @@ fn run_compile(cli: &Cli) -> Result<(), String> {
         print_ast(file_path, "ast", &ast);
     }
 
-    let lowered = {
-        let _lower = tracing::info_span!("compile.lower").entered();
-        ast.lower()
-    };
-    if cli.verbose {
-        print_ast(file_path, "last", &lowered);
-    }
-
     info!("generating PreIR");
     let preir = {
         let _preir = tracing::info_span!("compile.preir").entered();
-        compile_preir(&lowered).map_err(|e| format!("PreIR generation failed: {}", e))?
+        compile_preir(&ast).map_err(|e| format!("PreIR generation failed: {}", e))?
     };
 
     if cli.verbose {
@@ -196,7 +188,7 @@ fn run_compile(cli: &Cli) -> Result<(), String> {
     info!("generating SIR");
     let sir_module = {
         let _sir = tracing::info_span!("compile.sir").entered();
-        SirGen::emit_sir_module(preir.clone(), &lowered)
+        SirGen::emit_sir_module(preir.clone(), &ast)
             .map_err(|e| format!("SIR generation failed: {}", e))?
     };
     info!("SIR generation complete");

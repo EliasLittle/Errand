@@ -8,7 +8,7 @@
 use std::collections::HashMap;
 
 use crate::backend::preir::{
-    instr_index, BinOpPl, FnCallPl, Instr, LiteralPl, ReturnData, UnOpPl, VarRefData,
+    InstrIndex, BinOpPl, FnCallPl, Instr, LiteralPl, ReturnData, UnOpPl, VarRefData,
 };
 use crate::backend::worklist::{
     ErrandType, ErrandTypeError, Judgment, TyVarKind, TypeResult, WorklistEntry,
@@ -90,7 +90,7 @@ impl Analyzer {
     fn solve_inf_app(
         &mut self,
         func_ty: ErrandType,
-        arg_idx: instr_index,
+        arg_idx: InstrIndex,
         result_ty: ErrandType,
     ) -> TypeResult<()> {
         let arg_instr = self
