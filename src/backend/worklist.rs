@@ -3,7 +3,7 @@ use std::fmt::{self, Display, Formatter};
 
 use tracing::instrument;
 
-use crate::backend::fir::{InstrIndex, Instr};
+use crate::backend::fir::{Instr, InstrIndex};
 
 /// Type inference for Errand's FIR using the DK Worklist Algorithm.
 /// This module contains only the constraint-solver data types and the `Worklist`
@@ -47,6 +47,51 @@ impl Display for ErrandType {
                 let parts: Vec<String> = args.iter().map(|a| a.to_string()).collect();
                 write!(f, "{}<{}>", h, parts.join(", "))
             }
+        }
+    }
+}
+
+/// Pure structural predicates over the type language. These have no dependency
+/// on the worklist, analyzer, or any solving state — they only inspect the
+/// shape of an [`ErrandType`] — so they live next to the type definition rather
+/// than being scattered across the analysis and codegen phases that consume
+/// them.
+impl ErrandType {
+    /// No type variables of any kind (universal `α` or existential `^α`) and no
+    /// `∀` quantifier: a fully concrete, monomorphic type. This is the
+    /// precondition for collapsing an `App` into a mangled `Con` for codegen.
+    pub fn is_ground(&self) -> bool {
+        match self {
+            ErrandType::Con(_) => true,
+            ErrandType::Var(_) | ErrandType::ETVar(_) | ErrandType::Forall(_, _) => false,
+            ErrandType::Arrow(a, b) => a.is_ground() && b.is_ground(),
+            ErrandType::App(h, args) => h.is_ground() && args.iter().all(|t| t.is_ground()),
+            ErrandType::Product(ts) => ts.iter().all(|t| t.is_ground()),
+        }
+    }
+
+    /// True if the type contains no `∀` quantifier (a monotype `τ` in DK terms).
+    pub fn is_monotype(&self) -> bool {
+        match self {
+            ErrandType::Var(_) | ErrandType::ETVar(_) | ErrandType::Con(_) => true,
+            ErrandType::Arrow(a, b) => a.is_monotype() && b.is_monotype(),
+            ErrandType::Product(ts) => ts.iter().all(|t| t.is_monotype()),
+            ErrandType::Forall(_, _) => false,
+            ErrandType::App(h, args) => h.is_monotype() && args.iter().all(|t| t.is_monotype()),
+        }
+    }
+
+    /// True if any existential variable (`^α`) appears anywhere in the type.
+    pub fn contains_etvar(&self) -> bool {
+        match self {
+            ErrandType::ETVar(_) => true,
+            ErrandType::Arrow(a, b) => a.contains_etvar() || b.contains_etvar(),
+            ErrandType::App(h, args) => {
+                h.contains_etvar() || args.iter().any(|t| t.contains_etvar())
+            }
+            ErrandType::Forall(_, b) => b.contains_etvar(),
+            ErrandType::Product(ts) => ts.iter().any(|t| t.contains_etvar()),
+            ErrandType::Var(_) | ErrandType::Con(_) => false,
         }
     }
 }
@@ -207,6 +252,26 @@ impl Worklist {
     )]
     pub fn pop(&mut self) -> Option<WorklistEntry> {
         self.entries.pop()
+    }
+
+    /// Remove and return the rightmost pending judgment, leaving `TVar` /
+    /// `Var` registrations intact so existentials remain visible to
+    /// [`Self::solve_evar`] after the solve loop drains constraints.
+    #[instrument(
+        skip(self),
+        name = "worklist.pop_judgment",
+        target = "worklist",
+        level = "trace"
+    )]
+    pub fn pop_judgment(&mut self) -> Option<Judgment> {
+        let idx = self
+            .entries
+            .iter()
+            .rposition(|e| matches!(e, WorklistEntry::Judgment(_)))?;
+        match self.entries.remove(idx) {
+            WorklistEntry::Judgment(j) => Some(j),
+            _ => None,
+        }
     }
 
     /// Find the type of a term variable in the worklist (right-to-left search).
