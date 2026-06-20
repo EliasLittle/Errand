@@ -1,0 +1,55 @@
++-- DEVELOPMENT TARGET: the implicit context system does not yet compile +
++-- run end-to-end. This fixture documents the goal program for that work and
++-- is wired into the golden harness as an `#[ignore]`d test. Run it on demand:
++--   cargo test --test compile_run_golden -- --ignored
++-- Once it passes, promote it into `CASES` (drop the dedicated ignored test).
++--
++-- It exercises implicit-context propagation end-to-end:
++--   - `main` (the top-level body) builds a concrete allocator and installs it
++--     in the context when calling `do_work`, via the per-call override
++--     `do_work(8)[allocator = heap]`.
++--   - `do_work` plays the role of "function A": it never mentions the context
++--     at all, yet the context is threaded through it implicitly to its callee.
++--   - `allocate_value` plays the role of "function B": it binds `allocator`
++--     from the context with `[allocator]` and uses it through the
++--     multiple-dispatch `alloc` / `free` overloads selected for the concrete
++--     allocator type.
+
+foreign fn printf(a::Int):: Int
+foreign fn malloc(a::Int):: Int
+foreign fn free(a::Int):: Int
+
++-- A very basic allocator: a plain struct whose `alloc` / `free` overloads wrap
++-- the C heap. `id` is a trivial tag so the allocator carries some state.
+struct HeapAllocator
+    id::Int
+end
+
+fn alloc(a::HeapAllocator, n::Int):: Int
+    return malloc(n)
+end
+
+fn free(a::HeapAllocator, ptr::Int)
+    free(ptr)
+end
+
++-- "Function B": consumes the allocator taken from the implicit context.
+fn allocate_value(n::Int)[allocator]:: Int
+    ptr = alloc(allocator, n)
+    _mem_store(ptr, 0, 42)
+    value = _mem_load(ptr, 0)
+    printf("B allocated %d bytes, value %d\n", n, value)
+    free(allocator, ptr)
+    return value
+end
+
++-- "Function A": never mentions the context; it only forwards to B. The
++-- context still flows through it implicitly to `allocate_value`.
+fn do_work(n::Int):: Int
+    return allocate_value(n)
+end
+
++-- "main": build the allocator and install it in the context for the A call.
+heap = HeapAllocator(0)
+result = do_work(8)[allocator = heap]
+printf("result %d\n", result)
