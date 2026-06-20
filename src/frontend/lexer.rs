@@ -67,6 +67,9 @@ pub enum TokenType {
     RParen,
     LBrace,
     RBrace,
+    LBracket,
+    RBracket,
+    With,
     Comma,
     Dot,
     Colon,
@@ -551,6 +554,7 @@ impl Lexer {
             "for" => TokenType::For,
             "in" => TokenType::In,
             "match" => TokenType::Match,
+            "with" => TokenType::With,
             "return" => TokenType::Return,
             _ => TokenType::Identifier(identifier),
         };
@@ -643,6 +647,8 @@ impl Lexer {
             ')' => self.ok_token(TokenType::RParen),
             '{' => self.ok_token(TokenType::LBrace),
             '}' => self.ok_token(TokenType::RBrace),
+            '[' => self.ok_token(TokenType::LBracket),
+            ']' => self.ok_token(TokenType::RBracket),
             ',' => self.ok_token(TokenType::Comma),
             '.' => self.ok_token(TokenType::Dot),
             ':' => {

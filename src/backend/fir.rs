@@ -372,6 +372,10 @@ pub struct VarDeclData {
 pub struct FuncData {
     pub name: String,
     pub parameters: Vec<Parameter>,
+    /// Implicit-context bindings declared in `[...]` after the parameter list.
+    /// Carried through the pipeline for later context-system lowering; not yet
+    /// consumed by analysis or codegen.
+    pub context_params: Vec<Parameter>,
     pub body_index: i64, // index into the instruction vector
     pub return_type: Option<TypeExpression>,
     pub is_foreign: bool,

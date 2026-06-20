@@ -31,6 +31,12 @@ pub enum Expression {
     FunctionDefinition {
         id: Id,
         parameters: Vec<Parameter>,
+        /// Implicit-context bindings declared in square brackets after the
+        /// parameter list, e.g. `fn f(a::Int)[allocator, logger]`. These bring
+        /// the named context fields into the function's local namespace as
+        /// read-only aliases; the full context is threaded implicitly
+        /// regardless of what is listed here.
+        context_params: Vec<Parameter>,
         body: Box<Expression>,
         return_type_expr: Option<TypeExpression>,
         foreign: bool,
@@ -78,6 +84,23 @@ pub enum Expression {
     Block(Vec<Box<Expression>>),
     Return(Option<Box<Expression>>),
     Print(Box<Expression>),
+    /// A scoped override of one or more implicit-context fields.
+    ///
+    /// Both the block form
+    ///
+    /// ```text
+    /// with context.allocator = arena
+    ///     ...
+    /// end
+    /// ```
+    ///
+    /// and the per-call sugar `call(...)[allocator = arena]` lower to this
+    /// node: the current context is copied, the listed fields are overridden,
+    /// and `body` is evaluated under the modified context.
+    With {
+        overrides: Vec<ContextOverride>,
+        body: Box<Expression>,
+    },
     Match {
         value: Box<Expression>,
         cases: Vec<MatchCase>,
@@ -137,6 +160,14 @@ pub enum BinaryOperator {
 pub struct Parameter {
     pub id: Id,
     pub type_expr: Option<TypeExpression>,
+}
+
+/// A single implicit-context field override, e.g. `allocator = arena` in
+/// `with context.allocator = arena` or `call(...)[allocator = arena]`.
+#[derive(Debug, Clone)]
+pub struct ContextOverride {
+    pub field: Id,
+    pub value: Box<Expression>,
 }
 
 // Fields must have a type
@@ -284,10 +315,19 @@ fn display_expression(e: &Expression, f: &mut fmt::Formatter) -> fmt::Result {
         Expression::FunctionDefinition {
             id,
             parameters,
+            context_params,
             body,
             return_type_expr,
             foreign,
-        } => fmt_function_definition(f, id, parameters, body, return_type_expr, *foreign),
+        } => fmt_function_definition(
+            f,
+            id,
+            parameters,
+            context_params,
+            body,
+            return_type_expr,
+            *foreign,
+        ),
         Expression::StructDefinition {
             id,
             fields,
@@ -334,13 +374,27 @@ fn display_expression(e: &Expression, f: &mut fmt::Formatter) -> fmt::Result {
         ),
         Expression::Print(expr) => write!(f, "print({})", expr),
         Expression::Match { value, cases } => fmt_match(f, value, cases),
+        Expression::With { overrides, body } => fmt_with(f, overrides, body),
     }
+}
+
+fn fmt_with(
+    f: &mut fmt::Formatter,
+    overrides: &[ContextOverride],
+    body: &Expression,
+) -> fmt::Result {
+    let overrides_str: Vec<String> = overrides
+        .iter()
+        .map(|o| format!("context.{} = {}", o.field.name, o.value))
+        .collect();
+    write!(f, "with {} {{ {} }}", overrides_str.join(", "), body)
 }
 
 fn fmt_function_definition(
     f: &mut fmt::Formatter,
     id: &Id,
     parameters: &[Parameter],
+    context_params: &[Parameter],
     body: &Expression,
     return_type_expr: &Option<TypeExpression>,
     foreign: bool,
@@ -349,24 +403,35 @@ fn fmt_function_definition(
         .iter()
         .map(|param| format!("{}", param))
         .collect();
+    let ctx = if context_params.is_empty() {
+        String::new()
+    } else {
+        let ctx_params: Vec<String> = context_params
+            .iter()
+            .map(|param| format!("{}", param))
+            .collect();
+        format!("[{}]", ctx_params.join(", "))
+    };
     let body_str = format!("{}", body);
     let fn_kw = if foreign { "foreign fn" } else { "fn" };
     match return_type_expr {
         Some(return_type_expr) => write!(
             f,
-            "{} {}({}) -> {} {{ {} }}",
+            "{} {}({}){} -> {} {{ {} }}",
             fn_kw,
             id.name,
             params.join(", "),
+            ctx,
             return_type_expr.name(),
             body_str
         ),
         None => write!(
             f,
-            "{} {}({}) {{ {} }}",
+            "{} {}({}){} {{ {} }}",
             fn_kw,
             id.name,
             params.join(", "),
+            ctx,
             body_str
         ),
     }

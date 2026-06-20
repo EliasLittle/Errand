@@ -75,6 +75,7 @@ pub fn compile_fir(program: &Program) -> Result<FIR, String> {
             if let Expression::FunctionDefinition {
                 id: constructor_function_id,
                 parameters,
+                context_params,
                 body,
                 return_type_expr,
                 foreign,
@@ -84,6 +85,7 @@ pub fn compile_fir(program: &Program) -> Result<FIR, String> {
                 let func = func_data_from_ast(
                     &constructor_function_id,
                     parameters.as_slice(),
+                    context_params.as_slice(),
                     body_idx,
                     &return_type_expr,
                     foreign,
@@ -100,6 +102,7 @@ pub fn compile_fir(program: &Program) -> Result<FIR, String> {
         if let Expression::FunctionDefinition {
             id,
             parameters,
+            context_params,
             body,
             return_type_expr,
             foreign,
@@ -107,7 +110,14 @@ pub fn compile_fir(program: &Program) -> Result<FIR, String> {
         {
             let body = prepare_function_body(body, return_type_expr, *foreign);
             let body_idx = gen.compile_expression(&body)?;
-            let func = func_data_from_ast(id, parameters, body_idx, return_type_expr, *foreign);
+            let func = func_data_from_ast(
+                id,
+                parameters,
+                context_params,
+                body_idx,
+                return_type_expr,
+                *foreign,
+            );
             gen.emit(Instr::FuncDecl(func));
         }
     }
@@ -256,6 +266,7 @@ impl<'a> FirGen<'a> {
             Expression::FunctionDefinition {
                 id,
                 parameters,
+                context_params,
                 body,
                 return_type_expr,
                 foreign,
@@ -263,6 +274,7 @@ impl<'a> FirGen<'a> {
                 self,
                 id,
                 parameters,
+                context_params,
                 body.as_ref(),
                 return_type_expr,
                 *foreign,
@@ -307,6 +319,11 @@ impl<'a> FirGen<'a> {
             Expression::Block(expressions) => compile_block(self, expressions.as_slice()),
             Expression::Return(expr) => compile_return(self, expr.as_ref().map(|b| b.as_ref())),
             Expression::Print(expr) => compile_print(self, expr.as_ref()),
+            // TODO(context-system): the implicit-context override is not yet
+            // lowered. For now the body is compiled directly so existing
+            // programs keep working; the `overrides` are intentionally ignored
+            // until context threading lands in a later phase.
+            Expression::With { body, .. } => self.compile_expression(body.as_ref()),
         }
     }
 }
@@ -458,13 +475,21 @@ fn compile_function_definition(
     gen: &mut FirGen<'_>,
     id: &Id,
     parameters: &[Parameter],
+    context_params: &[Parameter],
     body: &Expression,
     return_type_expr: &Option<TypeExpression>,
     foreign: bool,
 ) -> Result<InstrIndex, String> {
     let body = prepare_function_body(body, return_type_expr, foreign);
     let body_idx = gen.compile_expression(&body)?;
-    let func = func_data_from_ast(id, parameters, body_idx, return_type_expr, foreign);
+    let func = func_data_from_ast(
+        id,
+        parameters,
+        context_params,
+        body_idx,
+        return_type_expr,
+        foreign,
+    );
     Ok(gen.emit(Instr::FuncDecl(func)))
 }
 
@@ -764,6 +789,7 @@ fn enum_data_from_ast(id: &Id, type_params: &[Id], variants: &[EnumVariant]) -> 
 fn func_data_from_ast(
     id: &Id,
     parameters: &[Parameter],
+    context_params: &[Parameter],
     body_index: InstrIndex,
     return_type: &Option<TypeExpression>,
     is_foreign: bool,
@@ -771,6 +797,7 @@ fn func_data_from_ast(
     FuncData {
         name: id.name.clone(),
         parameters: parameters.to_vec(),
+        context_params: context_params.to_vec(),
         body_index,
         return_type: return_type.clone(),
         is_foreign,
@@ -830,6 +857,7 @@ fn build_struct_constructor_expression(
     Expression::FunctionDefinition {
         id: id.clone(),
         parameters,
+        context_params: vec![],
         body,
         return_type_expr,
         foreign: false,
@@ -1085,6 +1113,7 @@ mod tests {
                 })))),
                 return_type_expr: Some(TypeExpression::Int),
                 foreign: false,
+                context_params: vec![],
             }],
         };
 
@@ -1153,6 +1182,7 @@ mod tests {
             instructions: vec![Instr::FuncDecl(FuncData {
                 name: "f".to_string(),
                 parameters: vec![],
+                context_params: vec![],
                 body_index: 9999,
                 return_type: None,
                 is_foreign: false,

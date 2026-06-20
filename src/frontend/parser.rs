@@ -42,8 +42,8 @@
 //! | Control flow | `block`, `if_statement`, `match_expr`, `match_pattern`, `while_statement`, `for_statement`, `return_statement`, `print_statement` |
 
 use super::ast::{
-    BinaryOperator, EnumVariant, Expression, FieldDefinition, GenericArg, Id, MatchCase,
-    MatchPattern, Parameter, Program, TypeExpression, UnaryOperator,
+    BinaryOperator, ContextOverride, EnumVariant, Expression, FieldDefinition, GenericArg, Id,
+    MatchCase, MatchPattern, Parameter, Program, TypeExpression, UnaryOperator,
 };
 use super::lexer::{token_type, Token, TokenType};
 use std::iter::Peekable;
@@ -284,6 +284,7 @@ impl Parser {
             Some(TokenType::If) => self.if_statement(), // TODO: Move to parse_expr_bp
             Some(TokenType::While) => self.while_statement(),
             Some(TokenType::For) => self.for_statement(),
+            Some(TokenType::With) => self.with_statement(),
             Some(TokenType::Return) => self.return_statement(),
             Some(TokenType::Match) => self.match_expr(),
             Some(TokenType::Newline) => {
@@ -655,10 +656,21 @@ impl Parser {
             tracing::trace!(target: "parser","Function call");
             let parameters = self.arguments()?;
             self.expect(&TokenType::RParen)?;
-            Ok(Expression::FunctionCall {
+            let call = Expression::FunctionCall {
                 id,
                 arguments: parameters,
-            })
+            };
+            // Optional per-call context override sugar: `call(...)[field = expr]`.
+            // This lowers to the same `With` node as a `with ... end` block.
+            if self.at(&TokenType::LBracket) {
+                let overrides = self.parse_context_override_list()?;
+                Ok(Expression::With {
+                    overrides,
+                    body: Box::new(call),
+                })
+            } else {
+                Ok(call)
+            }
         } else {
             tracing::trace!(target: "parser","Identifier");
             Ok(Expression::Identifier {
@@ -826,6 +838,101 @@ impl Parser {
         }
     }
 
+    /// Parse the optional implicit-context binding list that may follow a
+    /// function's parameter list, e.g. `[allocator, logger]` or
+    /// `[allocator::ArenaAllocator]`. Returns an empty vector when absent.
+    ///
+    /// Each entry reuses the ordinary parameter grammar (`name` or
+    /// `name::Type`), so a context field may optionally carry an explicit type
+    /// annotation. These names become read-only aliases for the corresponding
+    /// `context` fields inside the body.
+    #[instrument(
+        skip(self),
+        fields(
+            current = tracing::field::Empty,
+            token_line = tracing::field::Empty,
+            token_column = tracing::field::Empty
+        ),
+        name = "parser.context_params",
+        target = "parser",
+        level = "trace"
+    )]
+    fn parse_optional_context_params(&mut self) -> Result<Vec<Parameter>, String> {
+        self.record_parse_cursor();
+        if !self.eat(&TokenType::LBracket) {
+            return Ok(vec![]);
+        }
+        let params = self.parse_comma_separated_until(
+            &TokenType::RBracket,
+            "Expected comma or ']' in context parameter list",
+            |p| {
+                let id = p.id()?;
+                let type_expr = if p.eat(&TokenType::TypeDef) {
+                    Some(p.type_expr()?)
+                } else {
+                    None
+                };
+                Ok(Parameter { id, type_expr })
+            },
+        )?;
+        self.expect(&TokenType::RBracket)?;
+        Ok(params)
+    }
+
+    /// Parse a per-call context override list: `[field = expr, ...]`.
+    ///
+    /// Assumes the opening `[` has not yet been consumed. The leading
+    /// `field =` is what distinguishes an override list from a future indexing
+    /// expression (`expr[i]`); an entry that is not of the form `name = expr`
+    /// is rejected with a clear error.
+    #[instrument(
+        skip(self),
+        fields(
+            current = tracing::field::Empty,
+            token_line = tracing::field::Empty,
+            token_column = tracing::field::Empty
+        ),
+        name = "parser.context_override_list",
+        target = "parser",
+        level = "trace"
+    )]
+    fn parse_context_override_list(&mut self) -> Result<Vec<ContextOverride>, String> {
+        self.record_parse_cursor();
+        self.expect(&TokenType::LBracket)?;
+        let overrides = self.parse_comma_separated_until(
+            &TokenType::RBracket,
+            "Expected comma or ']' in context override list",
+            |p| p.context_override(),
+        )?;
+        self.expect(&TokenType::RBracket)?;
+        Ok(overrides)
+    }
+
+    /// Parse a single `field = expr` context override.
+    ///
+    /// Anything that is not of the form `name = expr` is reported as a
+    /// (currently unsupported) indexing expression, preserving room for
+    /// `expr[i]` syntax later.
+    fn context_override(&mut self) -> Result<ContextOverride, String> {
+        if !self.at_identifier() {
+            return Err(
+                "Expected `field = value` in `[...]`; indexing is not yet supported".to_string(),
+            );
+        }
+        let field = self.id()?;
+        if !self.eat(&TokenType::Assignment) {
+            return Err(format!(
+                "Expected `=` after context field `{}`; indexing is not yet supported",
+                field.name
+            ));
+        }
+        let value = self.parse_full_expression()?;
+        Ok(ContextOverride {
+            field,
+            value: Box::new(value),
+        })
+    }
+
     // --- Literals ---
 
     /// Parse literals (String, int, float, boolean)
@@ -891,6 +998,8 @@ impl Parser {
         self.expect(&TokenType::LParen)?;
         let arguments = self.parameters()?;
         self.expect(&TokenType::RParen)?;
+        // Optional implicit-context bindings: `fn f(a::Int)[allocator, logger]`.
+        let context_params = self.parse_optional_context_params()?;
         let return_type_expr = if self.eat(&TokenType::TypeDef) {
             Some(self.type_expr()?)
         } else {
@@ -901,6 +1010,7 @@ impl Parser {
             Ok(Expression::FunctionDefinition {
                 id,
                 parameters: arguments,
+                context_params,
                 body: Box::new(Expression::Block(vec![])),
                 return_type_expr,
                 foreign: true,
@@ -914,6 +1024,7 @@ impl Parser {
             Ok(Expression::FunctionDefinition {
                 id,
                 parameters: arguments,
+                context_params,
                 body: Box::new(body),
                 return_type_expr,
                 foreign: false,
@@ -1400,6 +1511,67 @@ impl Parser {
         })
     }
 
+    /// Parse a `with` block:
+    ///
+    /// ```text
+    /// with context.allocator = arena, context.logger = l
+    ///     <body>
+    /// end
+    /// ```
+    ///
+    /// Each override targets a field of the implicit `context`. The body runs
+    /// under a context with those fields replaced.
+    #[instrument(
+        skip(self),
+        fields(
+            current = tracing::field::Empty,
+            token_line = tracing::field::Empty,
+            token_column = tracing::field::Empty
+        ),
+        name = "parser.with_statement",
+        target = "parser",
+        level = "trace"
+    )]
+    fn with_statement(&mut self) -> Result<Expression, String> {
+        self.record_parse_cursor();
+        tracing::trace!(target: "parser","Parsing with statement| current:{:?}", self.current_type());
+        self.expect(&TokenType::With)?;
+        let mut overrides = Vec::new();
+        loop {
+            overrides.push(self.with_override()?);
+            if !self.eat(&TokenType::Comma) {
+                break;
+            }
+        }
+        self.expect(&TokenType::Newline)?;
+        let body = self.block()?;
+        self.expect(&TokenType::End)?;
+        let _ = self.expect(&TokenType::Newline);
+        Ok(Expression::With {
+            overrides,
+            body: Box::new(body),
+        })
+    }
+
+    /// Parse one `context.<field> = <expr>` override on a `with` line.
+    fn with_override(&mut self) -> Result<ContextOverride, String> {
+        let base = self.id()?;
+        if base.name != "context" {
+            return Err(format!(
+                "Expected `context` at start of `with` override, found `{}`",
+                base.name
+            ));
+        }
+        self.expect(&TokenType::Dot)?;
+        let field = self.id()?;
+        self.expect(&TokenType::Assignment)?;
+        let value = self.parse_full_expression()?;
+        Ok(ContextOverride {
+            field,
+            value: Box::new(value),
+        })
+    }
+
     #[instrument(
         skip(self),
         fields(
@@ -1470,5 +1642,140 @@ impl Parser {
         let value = self.parse_full_expression()?;
         self.eat(&TokenType::Newline);
         Ok(Expression::Print(Box::new(value)))
+    }
+}
+
+#[cfg(test)]
+mod context_syntax_tests {
+    use super::Parser;
+    use crate::frontend::ast::{Expression, Program};
+    use crate::frontend::lexer::Lexer;
+
+    fn parse_ok(src: &str) -> Program {
+        let tokens = Lexer::new(src.to_string())
+            .lex("test")
+            .expect("lexing should succeed");
+        Parser::new(tokens)
+            .parse()
+            .expect("parsing should succeed")
+    }
+
+    fn parse_errs(src: &str) -> Vec<String> {
+        let tokens = Lexer::new(src.to_string())
+            .lex("test")
+            .expect("lexing should succeed");
+        Parser::new(tokens)
+            .parse()
+            .expect_err("parsing should fail")
+    }
+
+    #[test]
+    fn function_definition_parses_context_params() {
+        let program = parse_ok("fn f(a::Int)[allocator, logger]\n    return a\nend\n");
+        let func = program
+            .expressions
+            .iter()
+            .find(|e| matches!(e, Expression::FunctionDefinition { .. }))
+            .expect("expected a function definition");
+        match func {
+            Expression::FunctionDefinition {
+                parameters,
+                context_params,
+                ..
+            } => {
+                assert_eq!(parameters.len(), 1);
+                let names: Vec<&str> =
+                    context_params.iter().map(|p| p.id.name.as_str()).collect();
+                assert_eq!(names, vec!["allocator", "logger"]);
+            }
+            _ => unreachable!(),
+        }
+    }
+
+    #[test]
+    fn function_without_context_params_has_empty_list() {
+        let program = parse_ok("fn g(a::Int)\n    return a\nend\n");
+        let func = program
+            .expressions
+            .iter()
+            .find(|e| matches!(e, Expression::FunctionDefinition { .. }))
+            .expect("expected a function definition");
+        match func {
+            Expression::FunctionDefinition { context_params, .. } => {
+                assert!(context_params.is_empty());
+            }
+            _ => unreachable!(),
+        }
+    }
+
+    #[test]
+    fn with_block_parses_overrides() {
+        let program = parse_ok("with context.allocator = arena\n    printf(\"hi\")\nend\n");
+        let with = program
+            .expressions
+            .iter()
+            .find(|e| matches!(e, Expression::With { .. }))
+            .expect("expected a with block");
+        match with {
+            Expression::With { overrides, body } => {
+                assert_eq!(overrides.len(), 1);
+                assert_eq!(overrides[0].field.name, "allocator");
+                assert!(matches!(body.as_ref(), Expression::Block(_)));
+            }
+            _ => unreachable!(),
+        }
+    }
+
+    #[test]
+    fn with_block_parses_multiple_overrides() {
+        let program =
+            parse_ok("with context.allocator = arena, context.logger = l\n    x = 1\nend\n");
+        let with = program
+            .expressions
+            .iter()
+            .find(|e| matches!(e, Expression::With { .. }))
+            .expect("expected a with block");
+        match with {
+            Expression::With { overrides, .. } => {
+                let fields: Vec<&str> =
+                    overrides.iter().map(|o| o.field.name.as_str()).collect();
+                assert_eq!(fields, vec!["allocator", "logger"]);
+            }
+            _ => unreachable!(),
+        }
+    }
+
+    #[test]
+    fn per_call_override_lowers_to_with() {
+        let program = parse_ok("printf(\"hi\")[allocator = arena]\n");
+        match &program.expressions[0] {
+            Expression::With { overrides, body } => {
+                assert_eq!(overrides.len(), 1);
+                assert_eq!(overrides[0].field.name, "allocator");
+                assert!(matches!(body.as_ref(), Expression::FunctionCall { .. }));
+            }
+            other => panic!("expected per-call override to lower to With, got {:?}", other),
+        }
+    }
+
+    #[test]
+    fn bare_call_is_not_wrapped_in_with() {
+        let program = parse_ok("printf(\"hi\")\n");
+        assert!(matches!(
+            &program.expressions[0],
+            Expression::FunctionCall { .. }
+        ));
+    }
+
+    #[test]
+    fn postfix_bracket_without_assignment_is_rejected() {
+        // `foo(1)[2]` would be indexing, which is not implemented; the parser
+        // should reject it rather than silently treat it as an override.
+        let errs = parse_errs("foo(1)[2]\n");
+        assert!(
+            errs.iter().any(|e| e.contains("indexing")),
+            "expected an indexing-not-supported error, got: {:?}",
+            errs
+        );
     }
 }

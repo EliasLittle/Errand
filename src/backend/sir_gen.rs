@@ -928,6 +928,7 @@ impl SirGen {
         Ok(Instr::FuncDecl(FuncData {
             name: data.name,
             parameters: data.parameters,
+            context_params: data.context_params,
             body_index,
             return_type: data.return_type,
             is_foreign: data.is_foreign,
