@@ -47,6 +47,11 @@ const CASES: &[GoldenCase] = &[
         source_rel: "tests/typeinfer/typeinfer.err",
         expected: include_str!("compile_run_expected/typeinfer.expected"),
     },
+    GoldenCase {
+        name: "generics_target",
+        source_rel: "tests/generics_target/generics_target.err",
+        expected: include_str!("compile_run_expected/generics_target.expected"),
+    },
 ];
 
 fn parse_expected(content: &str) -> (i32, String) {
@@ -153,26 +158,4 @@ fn compile_run_golden_fixtures() {
     for case in CASES {
         run_golden_case(case, errand, manifest, &work, &trace);
     }
-}
-
-/// Development target for generics support: generic structs/enums and generic-returning
-/// functions do not yet compile + run end-to-end (SIR generation leaks unsolved
-/// existentials). The fixture documents the desired behavior; once it passes, remove
-/// `#[ignore]` and fold the case into `CASES`. Run on demand with:
-///   cargo test --test compile_run_golden -- --ignored
-#[test]
-#[ignore = "generics are not yet supported end-to-end; this is a development target"]
-fn compile_run_generics_target() {
-    let case = GoldenCase {
-        name: "generics_target",
-        source_rel: "tests/generics_target/generics_target.err",
-        expected: include_str!("compile_run_expected/generics_target.expected"),
-    };
-    let errand = errand_binary();
-    let manifest = Path::new(env!("CARGO_MANIFEST_DIR"));
-    let work = manifest.join("target").join("compile_run_golden");
-    fs::create_dir_all(&work).expect("create work dir");
-    let trace = work.join("trace.jsonl");
-
-    run_golden_case(&case, errand, manifest, &work, &trace);
 }
