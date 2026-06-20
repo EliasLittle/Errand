@@ -8,7 +8,7 @@
 use std::collections::HashMap;
 
 use crate::backend::fir::{
-    InstrIndex, BinOpPl, FnCallPl, Instr, LiteralPl, ReturnData, UnOpPl, VarRefData,
+    BinOpPl, FnCallPl, Instr, InstrIndex, LiteralPl, ReturnData, UnOpPl, VarRefData,
 };
 use crate::backend::worklist::{
     ErrandType, ErrandTypeError, Judgment, TyVarKind, TypeResult, WorklistEntry,
@@ -27,11 +27,8 @@ impl Analyzer {
         level = "trace"
     )]
     pub(super) fn solve(&mut self) -> TypeResult<()> {
-        while let Some(entry) = self.worklist.pop() {
-            match entry {
-                WorklistEntry::TVar(_, _) | WorklistEntry::Var(_, _) => continue,
-                WorklistEntry::Judgment(j) => self.solve_judgment(j)?,
-            }
+        while let Some(j) = self.worklist.pop_judgment() {
+            self.solve_judgment(j)?;
         }
         Ok(())
     }
@@ -49,13 +46,8 @@ impl Analyzer {
         level = "trace"
     )]
     pub(super) fn drain_silently(&mut self) {
-        while let Some(entry) = self.worklist.pop() {
-            match entry {
-                WorklistEntry::TVar(_, _) | WorklistEntry::Var(_, _) => continue,
-                WorklistEntry::Judgment(j) => {
-                    let _ = self.solve_judgment(j);
-                }
-            }
+        while let Some(j) = self.worklist.pop_judgment() {
+            let _ = self.solve_judgment(j);
         }
     }
 
@@ -93,13 +85,9 @@ impl Analyzer {
         arg_idx: InstrIndex,
         result_ty: ErrandType,
     ) -> TypeResult<()> {
-        let arg_instr = self
-            .fir
-            .get_instruction(arg_idx)
-            .cloned()
-            .ok_or_else(|| {
-                ErrandTypeError::UnsupportedOperation(format!("InfApp: bad arg index {arg_idx}"))
-            })?;
+        let arg_instr = self.fir.get_instruction(arg_idx).cloned().ok_or_else(|| {
+            ErrandTypeError::UnsupportedOperation(format!("InfApp: bad arg index {arg_idx}"))
+        })?;
         match func_ty {
             ErrandType::Arrow(param_ty, ret_ty) => {
                 self.worklist.push(WorklistEntry::Judgment(Judgment::Sub {
@@ -289,7 +277,9 @@ impl Analyzer {
             | Instr::Ffi(_)
             | Instr::AsPtr(_)
             | Instr::AsString(_) => {
-                unreachable!("builtin operations are introduced during SIR generation, after analysis")
+                unreachable!(
+                    "builtin operations are introduced during SIR generation, after analysis"
+                )
             }
         }
     }
@@ -470,7 +460,7 @@ impl Analyzer {
                 );
                 self.instantiate_left(var, &substituted)
             }
-            _ if self.is_monotype(ty) => {
+            _ if ty.is_monotype() => {
                 self.worklist.solve_evar(var, ty.clone())?;
                 Ok(())
             }
@@ -560,7 +550,7 @@ impl Analyzer {
                 );
                 self.instantiate_right(&substituted, var)
             }
-            _ if self.is_monotype(ty) => {
+            _ if ty.is_monotype() => {
                 self.worklist.solve_evar(var, ty.clone())?;
                 Ok(())
             }
@@ -587,24 +577,6 @@ impl Analyzer {
             ErrandType::Product(ts) => ts.iter().any(|t| self.occurs_check(var, t)),
             ErrandType::App(h, args) => {
                 self.occurs_check(var, h) || args.iter().any(|t| self.occurs_check(var, t))
-            }
-        }
-    }
-
-    #[instrument(
-        skip(self, ty),
-        name = "analysis.is_monotype",
-        target = "analysis",
-        level = "trace"
-    )]
-    fn is_monotype(&self, ty: &ErrandType) -> bool {
-        match ty {
-            ErrandType::Var(_) | ErrandType::ETVar(_) | ErrandType::Con(_) => true,
-            ErrandType::Arrow(t1, t2) => self.is_monotype(t1) && self.is_monotype(t2),
-            ErrandType::Product(ts) => ts.iter().all(|t| self.is_monotype(t)),
-            ErrandType::Forall(_, _) => false,
-            ErrandType::App(h, args) => {
-                self.is_monotype(h) && args.iter().all(|t| self.is_monotype(t))
             }
         }
     }

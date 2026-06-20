@@ -251,7 +251,12 @@ impl Analyzer {
                     self.pool.intern(et)
                 }
                 None => {
-                    let et = ErrandType::ETVar(format!("param_{}", param.id.name));
+                    let evar = format!("param_{}", param.id.name);
+                    self.worklist.push(WorklistEntry::TVar(
+                        evar.clone(),
+                        TyVarKind::Existential,
+                    ));
+                    let et = ErrandType::ETVar(evar);
                     self.pool.intern(et)
                 }
             };
@@ -320,7 +325,7 @@ impl Analyzer {
         match &t {
             ErrandType::App(h, args)
                 if matches!(h.as_ref(), ErrandType::Con(_))
-                    && args.iter().all(|a| !Self::type_contains_etvar(a)) =>
+                    && args.iter().all(|a| a.is_ground()) =>
             {
                 if let ErrandType::Con(head) = h.as_ref() {
                     ErrandType::Con(Self::mangle_type_app(head, args))
@@ -761,6 +766,10 @@ impl Analyzer {
         level = "trace"
     )]
     fn analyze_call(&mut self, data: &FnCallPl) -> TypeResult<TypeIndex> {
+        if data.name == "getfield" {
+            return self.analyze_getfield_call(data);
+        }
+
         let func_ty_idx = self
             .global_defs
             .get(&data.name)
@@ -777,6 +786,97 @@ impl Analyzer {
         let remaining = self.apply_typed_arguments(&arg_types, instantiated)?;
         let result_idx = self.pool.intern(remaining);
         Ok(result_idx)
+    }
+
+    /// Type `getfield(struct, :field, typeof(struct))` using struct metadata.
+    fn analyze_getfield_call(&mut self, data: &FnCallPl) -> TypeResult<TypeIndex> {
+        if data.arguments.len() < 2 {
+            return Err(ErrandTypeError::UnsupportedOperation(
+                "getfield expects at least struct and field arguments".into(),
+            ));
+        }
+
+        let struct_ty_idx = self.analyze_instr(data.arguments[0])?;
+        for &arg_idx in data.arguments.iter().skip(1) {
+            self.analyze_instr(arg_idx)?;
+        }
+
+        let field_name = self.symbol_from_instr(data.arguments[1])?;
+        let struct_ty = self.expanded_pool_type(struct_ty_idx);
+
+        if let Some(field_ty) = self.lookup_struct_field_type(&struct_ty, &field_name) {
+            return Ok(self.pool.intern(field_ty));
+        }
+
+        Ok(self.pool.int)
+    }
+
+    fn symbol_from_instr(&self, idx: InstrIndex) -> TypeResult<String> {
+        match self.fir.get_instruction(idx) {
+            Some(Instr::Literal(LiteralPl::Symbol(s))) => Ok(s.clone()),
+            _ => Err(ErrandTypeError::UnsupportedOperation(format!(
+                "expected symbol literal at instruction {idx}"
+            ))),
+        }
+    }
+
+    fn lookup_struct_field_type(
+        &self,
+        struct_ty: &ErrandType,
+        field_name: &str,
+    ) -> Option<ErrandType> {
+        let (struct_name, type_args) = Self::nominal_type_parts(struct_ty)?;
+        let sd = self.fir.instructions.iter().find_map(|instr| {
+            if let Instr::StructDecl(sd) = instr {
+                (sd.name == struct_name).then_some(sd)
+            } else {
+                None
+            }
+        })?;
+        let type_param_names: Vec<String> = sd.type_params.iter().map(|p| p.name.clone()).collect();
+        let subst: HashMap<String, ErrandType> = type_param_names
+            .iter()
+            .zip(type_args.iter())
+            .map(|(p, t)| (p.clone(), t.clone()))
+            .collect();
+        for field in &sd.fields {
+            if field.id.name == field_name {
+                let mut field_ty =
+                    type_expr_to_errand_type_with_params(&field.field_type, &type_param_names);
+                field_ty = self.apply_substs_to_type(&field_ty, &subst);
+                return Some(self.collapse_apps_in_type(field_ty));
+            }
+        }
+        None
+    }
+
+    /// Split a nominal struct/enum type into its base name and type arguments.
+    fn nominal_type_parts(ty: &ErrandType) -> Option<(String, Vec<ErrandType>)> {
+        match ty {
+            ErrandType::App(h, args) => match h.as_ref() {
+                ErrandType::Con(name) => Some((name.clone(), args.clone())),
+                _ => None,
+            },
+            ErrandType::Con(name) if name.contains("__") => {
+                let base = name.split("__").next()?.to_string();
+                let rest = &name[base.len() + 2..];
+                let mut args = Vec::new();
+                let mut search_from = 0;
+                while search_from < rest.len() {
+                    if let Some(rel) = rest[search_from..].find("__") {
+                        let split_at = search_from + rel;
+                        args.push(ErrandType::Con(rest[search_from..split_at].to_string()));
+                        search_from = split_at + 2;
+                    } else {
+                        args.push(ErrandType::Con(rest[search_from..].to_string()));
+                        break;
+                    }
+                }
+                Some((base, args))
+            }
+            ErrandType::Con(name) => Some((name.clone(), Vec::new())),
+            _ => None,
+        }
     }
 
     #[instrument(
@@ -1217,24 +1317,6 @@ impl Analyzer {
         }
     }
 
-    #[instrument(
-        skip(ty),
-        name = "analysis.type_contains_etvar",
-        target = "analysis",
-        level = "trace"
-    )]
-    fn type_contains_etvar(ty: &ErrandType) -> bool {
-        match ty {
-            ErrandType::ETVar(_) => true,
-            ErrandType::Arrow(a, b) => Self::type_contains_etvar(a) || Self::type_contains_etvar(b),
-            ErrandType::App(h, a) => {
-                Self::type_contains_etvar(h) || a.iter().any(Self::type_contains_etvar)
-            }
-            ErrandType::Forall(_, b) => Self::type_contains_etvar(b),
-            ErrandType::Product(ts) => ts.iter().any(Self::type_contains_etvar),
-            ErrandType::Var(_) | ErrandType::Con(_) => false,
-        }
-    }
 }
 
 // ─── Formatting helpers (private) ─────────────────────────────────────────────

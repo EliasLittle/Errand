@@ -7,7 +7,7 @@ use crate::backend::errand_builtins::{
 };
 use crate::backend::fir::FIR;
 use crate::backend::fir::{
-    InstrIndex, BinOpPl, EnumData, EnumVariantConstructData, FnCallPl, ForLoopData, FuncData,
+    InstrIndex, BinOpPl, EnumData, EnumVariantConstructData, EnumVariantData, FnCallPl, ForLoopData, FuncData,
     IfStatementData, Instr, LiteralPl, MatchArmData, MatchData, RegionData, ReturnData, StructData,
     UnOpPl, VarDeclData, WhileLoopData,
 };
@@ -107,8 +107,49 @@ impl SirGen {
                 })
                 .collect();
 
-        // Process main first so module-level variables enter module_context
-        // before any function body is analyzed.
+        // Type-check user function bodies before main so call sites (e.g.
+        // `make_pair(10, 20)`) resolve against real signatures instead of
+        // the existential placeholders registered during FIR metadata scan.
+        let struct_names: HashSet<String> = gen
+            .analyzer
+            .fir
+            .instructions
+            .iter()
+            .filter_map(|instr| {
+                if let Instr::StructDecl(sd) = instr {
+                    Some(sd.name.clone())
+                } else {
+                    None
+                }
+            })
+            .collect();
+        let user_func_indices: Vec<(InstrIndex, Vec<Parameter>)> = gen
+            .analyzer
+            .fir
+            .instructions
+            .iter()
+            .enumerate()
+            .filter_map(|(idx, instr)| {
+                if let Instr::FuncDecl(fd) = instr {
+                    if fd.is_foreign || struct_names.contains(&fd.name) {
+                        None
+                    } else if fd.parameters.iter().any(|p| p.type_expr.is_none()) {
+                        Some((idx as InstrIndex, fd.parameters.clone()))
+                    } else {
+                        None
+                    }
+                } else {
+                    None
+                }
+            })
+            .collect();
+        for (idx, parameters) in user_func_indices {
+            gen.analyzer.setup_function_context(&parameters);
+            let _ = gen.analyzer.analyze_instr(idx);
+        }
+
+        // Process main so module-level variables enter module_context
+        // before any function body is emitted.
         gen.analyzer.setup_function_context(&[]);
         let region_data = match gen.analyzer.fir.main.clone() {
             Instr::Region(rd) => rd,
@@ -903,10 +944,15 @@ impl SirGen {
         level = "debug"
     )]
     fn finalize_generics(&mut self, module: &mut SIRModule) -> Result<(), String> {
+        // Resolve constraints collected during the interleaved emit pass so
+        // collapsed types (e.g. inferred `make_pair` results) are concrete.
+        let _ = self.analyzer.solve_pending();
         Self::apply_collapse_patch(module, &self.analyzer);
         self.monomorph_generic_struct_constructors(module)?;
         // Monomorph clones template bodies with substituted types; run collapse+patch again
         // so `App` normalizes and `new`/enum symbols pick up mangled names.
+        Self::apply_collapse_patch(module, &self.analyzer);
+        let _ = self.analyzer.solve_pending();
         Self::apply_collapse_patch(module, &self.analyzer);
         Self::ensure_mangled_layouts(module, &self.analyzer.fir)?;
         Ok(())
@@ -961,6 +1007,12 @@ impl SirGen {
                     }) => {
                         *enum_name = m.clone();
                     }
+                    Instr::EnumVariantAccess(EnumVariantData {
+                        ref mut enum_name,
+                        ..
+                    }) => {
+                        *enum_name = m.clone();
+                    }
                     Instr::Match(MatchData {
                         ref mut enum_name, ..
                     }) => {
@@ -973,6 +1025,40 @@ impl SirGen {
                 }
             }
         }
+
+        // Match instructions are usually typed `Unit`; derive the mangled enum
+        // name from the scrutinee's collapsed type instead.
+        let mut match_enum_patches: Vec<(usize, String)> = Vec::new();
+        for (i, si) in sir.instructions.iter().enumerate() {
+            let Instr::Match(MatchData {
+                enum_name,
+                scrutinee,
+                ..
+            }) = &si.instr
+            else {
+                continue;
+            };
+            if enum_name.contains("__") {
+                continue;
+            }
+            let Some(scrut_si) = sir.instructions.get(*scrutinee as usize) else {
+                continue;
+            };
+            let Some(mangled) = scrut_si
+                .ty
+                .as_ref()
+                .and_then(Self::mangled_nominal_type_name)
+            else {
+                continue;
+            };
+            match_enum_patches.push((i, mangled));
+        }
+        for (i, mangled) in match_enum_patches {
+            if let Instr::Match(MatchData { ref mut enum_name, .. }) = sir.instructions[i].instr {
+                *enum_name = mangled;
+            }
+        }
+
         for (arg_idx, m) in new_symbol_patches {
             if let Some(arg_si) = sir.instructions.get_mut(arg_idx) {
                 if let Instr::Literal(LiteralPl::Symbol(ref mut s)) = arg_si.instr {
@@ -981,6 +1067,18 @@ impl SirGen {
                     }
                 }
             }
+        }
+    }
+
+    /// Nominal type name after generic monomorphization, e.g. `Option__Int`.
+    fn mangled_nominal_type_name(ty: &ErrandType) -> Option<String> {
+        match ty {
+            ErrandType::Con(n) if n.contains("__") => Some(n.clone()),
+            ErrandType::App(h, _) => match h.as_ref() {
+                ErrandType::Con(n) if n.contains("__") => Some(n.clone()),
+                _ => None,
+            },
+            _ => None,
         }
     }
 
@@ -1197,13 +1295,18 @@ impl SirGen {
     fn patch_new_symbol_in_body(sir: &mut SIR, base: &str, mangled: &str) {
         let mut patches: Vec<(usize, String)> = Vec::new();
         for si in &sir.instructions {
-            if let Instr::FnCall(fc) = &si.instr {
-                if fc.name == "new" && !fc.arguments.is_empty() {
-                    if let Some(arg0) = sir.instructions.get(fc.arguments[0] as usize) {
-                        if let Instr::Literal(LiteralPl::Symbol(s)) = &arg0.instr {
-                            if s == base {
-                                patches.push((fc.arguments[0] as usize, mangled.to_string()));
-                            }
+            let type_arg_idx = match &si.instr {
+                Instr::FnCall(fc) if fc.name == "new" && !fc.arguments.is_empty() => {
+                    Some(fc.arguments[0] as usize)
+                }
+                Instr::New(arguments) if !arguments.is_empty() => Some(arguments[0] as usize),
+                _ => None,
+            };
+            if let Some(arg_idx) = type_arg_idx {
+                if let Some(arg_si) = sir.instructions.get(arg_idx) {
+                    if let Instr::Literal(LiteralPl::Symbol(s)) = &arg_si.instr {
+                        if s == base {
+                            patches.push((arg_idx, mangled.to_string()));
                         }
                     }
                 }
@@ -1257,7 +1360,9 @@ impl SirGen {
             if !ok || tys.is_empty() {
                 continue;
             }
-            if keys.iter().any(|k| k == "Any") {
+            if keys.iter().any(|k| {
+                k == "Any" || k.starts_with("param_") || k.starts_with("^α")
+            }) {
                 continue;
             }
             out.entry(keys).or_insert(tys);
@@ -1465,12 +1570,12 @@ impl SirGen {
             if module.structs.contains_key(&m) || module.enums.contains_key(&m) {
                 continue;
             }
-            if let Some((sd, subst)) = parse_mangled_struct(&m, &struct_defs) {
+            if let Some((sd, subst)) = parse_mangled_struct(&m, &struct_defs, &enum_defs) {
                 let layout = build_struct_layout_subst(&sd, &subst)?;
                 module.structs.insert(m, layout);
                 continue;
             }
-            if let Some((ed, subst)) = parse_mangled_enum(&m, &enum_defs) {
+            if let Some((ed, subst)) = parse_mangled_enum(&m, &enum_defs, &struct_defs) {
                 let layout = build_enum_layout_subst(&ed, &subst)?;
                 module.enums.insert(m, layout);
             }
@@ -1540,6 +1645,115 @@ fn primitive_name_to_type_expr(n: &str) -> Result<TypeExpression, String> {
     })
 }
 
+/// Parse one component of a mangled generic name, e.g. `Int` or `Box__Int`.
+fn parse_mangled_type_component(
+    s: &str,
+    struct_defs: &[StructData],
+    enum_defs: &[EnumData],
+) -> Option<TypeExpression> {
+    match s {
+        "Int" | "Int32" | "Bool" | "Float" | "String" | "Void" => {
+            primitive_name_to_type_expr(s).ok()
+        }
+        _ => {
+            for sd in struct_defs {
+                if sd.type_params.is_empty() && sd.name == s {
+                    return Some(TypeExpression::Struct(
+                        Id {
+                            name: sd.name.clone(),
+                        },
+                        None,
+                        None,
+                    ));
+                }
+                let prefix = format!("{}__", sd.name);
+                if s.starts_with(&prefix) {
+                    let rest = &s[sd.name.len() + 2..];
+                    let args = parse_mangled_type_args(rest, sd.type_params.len(), struct_defs, enum_defs)?;
+                    let generic_args: Vec<GenericArg> = args
+                        .into_iter()
+                        .map(GenericArg::Type)
+                        .collect();
+                    return Some(TypeExpression::Struct(
+                        Id {
+                            name: sd.name.clone(),
+                        },
+                        None,
+                        Some(generic_args),
+                    ));
+                }
+            }
+            for ed in enum_defs {
+                if ed.type_params.is_empty() && ed.name == s {
+                    return Some(TypeExpression::Struct(
+                        Id {
+                            name: ed.name.clone(),
+                        },
+                        None,
+                        None,
+                    ));
+                }
+                let prefix = format!("{}__", ed.name);
+                if s.starts_with(&prefix) {
+                    let rest = &s[ed.name.len() + 2..];
+                    let args = parse_mangled_type_args(rest, ed.type_params.len(), struct_defs, enum_defs)?;
+                    let generic_args: Vec<GenericArg> = args
+                        .into_iter()
+                        .map(GenericArg::Type)
+                        .collect();
+                    return Some(TypeExpression::Struct(
+                        Id {
+                            name: ed.name.clone(),
+                        },
+                        None,
+                        Some(generic_args),
+                    ));
+                }
+            }
+            None
+        }
+    }
+}
+
+/// Split a mangled argument suffix into `count` type expressions, respecting
+/// nested `Foo__Bar__Baz` components.
+fn parse_mangled_type_args(
+    rest: &str,
+    count: usize,
+    struct_defs: &[StructData],
+    enum_defs: &[EnumData],
+) -> Option<Vec<TypeExpression>> {
+    if count == 0 {
+        return if rest.is_empty() {
+            Some(Vec::new())
+        } else {
+            None
+        };
+    }
+    if count == 1 {
+        return Some(vec![parse_mangled_type_component(rest, struct_defs, enum_defs)?]);
+    }
+    let mut search_from = 0;
+    while let Some(rel) = rest[search_from..].find("__") {
+        let split_at = search_from + rel;
+        let head = &rest[..split_at];
+        let tail = &rest[split_at + 2..];
+        if !head.is_empty() {
+            if let Some(first) = parse_mangled_type_component(head, struct_defs, enum_defs) {
+                if let Some(mut tail_args) =
+                    parse_mangled_type_args(tail, count - 1, struct_defs, enum_defs)
+                {
+                    let mut out = vec![first];
+                    out.append(&mut tail_args);
+                    return Some(out);
+                }
+            }
+        }
+        search_from = split_at + 2;
+    }
+    None
+}
+
 #[instrument(
     skip(te, m),
     name = "sir_gen.subst_type_expr",
@@ -1585,6 +1799,7 @@ fn subst_type_expr(te: &TypeExpression, m: &HashMap<String, TypeExpression>) -> 
 fn parse_mangled_struct(
     m: &str,
     defs: &[StructData],
+    enum_defs: &[EnumData],
 ) -> Option<(StructData, HashMap<String, TypeExpression>)> {
     for sd in defs {
         let prefix = format!("{}__", sd.name);
@@ -1592,13 +1807,10 @@ fn parse_mangled_struct(
             continue;
         }
         let rest = &m[sd.name.len() + 2..];
-        let arg_strs: Vec<&str> = rest.split("__").filter(|s| !s.is_empty()).collect();
-        if arg_strs.len() != sd.type_params.len() {
-            continue;
-        }
+        let arg_tys = parse_mangled_type_args(rest, sd.type_params.len(), defs, enum_defs)?;
         let mut subst = HashMap::new();
-        for (tp, an) in sd.type_params.iter().zip(arg_strs.iter()) {
-            subst.insert(tp.name.clone(), primitive_name_to_type_expr(an).ok()?);
+        for (tp, te) in sd.type_params.iter().zip(arg_tys.iter()) {
+            subst.insert(tp.name.clone(), te.clone());
         }
         return Some((sd.clone(), subst));
     }
@@ -1634,6 +1846,7 @@ fn build_struct_layout_subst(
 fn parse_mangled_enum(
     m: &str,
     defs: &[EnumData],
+    struct_defs: &[StructData],
 ) -> Option<(EnumData, HashMap<String, TypeExpression>)> {
     for ed in defs {
         let prefix = format!("{}__", ed.name);
@@ -1641,13 +1854,10 @@ fn parse_mangled_enum(
             continue;
         }
         let rest = &m[ed.name.len() + 2..];
-        let arg_strs: Vec<&str> = rest.split("__").filter(|s| !s.is_empty()).collect();
-        if arg_strs.len() != ed.type_params.len() {
-            continue;
-        }
+        let arg_tys = parse_mangled_type_args(rest, ed.type_params.len(), struct_defs, defs)?;
         let mut subst = HashMap::new();
-        for (tp, an) in ed.type_params.iter().zip(arg_strs.iter()) {
-            subst.insert(tp.name.clone(), primitive_name_to_type_expr(an).ok()?);
+        for (tp, te) in ed.type_params.iter().zip(arg_tys.iter()) {
+            subst.insert(tp.name.clone(), te.clone());
         }
         return Some((ed.clone(), subst));
     }
