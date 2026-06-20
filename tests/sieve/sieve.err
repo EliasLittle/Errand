@@ -1,0 +1,53 @@
+foreign fn printf(a::Int):: Int
+foreign fn malloc(a::Int):: Int
+foreign fn free(a::Int):: Int
+
++-- Sieve of Eratosthenes: count primes in [2, n].
++-- Iterative (`while`) for O(1) stack. Inner marking loop lives in its own function so the
++-- outer `while p <= n` body is not `if ... while ...` in one Cranelift function (that CFG
++-- currently hits cranelift-frontend ssa.rs when lowering).
+
+fn mark_multiples_from(table, p, n)
+    m = p * p
+    while m <= n
+        _mem_store(table, m * 8, 0)
+        m = m + p
+    end
+    return 0
+end
+
+fn try_mark_prime_multiples(table, p, n)
+    if _mem_load(table, p * 8) != 1
+        return 0
+    end
+    return mark_multiples_from(table, p, n)
+end
+
+fn sieve_prime_count(n)
+    bytes = (n + 1) * 8
+    table = malloc(bytes)
+    i = 0
+    while i <= n
+        _mem_store(table, i * 8, 1)
+        i = i + 1
+    end
+    _mem_store(table, 0, 0)
+    _mem_store(table, 8, 0)
+    p = 2
+    while p <= n
+        try_mark_prime_multiples(table, p, n)
+        p = p + 1
+    end
+    count = 0
+    j = 2
+    while j <= n
+        if _mem_load(table, j * 8) == 1
+            count = count + 1
+        end
+        j = j + 1
+    end
+    free(table)
+    return count
+end
+
+printf("%d\n", sieve_prime_count(10000000))

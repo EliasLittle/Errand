@@ -1,130 +1,247 @@
-use std::collections::HashMap;
 use crate::backend::worklist::ErrandType;
+use crate::frontend::ast::{GenericArg, TypeExpression};
+use std::collections::HashMap;
+use tracing::instrument;
 
 /// Add built-in data constructors to the type inference context
-/// 
+///
 /// These are the primitive types and their constructors that Errand supports:
 /// - Int, Int32, Float, Bool, String, Unit
 /// - Built-in constructors like true/false for Bool
+#[instrument(
+    name = "errand_builtins.add_builtin_data_constructors",
+    target = "errand_builtins",
+    level = "trace"
+)]
 pub fn add_builtin_data_constructors() -> HashMap<String, ErrandType> {
-    let mut data_constructors = HashMap::new();
-    
-    // Bool constructors
-    data_constructors.insert("true".to_string(), ErrandType::Con("Bool".to_string()));
-    data_constructors.insert("false".to_string(), ErrandType::Con("Bool".to_string()));
-    
-    // Unit constructor (for void/empty expressions)
-    data_constructors.insert("unit".to_string(), ErrandType::Con("Unit".to_string()));
-    
-    data_constructors
+    const ENTRIES: &[(&str, &str)] = &[("true", "Bool"), ("false", "Bool"), ("unit", "Unit")];
+    HashMap::from_iter(
+        ENTRIES
+            .iter()
+            .map(|&(name, con)| (name.to_string(), ErrandType::Con(con.to_string()))),
+    )
+}
+
+#[instrument(
+    skip_all,
+    name = "errand_builtins.builtin_printf",
+    target = "errand_builtins",
+    level = "trace"
+)]
+fn builtin_printf() -> ErrandType {
+    ErrandType::Arrow(
+        Box::new(ErrandType::Con("String".to_string())),
+        Box::new(ErrandType::Arrow(
+            Box::new(ErrandType::Var("_a".to_string())),
+            Box::new(ErrandType::Con("Unit".to_string())),
+        )),
+    )
+}
+
+#[instrument(
+    skip_all,
+    name = "errand_builtins.builtin_malloc",
+    target = "errand_builtins",
+    level = "trace"
+)]
+fn builtin_malloc() -> ErrandType {
+    ErrandType::Arrow(
+        Box::new(ErrandType::Con("Int".to_string())),
+        Box::new(ErrandType::Con("Int".to_string())),
+    )
+}
+
+#[instrument(
+    skip_all,
+    name = "errand_builtins.builtin_free",
+    target = "errand_builtins",
+    level = "trace"
+)]
+fn builtin_free() -> ErrandType {
+    ErrandType::Arrow(
+        Box::new(ErrandType::Con("Int".to_string())),
+        Box::new(ErrandType::Con("Unit".to_string())),
+    )
+}
+
+#[instrument(
+    skip_all,
+    name = "errand_builtins.builtin_as_ptr",
+    target = "errand_builtins",
+    level = "trace"
+)]
+fn builtin_as_ptr() -> ErrandType {
+    ErrandType::Arrow(
+        Box::new(ErrandType::Con("String".to_string())),
+        Box::new(ErrandType::Con("Int".to_string())),
+    )
+}
+
+#[instrument(
+    skip_all,
+    name = "errand_builtins.builtin_as_string",
+    target = "errand_builtins",
+    level = "trace"
+)]
+fn builtin_as_string() -> ErrandType {
+    ErrandType::Arrow(
+        Box::new(ErrandType::Con("Int".to_string())),
+        Box::new(ErrandType::Con("String".to_string())),
+    )
+}
+
+#[instrument(
+    skip_all,
+    name = "errand_builtins.builtin_strlen",
+    target = "errand_builtins",
+    level = "trace"
+)]
+fn builtin_strlen() -> ErrandType {
+    ErrandType::Arrow(
+        Box::new(ErrandType::Con("String".to_string())),
+        Box::new(ErrandType::Con("Int".to_string())),
+    )
+}
+
+#[instrument(
+    skip_all,
+    name = "errand_builtins.builtin_strcpy",
+    target = "errand_builtins",
+    level = "trace"
+)]
+fn builtin_strcpy() -> ErrandType {
+    ErrandType::Arrow(
+        Box::new(ErrandType::Con("String".to_string())),
+        Box::new(ErrandType::Arrow(
+            Box::new(ErrandType::Con("String".to_string())),
+            Box::new(ErrandType::Con("Int".to_string())),
+        )),
+    )
+}
+
+#[instrument(
+    skip_all,
+    name = "errand_builtins.builtin_getfield",
+    target = "errand_builtins",
+    level = "trace"
+)]
+fn builtin_getfield() -> ErrandType {
+    ErrandType::Arrow(
+        Box::new(ErrandType::Var("_struct".to_string())),
+        Box::new(ErrandType::Arrow(
+            Box::new(ErrandType::Con("String".to_string())),
+            Box::new(ErrandType::Arrow(
+                Box::new(ErrandType::Con("String".to_string())),
+                Box::new(ErrandType::Con("Int".to_string())),
+            )),
+        )),
+    )
+}
+
+#[instrument(
+    skip_all,
+    name = "errand_builtins.builtin_new",
+    target = "errand_builtins",
+    level = "trace"
+)]
+fn builtin_new() -> ErrandType {
+    ErrandType::Arrow(
+        Box::new(ErrandType::Con("String".to_string())),
+        Box::new(ErrandType::Arrow(
+            Box::new(ErrandType::Var("_a".to_string())),
+            Box::new(ErrandType::Arrow(
+                Box::new(ErrandType::Var("_b".to_string())),
+                Box::new(ErrandType::Var("_result".to_string())),
+            )),
+        )),
+    )
 }
 
 /// Add built-in function types to the type inference context
-/// 
+///
 /// These are functions that are available in the runtime environment:
-/// - printf: String -> Unit (for output)
+/// - printf: String -> a -> ... -> Unit (variadic)
 /// - malloc: Int -> Int (for memory allocation, returns pointer as int)
 /// - free: Int -> Unit (for memory deallocation)
+#[instrument(
+    name = "errand_builtins.add_builtin_functions",
+    target = "errand_builtins",
+    level = "trace"
+)]
 pub fn add_builtin_functions() -> HashMap<String, ErrandType> {
-    let mut function_types = HashMap::new();
-    
-    // printf :: String -> a -> ... -> Unit (variadic)
-    function_types.insert(
-        "printf".to_string(),
-        ErrandType::Arrow(
-            Box::new(ErrandType::Con("String".to_string())),
-            Box::new(ErrandType::Arrow(
-                Box::new(ErrandType::Var("_a".to_string())),
-                Box::new(ErrandType::Con("Unit".to_string())),
-            )),
-        ),
-    );
-    
-    // malloc :: Int -> Int (returns pointer as int)
-    function_types.insert(
-        "malloc".to_string(),
-        ErrandType::Arrow(
-            Box::new(ErrandType::Con("Int".to_string())),
-            Box::new(ErrandType::Con("Int".to_string())),
-        ),
-    );
-    
-    // free :: Int -> Unit
-    function_types.insert(
-        "free".to_string(),
-        ErrandType::Arrow(
-            Box::new(ErrandType::Con("Int".to_string())),
-            Box::new(ErrandType::Con("Unit".to_string())),
-        ),
-    );
-
-    // as_ptr :: String -> Int (convert string to raw pointer)
-    function_types.insert(
-        "as_ptr".to_string(),
-        ErrandType::Arrow(
-            Box::new(ErrandType::Con("String".to_string())),
-            Box::new(ErrandType::Con("Int".to_string())),
-        ),
-    );
-
-    // as_string :: Int -> String
-    function_types.insert(
-        "as_string".to_string(),
-        ErrandType::Arrow(
-            Box::new(ErrandType::Con("Int".to_string())),
-            Box::new(ErrandType::Con("String".to_string())),
-        ),
-    );
-
-    // getfield :: (struct_instance, field_symbol, struct_type) -> field_type
-    // Struct instance can be any struct; symbols are String in the type system
-    function_types.insert(
-        "getfield".to_string(),
-        ErrandType::Arrow(
-            Box::new(ErrandType::Var("_struct".to_string())),
-            Box::new(ErrandType::Arrow(
-                Box::new(ErrandType::Con("String".to_string())),
-                Box::new(ErrandType::Arrow(
-                    Box::new(ErrandType::Con("String".to_string())),
-                    Box::new(ErrandType::Con("Int".to_string())),
-                )),
-            )),
-        ),
-    );
-
-    // new :: Symbol -> Field1 -> Field2 -> ... -> Struct
-    // Polymorphic: first arg is type name (Symbol), then field values. Used by lowered
-    // struct constructors like Point(x, y) -> return new(:Point, x, y).
-    // 3 arrows for 2-field structs (Point); extend chain for larger structs.
-    function_types.insert(
-        "new".to_string(),
-        ErrandType::Arrow(
-            Box::new(ErrandType::Con("String".to_string())),
-            Box::new(ErrandType::Arrow(
-                Box::new(ErrandType::Var("_a".to_string())),
-                Box::new(ErrandType::Arrow(
-                    Box::new(ErrandType::Var("_b".to_string())),
-                    Box::new(ErrandType::Var("_result".to_string())),
-                )),
-            )),
-        ),
-    );
-
-    function_types
+    const ENTRIES: &[(&str, fn() -> ErrandType)] = &[
+        ("printf", builtin_printf),
+        ("malloc", builtin_malloc),
+        ("free", builtin_free),
+        ("as_ptr", builtin_as_ptr),
+        ("as_string", builtin_as_string),
+        // Injected by `printf` lowering (see `frontend/lower.rs`) when computing the
+        // size of the format string buffer to allocate. The Errand type system must
+        // know about it, otherwise downstream analysis (e.g. annotated var decls
+        // whose RHS contains the lowered call chain) will fail with UnboundVariable.
+        ("strlen", builtin_strlen),
+        // Also injected by `printf` lowering (`frontend/lower.rs`) to copy the format string into the
+        // freshly malloc'd buffer.
+        ("strcpy", builtin_strcpy),
+        // Struct instance can be any struct; symbols are String in the type system
+        ("getfield", builtin_getfield),
+        // Polymorphic: first arg is type name (Symbol), then field values. Used by lowered
+        // struct constructors like Point(x, y) -> return new(:Point, x, y).
+        ("new", builtin_new),
+    ];
+    HashMap::from_iter(ENTRIES.iter().map(|&(name, mk)| (name.to_string(), mk())))
 }
 
-/// Convert from Errand's frontend TypeExpression to ErrandType for inference
-pub fn type_expr_to_errand_type(type_expr: &crate::frontend::ast::TypeExpression) -> ErrandType {
+/// Convert from Errand's frontend TypeExpression to ErrandType for inference.
+#[instrument(
+    skip(type_expr),
+    name = "errand_builtins.type_expr_to_errand_type",
+    target = "errand_builtins",
+    level = "trace"
+)]
+pub fn type_expr_to_errand_type(type_expr: &TypeExpression) -> ErrandType {
+    type_expr_to_errand_type_with_params(type_expr, &[])
+}
+
+// TODO: This should return more than just ErrandType::Con
+// Structs should be ErrandType::Product, Enums ErrandType::Sum
+// Parametric types should be ErrandType::Forall
+/// Like [`type_expr_to_errand_type`], but names in `type_params` map to [`ErrandType::Var`].
+#[instrument(
+    skip(type_expr, type_params),
+    fields(type_param_count = type_params.len()),
+    name = "errand_builtins.type_expr_to_errand_type_with_params",
+    target = "errand_builtins",
+    level = "trace"
+)]
+pub fn type_expr_to_errand_type_with_params(
+    type_expr: &TypeExpression,
+    type_params: &[String],
+) -> ErrandType {
     match type_expr {
-        crate::frontend::ast::TypeExpression::Int => ErrandType::Con("Int".to_string()),
-        crate::frontend::ast::TypeExpression::Int32 => ErrandType::Con("Int32".to_string()),
-        crate::frontend::ast::TypeExpression::Float => ErrandType::Con("Float".to_string()),
-        crate::frontend::ast::TypeExpression::Bool => ErrandType::Con("Bool".to_string()),
-        crate::frontend::ast::TypeExpression::String => ErrandType::Con("String".to_string()),
-        crate::frontend::ast::TypeExpression::Void => ErrandType::Con("Unit".to_string()),
-        crate::frontend::ast::TypeExpression::Struct(id, _fields) => {
-            // For now, treat structs as opaque types with their name
-            ErrandType::Con(id.name.clone())
+        TypeExpression::Int => ErrandType::Con("Int".to_string()),
+        TypeExpression::Int32 => ErrandType::Con("Int32".to_string()),
+        TypeExpression::Float => ErrandType::Con("Float".to_string()),
+        TypeExpression::Bool => ErrandType::Con("Bool".to_string()),
+        TypeExpression::String => ErrandType::Con("String".to_string()),
+        TypeExpression::Void => ErrandType::Con("Unit".to_string()),
+        TypeExpression::Struct(id, inner, generic_args) => {
+            if type_params.iter().any(|p| p == &id.name) {
+                return ErrandType::Var(id.name.clone());
+            }
+            if let Some(args) = generic_args {
+                let arg_tys: Vec<ErrandType> = args
+                    .iter()
+                    .map(|ga| match ga {
+                        GenericArg::Type(t) => type_expr_to_errand_type_with_params(t, type_params),
+                    })
+                    .collect();
+                ErrandType::App(Box::new(ErrandType::Con(id.name.clone())), arg_tys)
+            } else if inner.is_some() {
+                ErrandType::Con(id.name.clone())
+            } else {
+                ErrandType::Con(id.name.clone())
+            }
         }
     }
 }

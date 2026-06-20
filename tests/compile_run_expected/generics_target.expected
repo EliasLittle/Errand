@@ -1,0 +1,8 @@
+# exit: 0
+nested 7 9
+pair 2 1
+inferred 10 20
+some 42
+none
+ok 7
+err bad

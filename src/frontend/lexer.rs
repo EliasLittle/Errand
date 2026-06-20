@@ -1,7 +1,9 @@
-use crate::{lexer_log};
 use std::fmt;
 use std::io::Write;
 use std::mem::Discriminant;
+
+use tracing::instrument;
+
 #[derive(Debug, Clone, PartialEq)]
 pub enum TokenType {
     Int(i64),
@@ -30,6 +32,7 @@ pub enum TokenType {
     Function,
     Foreign,
     Struct,
+    Enum,
     Return,
     TypeInt,
     TypeBool,
@@ -53,6 +56,8 @@ pub enum TokenType {
     While,
     For,
     In,
+    Match,
+    FatArrow,
     Comment(String),
     BlockComment(String, String, String),
     StringLiteral(String),
@@ -70,26 +75,23 @@ pub enum TokenType {
 
 impl TokenType {
     pub fn var(&self) -> Discriminant<TokenType> {
-        return std::mem::discriminant(self)
+        std::mem::discriminant(self)
     }
 
     // Higher precedence means the token is evaluated first
     pub fn precedence(&self) -> Result<i32, String> {
         match self {
-            | TokenType::Dot => Ok(4),
-            | TokenType::Carrot => Ok(3),
-            | TokenType::Asterisk 
-            | TokenType::Slash 
-            | TokenType::Modulo => Ok(2),
-            | TokenType::Plus 
-            | TokenType::Minus => Ok(1),
-            | TokenType::LessThan 
-            | TokenType::GreaterThan 
-            | TokenType::LessThanEqual 
+            TokenType::Dot => Ok(4),
+            TokenType::Carrot => Ok(3),
+            TokenType::Asterisk | TokenType::Slash | TokenType::Modulo => Ok(2),
+            TokenType::Plus | TokenType::Minus => Ok(1),
+            TokenType::LessThan
+            | TokenType::GreaterThan
+            | TokenType::LessThanEqual
             | TokenType::GreaterThanEqual
-            | TokenType::And 
-            | TokenType::Or 
-            | TokenType::Equal 
+            | TokenType::And
+            | TokenType::Or
+            | TokenType::Equal
             | TokenType::NotEqual
             | TokenType::Assignment => Ok(0),
             _ => Err("Invalid token type for precedence calculation".to_string()), // Default for other token types
@@ -98,12 +100,11 @@ impl TokenType {
 
     pub fn is_right_associative(&self) -> bool {
         match self {
-            TokenType::Carrot
-            | TokenType::Assignment => true,
+            TokenType::Carrot | TokenType::Assignment => true,
             _ => false,
         }
     }
-     
+
     pub fn is_infix(&self) -> bool {
         match self {
             TokenType::Plus
@@ -129,27 +130,23 @@ impl TokenType {
 
     pub fn is_prefix(&self) -> bool {
         match self {
-            TokenType::Minus
-            | TokenType::Bang => true,
+            TokenType::Minus | TokenType::Bang => true,
             _ => false,
         }
     }
-    
+
+    /// Reserved for future postfix operators.
     pub fn is_postfix(&self) -> bool {
-        match self {
-            _ => false,
-        }
+        false
     }
 
     pub fn is_comment(&self) -> bool {
         match self {
-            TokenType::Comment(_)
-            |TokenType::BlockComment(_, _, _) => true,
+            TokenType::Comment(_) | TokenType::BlockComment(_, _, _) => true,
             _ => false,
         }
     }
 }
-
 
 pub fn token_type(token_type: &str) -> Result<TokenType, String> {
     match token_type {
@@ -168,7 +165,7 @@ pub struct Token {
     pub column: usize,
 }
 
-impl Token{
+impl Token {
     pub fn var(&self) -> Discriminant<TokenType> {
         self.token_type.var()
     }
@@ -205,33 +202,54 @@ impl fmt::Display for Token {
 }
 
 pub struct Lexer {
-    source: String,
-    tokens: Vec<Token>,
+    chars: Vec<char>,
     current: usize,
     line: usize,
     column: usize,
-    chars: Vec<char>,
     current_char: char,
 }
 
 impl Lexer {
-    pub fn new(source: &String) -> Self {
-        let chars: Vec<char> = source.chars().collect();
+    /// Takes ownership of the source text and expands it to UTF-32 scalars once.
+    /// Pass the `String` from `read_to_string` directly to avoid an extra full-buffer copy.
+    #[instrument(
+        skip_all,
+        fields(source_len = tracing::field::Empty),
+        name = "lexer.new",
+        target = "lexer",
+        level = "trace"
+    )]
+    pub fn new(source: impl Into<String>) -> Self {
+        let chars: Vec<char> = source.into().chars().collect();
+        tracing::Span::current().record("source_len", chars.len());
         let current_char = if chars.is_empty() { '\0' } else { chars[0] };
         Lexer {
-            source: source.to_string(),
-            tokens: Vec::new(),
+            chars,
             current: 0,
             line: 1,
             column: 1,
-            chars,
             current_char,
         }
     }
 
+    /// Fills `#[instrument(..., fields(... = Empty))]` slots for the active span (Chrome/Perfetto `args`).
+    fn record_lex_cursor(&self) {
+        let span = tracing::Span::current();
+        span.record("line", self.line);
+        span.record("column", self.column);
+        span.record("offset", self.current);
+        span.record("at", tracing::field::debug(&self.current_char));
+    }
+
     fn advance(&mut self) {
+        let prev = self.current_char;
         self.current += 1;
-        self.column += 1;
+        if prev == '\n' {
+            self.line += 1;
+            self.column = 1;
+        } else {
+            self.column += 1;
+        }
         self.current_char = if self.current >= self.chars.len() {
             '\0'
         } else {
@@ -240,13 +258,12 @@ impl Lexer {
     }
 
     fn advance_n(&mut self, n: usize) {
-        self.current += n;
-        self.column += n;
-        self.current_char = if self.current >= self.chars.len() {
-            '\0'
-        } else {
-            self.chars[self.current]
-        };
+        for _ in 0..n {
+            if self.current >= self.chars.len() {
+                break;
+            }
+            self.advance();
+        }
     }
 
     fn peek(&self) -> char {
@@ -257,29 +274,30 @@ impl Lexer {
         }
     }
 
+    /// Lookahead of up to `n` characters after the current position. Shorter
+    /// when near EOF; compare to `[char; n]` only when you need exactly `n`
+    /// characters (length mismatch implies “not equal”).
     fn peek_n(&self, n: usize) -> &[char] {
-        if self.current + n >= self.chars.len() {
-            &['\0']
-        } else {
-            &self.chars[self.current+1..self.current + n + 1]
+        let start = self.current + 1;
+        if start >= self.chars.len() {
+            return &[];
         }
+        let end = (start + n).min(self.chars.len());
+        &self.chars[start..end]
     }
 
     fn is_block_comment(&self) -> bool {
-        let mut char = self.current_char;
+        let mut ch = self.current_char;
         let mut i = 0;
-        while char != '\n' && char != '\0' {
-            char = self.chars[self.current + i];
+        while ch != '\n' && ch != '\0' {
+            ch = self.chars[self.current + i];
             i += 1;
         }
-        if is_comment_end(&self.chars, self.current + i) {
-            return true;
-        }
-        return false;
+        is_comment_end(&self.chars, self.current + i)
     }
 
     fn is_identifier_start(&self, c: char) -> bool {
-        c.is_alphabetic() || c == '_'
+        matches!(c, 'a'..='z' | 'A'..='Z' | '_')
     }
 
     fn is_identifier_part(&self, c: char) -> bool {
@@ -290,31 +308,58 @@ impl Lexer {
         self.current_char == '\0'
     }
 
+    #[instrument(
+        skip(self),
+        fields(
+            line = tracing::field::Empty,
+            column = tracing::field::Empty,
+            offset = tracing::field::Empty,
+            at = tracing::field::Empty
+        ),
+        name = "lexer.skip_whitespace",
+        target = "lexer",
+        level = "trace"
+    )]
     fn skip_whitespace(&mut self) -> Result<Token, String> {
+        self.record_lex_cursor();
         while self.current_char.is_whitespace() && self.current_char != '\n' {
             self.advance();
         }
         self.read_token()
     }
 
-    fn read_multiline_comment(&mut self) -> Result<Token, String> {
-        self.read_block_comment()
-    }
-
+    #[instrument(
+        skip(self),
+        fields(
+            line = tracing::field::Empty,
+            column = tracing::field::Empty,
+            offset = tracing::field::Empty,
+            at = tracing::field::Empty
+        ),
+        name = "lexer.read_block_comment",
+        target = "lexer",
+        level = "trace"
+    )]
     fn read_block_comment(&mut self) -> Result<Token, String> {
+        self.record_lex_cursor();
         let start_line = self.line;
         let start_column = self.column;
         let mut header = String::new();
         let mut body = String::new();
         let mut footer = String::new();
-        
+
         self.advance_n(3); // Skip '+--'
-        
+
         // Read the header
         while self.peek_n(3) != ['-', '-', '+'] {
             if self.current_char == '\n' || self.current_char == '\0' {
-                lexer_log!("Header: {}", header);
-                lexer_log!("Current char: {}", self.current_char);
+                tracing::warn!(
+                    %header,
+                    line = self.line,
+                    column = self.column,
+                    at = %self.current_char,
+                    "invalid block comment: header not terminated"
+                );
                 return Err("Invalid block comment: header not properly terminated.".to_string());
             }
             header.push(self.current_char);
@@ -330,10 +375,6 @@ impl Lexer {
             if self.current_char == '\0' {
                 return Err("Invalid block comment: body cannot be terminated by EOF.".to_string());
             }
-            if self.current_char == '\n' {
-                self.line += 1;
-                self.column = 0;
-            }
             body.push(self.current_char);
             self.advance();
         }
@@ -341,7 +382,7 @@ impl Lexer {
         self.advance();
 
         self.advance_n(3); // Skip '+--'
-        // Read the footer
+                           // Read the footer
         while self.peek_n(3) != ['-', '-', '+'] {
             if self.current_char == '\n' || self.current_char == '\0' {
                 return Err("Invalid block comment: footer not properly terminated.".to_string());
@@ -353,7 +394,7 @@ impl Lexer {
         self.advance();
 
         self.advance_n(3); // Skip '--+'
-        
+
         Ok(Token {
             token_type: TokenType::BlockComment(header, body, footer),
             line: start_line,
@@ -361,19 +402,32 @@ impl Lexer {
         })
     }
 
+    #[instrument(
+        skip(self),
+        fields(
+            line = tracing::field::Empty,
+            column = tracing::field::Empty,
+            offset = tracing::field::Empty,
+            at = tracing::field::Empty
+        ),
+        name = "lexer.read_inline_comment",
+        target = "lexer",
+        level = "trace"
+    )]
     fn read_inline_comment(&mut self) -> Result<Token, String> {
+        self.record_lex_cursor();
         let start_line = self.line;
         let start_column = self.column;
         let mut comment = String::new();
-        
+
         // Skip the opening +--
         self.advance_n(3);
-        
+
         while self.current_char != '\n' && self.current_char != '\0' {
             comment.push(self.current_char);
             self.advance();
         }
-        
+
         Ok(Token {
             token_type: TokenType::Comment(comment),
             line: start_line,
@@ -381,20 +435,49 @@ impl Lexer {
         })
     }
 
+    #[instrument(
+        skip(self),
+        fields(
+            line = tracing::field::Empty,
+            column = tracing::field::Empty,
+            offset = tracing::field::Empty,
+            at = tracing::field::Empty,
+            block = tracing::field::Empty
+        ),
+        name = "lexer.read_comment",
+        target = "lexer",
+        level = "trace"
+    )]
     fn read_comment(&mut self) -> Result<Token, String> {
-        if self.is_block_comment() {
-            return self.read_block_comment()
+        self.record_lex_cursor();
+        let block = self.is_block_comment();
+        tracing::Span::current().record("block", block);
+        if block {
+            self.read_block_comment()
         } else {
-            return self.read_inline_comment()
+            self.read_inline_comment()
         }
     }
 
+    #[instrument(
+        skip(self),
+        fields(
+            line = tracing::field::Empty,
+            column = tracing::field::Empty,
+            offset = tracing::field::Empty,
+            at = tracing::field::Empty
+        ),
+        name = "lexer.read_number",
+        target = "lexer",
+        level = "trace"
+    )]
     fn read_number(&mut self) -> Result<Token, String> {
+        self.record_lex_cursor();
         let start_line = self.line;
         let start_column = self.column;
         let mut number = String::new();
         let mut has_decimal = false;
-        
+
         while self.current_char.is_digit(10) || (self.current_char == '.' && !has_decimal) {
             if self.current_char == '.' {
                 has_decimal = true;
@@ -424,16 +507,29 @@ impl Lexer {
         }
     }
 
+    #[instrument(
+        skip(self),
+        fields(
+            line = tracing::field::Empty,
+            column = tracing::field::Empty,
+            offset = tracing::field::Empty,
+            at = tracing::field::Empty
+        ),
+        name = "lexer.read_identifier_or_keyword",
+        target = "lexer",
+        level = "trace"
+    )]
     fn read_identifier_or_keyword(&mut self) -> Result<Token, String> {
+        self.record_lex_cursor();
         let start_line = self.line;
         let start_column = self.column;
         let mut identifier = String::new();
-        
+
         while self.is_identifier_part(self.current_char) {
             identifier.push(self.current_char);
             self.advance();
         }
-        
+
         // Check for keywords
         let token_type = match identifier.as_str() {
             "print" => TokenType::Print,
@@ -442,6 +538,7 @@ impl Lexer {
             "fn" => TokenType::Function,
             "foreign" => TokenType::Foreign,
             "struct" => TokenType::Struct,
+            "enum" => TokenType::Enum,
             "int" => TokenType::TypeInt,
             "bool" => TokenType::TypeBool,
             "void" => TokenType::TypeVoid,
@@ -453,10 +550,11 @@ impl Lexer {
             "while" => TokenType::While,
             "for" => TokenType::For,
             "in" => TokenType::In,
+            "match" => TokenType::Match,
             "return" => TokenType::Return,
             _ => TokenType::Identifier(identifier),
         };
-        
+
         Ok(Token {
             token_type,
             line: start_line,
@@ -464,14 +562,27 @@ impl Lexer {
         })
     }
 
+    #[instrument(
+        skip(self),
+        fields(
+            line = tracing::field::Empty,
+            column = tracing::field::Empty,
+            offset = tracing::field::Empty,
+            at = tracing::field::Empty
+        ),
+        name = "lexer.read_string",
+        target = "lexer",
+        level = "trace"
+    )]
     fn read_string(&mut self) -> Result<Token, String> {
+        self.record_lex_cursor();
         let start_line = self.line;
         let start_column = self.column;
         let mut string = String::new();
-        
+
         // Skip the opening quote
         self.advance();
-        
+
         while self.current_char != '"' && self.current_char != '\0' {
             if self.current_char == '\\' {
                 self.advance();
@@ -484,22 +595,18 @@ impl Lexer {
                     _ => return Err(format!("Invalid escape sequence: \\{}", self.current_char)),
                 }
             } else {
-                if self.current_char == '\n' {
-                    self.line += 1;
-                    self.column = 0;
-                }
                 string.push(self.current_char);
             }
             self.advance();
         }
-        
+
         if self.current_char == '\0' {
             return Err("Unterminated string literal".to_string());
         }
-        
+
         // Skip the closing quote
         self.advance();
-        
+
         Ok(Token {
             token_type: TokenType::StringLiteral(string),
             line: start_line,
@@ -507,155 +614,227 @@ impl Lexer {
         })
     }
 
+    #[inline]
+    fn ok_token(&self, token_type: TokenType) -> Result<Token, String> {
+        Ok(Token {
+            token_type,
+            line: self.line,
+            column: self.column,
+        })
+    }
+
+    #[instrument(
+        skip(self),
+        fields(
+            line = tracing::field::Empty,
+            column = tracing::field::Empty,
+            offset = tracing::field::Empty,
+            at = tracing::field::Empty
+        ),
+        name = "lexer.read_token",
+        target = "lexer",
+        level = "trace"
+    )]
     pub fn read_token(&mut self) -> Result<Token, String> {
+        self.record_lex_cursor();
         let mut advance_char = true;
         let tok = match self.current_char {
-            '(' => Ok(Token { token_type: TokenType::LParen, line: self.line, column: self.column }),
-            ')' => Ok(Token { token_type: TokenType::RParen, line: self.line, column: self.column }),
-            '{' => Ok(Token { token_type: TokenType::LBrace, line: self.line, column: self.column }),
-            '}' => Ok(Token { token_type: TokenType::RBrace, line: self.line, column: self.column }),
-            ',' => Ok(Token { token_type: TokenType::Comma, line: self.line, column: self.column }),
-            '.' => Ok(Token { token_type: TokenType::Dot, line: self.line, column: self.column }),
-            ':' => if self.peek() == ':' {
-                self.advance();
-                Ok(Token { token_type: TokenType::TypeDef, line: self.line, column: self.column })
-            } else {
-                Ok(Token { token_type: TokenType::Colon, line: self.line, column: self.column })
-            },
-            ';' => Ok(Token { token_type: TokenType::Semicolon, line: self.line, column: self.column }),
-            '=' => if self.peek() == '=' {
-                self.advance();
-                Ok(Token { token_type: TokenType::Equal, line: self.line, column: self.column })
-            } else {
-                Ok(Token { token_type: TokenType::Assignment, line: self.line, column: self.column })
-            },
-            '+' => if self.peek_n(2) == ['-', '-'] {
-                advance_char = false;
-                self.read_comment()
-            } else {
-                Ok(Token { token_type: TokenType::Plus, line: self.line, column: self.column })
-            },
-            '-' => if self.peek() == '>' {
-                self.advance();
-                Ok(Token { token_type: TokenType::Arrow, line: self.line, column: self.column })
-            } else {
-                Ok(Token { token_type: TokenType::Minus, line: self.line, column: self.column })
-            },
-            '*' => Ok(Token { token_type: TokenType::Asterisk, line: self.line, column: self.column }),
-            '/' => Ok(Token { token_type: TokenType::Slash, line: self.line, column: self.column }),
-            '%' => Ok(Token { token_type: TokenType::Modulo, line: self.line, column: self.column }),
-            '^' => Ok(Token { token_type: TokenType::Carrot, line: self.line, column: self.column }),
-            '!' => if self.peek() == '=' {
-                self.advance();
-                Ok(Token { token_type: TokenType::NotEqual, line: self.line, column: self.column })
-            } else {
-                Ok(Token { token_type: TokenType::Bang, line: self.line, column: self.column })
-            },
+            '(' => self.ok_token(TokenType::LParen),
+            ')' => self.ok_token(TokenType::RParen),
+            '{' => self.ok_token(TokenType::LBrace),
+            '}' => self.ok_token(TokenType::RBrace),
+            ',' => self.ok_token(TokenType::Comma),
+            '.' => self.ok_token(TokenType::Dot),
+            ':' => {
+                if self.peek() == ':' {
+                    self.advance();
+                    self.ok_token(TokenType::TypeDef)
+                } else {
+                    self.ok_token(TokenType::Colon)
+                }
+            }
+            ';' => self.ok_token(TokenType::Semicolon),
+            '=' => {
+                if self.peek() == '=' {
+                    self.advance();
+                    self.ok_token(TokenType::Equal)
+                } else if self.peek() == '>' {
+                    self.advance();
+                    self.ok_token(TokenType::FatArrow)
+                } else {
+                    self.ok_token(TokenType::Assignment)
+                }
+            }
+            '+' => {
+                if self.peek_n(2) == ['-', '-'] {
+                    advance_char = false;
+                    self.read_comment()
+                } else {
+                    self.ok_token(TokenType::Plus)
+                }
+            }
+            '-' => {
+                if self.peek() == '>' {
+                    self.advance();
+                    self.ok_token(TokenType::Arrow)
+                } else {
+                    self.ok_token(TokenType::Minus)
+                }
+            }
+            '*' => self.ok_token(TokenType::Asterisk),
+            '/' => self.ok_token(TokenType::Slash),
+            '%' => self.ok_token(TokenType::Modulo),
+            '^' => self.ok_token(TokenType::Carrot),
+            '!' => {
+                if self.peek() == '=' {
+                    self.advance();
+                    self.ok_token(TokenType::NotEqual)
+                } else {
+                    self.ok_token(TokenType::Bang)
+                }
+            }
             '"' => {
                 advance_char = false;
                 self.read_string()
-            },
-            '\n' => Ok(Token { token_type: TokenType::Newline, line: self.line, column: self.column }),
+            }
+            '\n' => self.ok_token(TokenType::Newline),
             '<' => match self.peek() {
                 ':' => {
                     self.advance();
-                    Ok(Token { token_type: TokenType::Subtype, line: self.line, column: self.column })
+                    self.ok_token(TokenType::Subtype)
                 }
                 '=' => {
                     self.advance();
-                    Ok(Token { token_type: TokenType::LessThanEqual, line: self.line, column: self.column })
+                    self.ok_token(TokenType::LessThanEqual)
                 }
-                _ => Ok(Token { token_type: TokenType::LessThan, line: self.line, column: self.column })
+                _ => self.ok_token(TokenType::LessThan),
             },
-            '>' => if self.peek() == '=' {
-                self.advance();
-                Ok(Token { token_type: TokenType::GreaterThanEqual, line: self.line, column: self.column })
-            } else {
-                Ok(Token { token_type: TokenType::GreaterThan, line: self.line, column: self.column })
-            },
-            '&' => if self.peek() == '&' {
-                self.advance();
-                Ok(Token { token_type: TokenType::And, line: self.line, column: self.column })
-            } else {
-                Ok(Token { token_type: TokenType::Ampersand, line: self.line, column: self.column })
-            },
-            '|' => if self.peek() == '|' {
-                self.advance();
-                Ok(Token { token_type: TokenType::Or, line: self.line, column: self.column })
-            } else {
-                Ok(Token { token_type: TokenType::Pipe, line: self.line, column: self.column })
-            },
-            'a'..='z' | 'A'..='Z' | '_' => {
+            '>' => {
+                if self.peek() == '=' {
+                    self.advance();
+                    self.ok_token(TokenType::GreaterThanEqual)
+                } else {
+                    self.ok_token(TokenType::GreaterThan)
+                }
+            }
+            '&' => {
+                if self.peek() == '&' {
+                    self.advance();
+                    self.ok_token(TokenType::And)
+                } else {
+                    self.ok_token(TokenType::Ampersand)
+                }
+            }
+            '|' => {
+                if self.peek() == '|' {
+                    self.advance();
+                    self.ok_token(TokenType::Or)
+                } else {
+                    self.ok_token(TokenType::Pipe)
+                }
+            }
+            c if self.is_identifier_start(c) => {
                 advance_char = false;
                 self.read_identifier_or_keyword()
-            },
+            }
             ' ' | '\t' => {
                 advance_char = false;
                 self.skip_whitespace()
-            },
+            }
             '0'..='9' => {
                 advance_char = false;
                 self.read_number()
-            },
-            '\0' => Ok(Token { token_type: TokenType::EOF, line: self.line, column: self.column }),
+            }
+            '\0' => self.ok_token(TokenType::EOF),
             _ => Err(format!("Unexpected character: {}", self.current_char)),
         };
         if advance_char {
             self.advance();
         }
-        return tok
+        tok
     }
 
+    #[instrument(
+        skip(self),
+        fields(
+            file = %file_path,
+            line = tracing::field::Empty,
+            column = tracing::field::Empty,
+            offset = tracing::field::Empty,
+            at = tracing::field::Empty,
+            source_len = tracing::field::Empty
+        ),
+        name = "lexer.lex",
+        target = "lexer",
+        level = "info"
+    )]
     pub fn lex(&mut self, file_path: &str) -> Result<Vec<Token>, String> {
-        lexer_log!("Starting to lex the file"); 
-
-        // Initialize the lexer with the file contents
-        self.chars = self.source.chars().collect();
+        // Reset scan position (buffer unchanged; `lex` may be called again).
         self.current = 0;
         self.line = 1;
         self.column = 1;
-        self.current_char = if self.chars.is_empty() { '\0' } else { self.chars[0] };
+        self.current_char = if self.chars.is_empty() {
+            '\0'
+        } else {
+            self.chars[0]
+        };
+
+        let span = tracing::Span::current();
+        span.record("source_len", self.chars.len());
+        self.record_lex_cursor();
 
         // Start lexing
         let mut tokens = Vec::new();
         while !self.is_end_of_file() {
             match self.read_token() {
                 Ok(token) => {
-                    lexer_log!("{}", token); // Debug print statement
+                    tracing::trace!(token = %token, "lex: token");
                     tokens.push(token);
-                },
+                }
                 Err(e) => return Err(e),
             }
         }
-        if file_path != "" {
+        if !file_path.is_empty() {
             let output_file_path = if let Some(stripped) = file_path.strip_suffix(".err") {
                 format!("{}.lex", stripped)
             } else {
                 format!("{}.lex", file_path)
             };
-            let mut output_file = std::fs::File::create(output_file_path).expect("Unable to create file");
+            let mut output_file = std::fs::File::create(&output_file_path)
+                .map_err(|e| format!("Unable to create .lex file {output_file_path}: {e}"))?;
             for token in &tokens {
-                writeln!(output_file, "{}", token).expect("Unable to write to file");
+                writeln!(output_file, "{}", token)
+                    .map_err(|e| format!("Unable to write .lex file {output_file_path}: {e}"))?;
             }
         }
         Ok(tokens)
     }
 
+    /// Debug helper: not used on the normal compile path; only traces when called.
+    #[instrument(
+        skip(self),
+        fields(
+            count = tokens.len(),
+            line = tracing::field::Empty,
+            column = tracing::field::Empty,
+            offset = tracing::field::Empty,
+            at = tracing::field::Empty
+        ),
+        name = "lexer.print_tokens",
+        target = "lexer",
+        level = "trace"
+    )]
     pub fn print_tokens(&self, tokens: &[Token]) {
-        lexer_log!("Printing tokens...");
+        self.record_lex_cursor();
         for token in tokens {
-            lexer_log!("{}", token);
+            tracing::trace!(token = %token, "print_tokens");
         }
     }
-} 
-
+}
 
 fn is_comment_end(chars: &[char], current: usize) -> bool {
-    let char_1 = chars[current - 4];
-    let char_2 = chars[current - 3];
-    let char_3 = chars[current - 2];
-    if char_1 == '-' && char_2 == '-' && char_3 == '+' {
-        return true;
+    if current < 4 {
+        return false;
     }
-    return false;
+    chars[current - 4] == '-' && chars[current - 3] == '-' && chars[current - 2] == '+'
 }
