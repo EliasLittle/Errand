@@ -16,5 +16,5 @@ fn unwrap<T>(b::Box<T>):: T
     return b.value
 end
 
-dd = wrap(wrap(wrap(wrap(7))))
+dd = wrap(wrap(wrap(wrap(9))))
 printf("nested %d\n", unwrap(unwrap(unwrap(unwrap(dd)))))
