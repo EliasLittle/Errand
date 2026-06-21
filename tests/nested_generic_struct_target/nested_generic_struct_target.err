@@ -1,0 +1,20 @@
++-- GOLDEN FIXTURE: same-type nested generics (`Box<Box<Int>>`) threaded through
++-- `wrap`/`unwrap`. Monomorphization must reject stale call shapes (e.g.
++-- `unwrap(b::Int)`) and only emit overloads matching declared param types.
+
+foreign fn printf(a::Int):: Int
+
+struct Box<T>
+    value::T
+end
+
+fn wrap<T>(x::T):: Box<T>
+    return Box(x)
+end
+
+fn unwrap<T>(b::Box<T>):: T
+    return b.value
+end
+
+dd = wrap(wrap(wrap(wrap(7))))
+printf("nested %d\n", unwrap(unwrap(unwrap(unwrap(dd)))))

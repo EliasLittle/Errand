@@ -2091,6 +2091,7 @@ fn errand_type_to_backend(ty: &ErrandType) -> BackendType {
 /// Convert an `ErrandType` (from SIR instruction type) to the overload key string.
 fn sir_type_key(ty: Option<&ErrandType>) -> String {
     match ty {
+        Some(t) if matches!(t, ErrandType::App(..)) && t.is_ground() => errand_type_name(t),
         Some(ErrandType::Con(n)) => n.clone(),
         Some(ErrandType::Var(n)) | Some(ErrandType::ETVar(n)) => n.clone(),
         _ => "Any".to_string(),

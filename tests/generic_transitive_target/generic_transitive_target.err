@@ -1,0 +1,36 @@
++-- GOLDEN FIXTURE: transitive generic -> generic calls. The result of one
++-- generic function feeds directly into another (`unwrap(wrap(5))`,
++-- `firstof(pair_of(11, 22))`). Monomorphization iterates to a fixpoint: the
++-- feeding call (`wrap`/`pair_of`) is instantiated first, its callers are
++-- repaired so the argument type becomes concrete (`Box__Int`/`Pair__Int__Int`),
++-- and a later round then instantiates the consuming generic (`unwrap`/`firstof`).
+
+foreign fn printf(a::Int):: Int
+
+struct Box<T>
+    value::T
+end
+
+struct Pair<A, B>
+    first::A
+    second::B
+end
+
+fn wrap<T>(x::T):: Box<T>
+    return Box(x)
+end
+
+fn unwrap<T>(b::Box<T>):: T
+    return b.value
+end
+
+fn pair_of<A, B>(a::A, b::B):: Pair<A, B>
+    return Pair(a, b)
+end
+
+fn firstof<A, B>(p::Pair<A, B>):: A
+    return p.first
+end
+
+printf("trans %d\n", unwrap(wrap(5)))
+printf("first %d\n", firstof(pair_of(11, 22)))

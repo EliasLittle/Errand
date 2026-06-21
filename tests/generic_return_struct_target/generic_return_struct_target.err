@@ -1,0 +1,38 @@
++-- GOLDEN FIXTURE: a generic function may RETURN a generic struct type built
++-- from its type parameters. Covers both a single type parameter
++-- (`wrap<T>(x::T):: Box<T>`, instantiated at Int and Bool) and multiple type
++-- parameters (`pair_of<A, B>(a::A, b::B):: Pair<A, B>`).
++--
++-- This used to fail with "Type 'Box'/'Pair' not found in struct registry": the
++-- generic struct constructed inside the body (`Box(x)`, `Pair(a, b)`) only
++-- becomes concrete once the *function* is monomorphized, which happens after the
++-- constructor pass. The constructor pass now runs a second time, after function
++-- monomorphization, to instantiate those revealed generic constructors.
+
+foreign fn printf(a::Int):: Int
+
+struct Box<T>
+    value::T
+end
+
+struct Pair<A, B>
+    first::A
+    second::B
+end
+
+fn wrap<T>(x::T):: Box<T>
+    return Box(x)
+end
+
+fn pair_of<A, B>(a::A, b::B):: Pair<A, B>
+    return Pair(a, b)
+end
+
+bx = wrap(7)
+printf("wrap %d\n", bx.value)
+
+bb = wrap(true)
+printf("wrapbool %d\n", bb.value)
+
+pp = pair_of(3, 4)
+printf("pair %d %d\n", pp.first, pp.second)

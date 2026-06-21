@@ -1,0 +1,24 @@
++-- NEGATIVE FIXTURE (expected to FAIL compilation).
++--
++-- Polymorphic recursion: `depth` calls itself at a *strictly larger* type
++-- (`T` -> `Box<T>` -> `Box<Box<T>>` -> ...), so monomorphization would need an
++-- unbounded family of instantiations and never reaches a fixpoint. The driver
++-- detects non-convergence after a bounded number of rounds and fails with
++-- "generic monomorphization did not converge", rather than emitting a program
++-- with missing instantiations that crashes at runtime.
++--
++-- This is an inherent limitation of monomorphization (the same restriction many
++-- statically-monomorphized languages impose). Asserted by
++-- `tests/generics_unsupported.rs`.
+
+foreign fn printf(a::Int):: Int
+
+struct Box<T>
+    value::T
+end
+
+fn depth<T>(x::T, n::Int):: Int
+    return depth(Box(x), n + 1)
+end
+
+printf("d %d\n", depth(5, 0))

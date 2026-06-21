@@ -334,28 +334,13 @@ impl Analyzer {
         self.expand_type(&self.pool.to_errand_type(idx))
     }
 
-    /// Turn a fully-instantiated `App(Con(Foo), …)` into `Con(Foo__…)` for codegen / mangling.
-    #[instrument(
-        skip(self, ty),
-        name = "analysis.collapse_apps_in_type",
-        target = "analysis",
-        level = "trace"
-    )]
+    /// Expand type variables and normalize, but keep nested generic types as
+    /// `App(Con(name), args)` rather than collapsing to a flat mangled `Con`.
+    /// String mangling (`Foo__Bar__Baz`) is derived on demand via
+    /// [`crate::backend::sir_gen::errand_type_name`] at registry/dispatch/codegen
+    /// boundaries only.
     pub fn collapse_apps_in_type(&self, ty: ErrandType) -> ErrandType {
-        let t = self.expand_type(&ty);
-        match &t {
-            ErrandType::App(h, args)
-                if matches!(h.as_ref(), ErrandType::Con(_))
-                    && args.iter().all(|a| a.is_ground()) =>
-            {
-                if let ErrandType::Con(head) = h.as_ref() {
-                    ErrandType::Con(Self::mangle_type_app(head, args))
-                } else {
-                    t
-                }
-            }
-            _ => t,
-        }
+        self.expand_type(&ty)
     }
 
     pub(crate) fn apply_substs_to_type(
@@ -865,7 +850,7 @@ impl Analyzer {
                 let mut field_ty =
                     type_expr_to_errand_type_with_params(&field.field_type, &type_param_names);
                 field_ty = self.apply_substs_to_type(&field_ty, &subst);
-                return Some(self.collapse_apps_in_type(field_ty));
+                return Some(field_ty);
             }
         }
         None

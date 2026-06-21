@@ -1,0 +1,22 @@
++-- GOLDEN FIXTURE: deeply nested generic container type
++-- `Vec<HashMap<String, Vec<T>>>`. Types stay as nested `App(Con(...), args)`
++-- through analysis and SIR; field access walks the tree (`v.value.value.value`)
++-- and registry keys are derived via `errand_type_name` only at codegen boundaries.
+
+foreign fn printf(a::Int):: Int
+
+struct Vec<T>
+    value::T
+end
+
+struct HashMap<K, V>
+    key::K
+    value::V
+end
+
+fn first_inner<T>(v::Vec<HashMap<String, Vec<T>>>):: T
+    return v.value.value.value
+end
+
+container::Vec<HashMap<String, Vec<Int>>> = Vec(HashMap("k", Vec(42)))
+printf("got %d\n", first_inner(container))

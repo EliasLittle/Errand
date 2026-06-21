@@ -71,6 +71,34 @@ const CASES: &[GoldenCase] = &[
         source_rel: "tests/generic_dispatch_target/generic_dispatch_target.err",
         expected: include_str!("compile_run_expected/generic_dispatch_target.expected"),
     },
+    // Generic function returning a generic struct built from its type parameters
+    // (single and multiple type params): the constructor pass re-runs after
+    // function monomorphization to instantiate the revealed generic structs.
+    GoldenCase {
+        name: "generic_return_struct_target",
+        source_rel: "tests/generic_return_struct_target/generic_return_struct_target.err",
+        expected: include_str!("compile_run_expected/generic_return_struct_target.expected"),
+    },
+    // Transitive generic -> generic calls: one generic function's result feeds
+    // another. Monomorphization iterates to a fixpoint across rounds.
+    GoldenCase {
+        name: "generic_transitive_target",
+        source_rel: "tests/generic_transitive_target/generic_transitive_target.err",
+        expected: include_str!("compile_run_expected/generic_transitive_target.expected"),
+    },
+    // Multi-layer container generics: `Vec<HashMap<String, Vec<T>>>` with field
+    // access through nested App types.
+    GoldenCase {
+        name: "generic_nested_container_target",
+        source_rel: "tests/generic_nested_container_target/generic_nested_container_target.err",
+        expected: include_str!("compile_run_expected/generic_nested_container_target.expected"),
+    },
+    // Same-type nested generics: `Box<Box<Int>>` through wrap/unwrap chains.
+    GoldenCase {
+        name: "nested_generic_struct_target",
+        source_rel: "tests/nested_generic_struct_target/nested_generic_struct_target.err",
+        expected: include_str!("compile_run_expected/nested_generic_struct_target.expected"),
+    },
 ];
 
 fn parse_expected(content: &str) -> (i32, String) {
