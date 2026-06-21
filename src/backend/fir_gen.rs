@@ -2,9 +2,9 @@ use crate::backend::errand_builtins::{
     add_builtin_data_constructors, add_builtin_functions, type_expr_to_errand_type,
 };
 use crate::backend::fir::{
-    InstrIndex, BinOpPl, EnumData, EnumVariantConstructData, EnumVariantData, EnumVariantInfo,
-    FnCallPl, FuncData, IfStatementData, Instr, LiteralPl, MatchArmData, MatchData, FIR,
-    RegionData, ReturnData, StructData, UnOpPl, VarDeclData, VarRefData, WhileLoopData,
+    BinOpPl, EnumData, EnumVariantConstructData, EnumVariantData, EnumVariantInfo, FnCallPl,
+    FuncData, IfStatementData, Instr, InstrIndex, LiteralPl, MatchArmData, MatchData, RegionData,
+    ReturnData, StructData, UnOpPl, VarDeclData, VarRefData, WhileLoopData, FIR,
 };
 use crate::backend::worklist::ErrandType;
 use crate::frontend::ast::MatchPattern;
@@ -26,6 +26,14 @@ pub fn compile_fir(program: &Program) -> Result<FIR, String> {
         top_level_exprs = program.expressions.len()
     )
     .entered();
+
+    // Lower the implicit context system (`[...]` bindings, `with` blocks,
+    // per-call overrides) into ordinary parameters, bindings, and arguments
+    // before any other FIR lowering runs.
+    tracing::debug!(target: "fir", "compile FIR: context desugaring");
+    let desugared = crate::backend::context_desugar::desugar(program)?;
+    let program = &desugared;
+
     tracing::debug!(target: "fir", "compile FIR: metadata pass");
 
     let enum_names = collect_enum_names(program);
@@ -74,6 +82,7 @@ pub fn compile_fir(program: &Program) -> Result<FIR, String> {
                 build_struct_constructor_expression(id, fields, type_params);
             if let Expression::FunctionDefinition {
                 id: constructor_function_id,
+                type_params: constructor_type_params,
                 parameters,
                 context_params,
                 body,
@@ -84,6 +93,7 @@ pub fn compile_fir(program: &Program) -> Result<FIR, String> {
                 let body_idx = gen.compile_expression(body.as_ref())?;
                 let func = func_data_from_ast(
                     &constructor_function_id,
+                    constructor_type_params.as_slice(),
                     parameters.as_slice(),
                     context_params.as_slice(),
                     body_idx,
@@ -101,6 +111,7 @@ pub fn compile_fir(program: &Program) -> Result<FIR, String> {
     for expr in &program.expressions {
         if let Expression::FunctionDefinition {
             id,
+            type_params,
             parameters,
             context_params,
             body,
@@ -112,6 +123,7 @@ pub fn compile_fir(program: &Program) -> Result<FIR, String> {
             let body_idx = gen.compile_expression(&body)?;
             let func = func_data_from_ast(
                 id,
+                type_params,
                 parameters,
                 context_params,
                 body_idx,
@@ -239,12 +251,42 @@ struct FirGen<'a> {
     enum_names: &'a HashMap<String, Vec<String>>,
 }
 
+/// Short, stable label for an [`Expression`] variant, used as a tracing field so
+/// per-node lowering can be followed without dumping each node's full `Debug`.
+fn expr_variant_name(expr: &Expression) -> &'static str {
+    match expr {
+        Expression::Int(_) => "Int",
+        Expression::Float(_) => "Float",
+        Expression::Boolean(_) => "Boolean",
+        Expression::String(_) => "String",
+        Expression::Symbol(_) => "Symbol",
+        Expression::Identifier { .. } => "Identifier",
+        Expression::UnaryOp { .. } => "UnaryOp",
+        Expression::BinaryOp { .. } => "BinaryOp",
+        Expression::FunctionCall { .. } => "FunctionCall",
+        Expression::FunctionDefinition { .. } => "FunctionDefinition",
+        Expression::StructDefinition { .. } => "StructDefinition",
+        Expression::EnumDefinition { .. } => "EnumDefinition",
+        Expression::EnumVariantAccess { .. } => "EnumVariantAccess",
+        Expression::EnumVariantConstruct { .. } => "EnumVariantConstruct",
+        Expression::Match { .. } => "Match",
+        Expression::If { .. } => "If",
+        Expression::While { .. } => "While",
+        Expression::For { .. } => "For",
+        Expression::Block(_) => "Block",
+        Expression::Return(_) => "Return",
+        Expression::Print(_) => "Print",
+        Expression::With { .. } => "With",
+    }
+}
+
 impl<'a> FirGen<'a> {
     fn emit(&mut self, instr: Instr) -> InstrIndex {
         self.ir.emit_instruction(instr)
     }
 
     fn compile_expression(&mut self, expr: &Expression) -> Result<InstrIndex, String> {
+        tracing::trace!(target: "fir", kind = expr_variant_name(expr), "lower expression");
         match expr {
             Expression::Int(n) => compile_literal(self, LiteralPl::Int(*n)),
             Expression::Float(f) => compile_literal(self, LiteralPl::Float(*f)),
@@ -265,6 +307,7 @@ impl<'a> FirGen<'a> {
             }
             Expression::FunctionDefinition {
                 id,
+                type_params,
                 parameters,
                 context_params,
                 body,
@@ -273,6 +316,7 @@ impl<'a> FirGen<'a> {
             } => compile_function_definition(
                 self,
                 id,
+                type_params,
                 parameters,
                 context_params,
                 body.as_ref(),
@@ -474,6 +518,7 @@ fn compile_function_call(
 fn compile_function_definition(
     gen: &mut FirGen<'_>,
     id: &Id,
+    type_params: &[Id],
     parameters: &[Parameter],
     context_params: &[Parameter],
     body: &Expression,
@@ -484,6 +529,7 @@ fn compile_function_definition(
     let body_idx = gen.compile_expression(&body)?;
     let func = func_data_from_ast(
         id,
+        type_params,
         parameters,
         context_params,
         body_idx,
@@ -727,10 +773,7 @@ fn compile_block(
     })))
 }
 
-fn compile_return(
-    gen: &mut FirGen<'_>,
-    expr: Option<&Expression>,
-) -> Result<InstrIndex, String> {
+fn compile_return(gen: &mut FirGen<'_>, expr: Option<&Expression>) -> Result<InstrIndex, String> {
     let value_idx = if let Some(return_expr) = expr {
         Some(gen.compile_expression(return_expr)?)
     } else {
@@ -788,6 +831,7 @@ fn enum_data_from_ast(id: &Id, type_params: &[Id], variants: &[EnumVariant]) -> 
 
 fn func_data_from_ast(
     id: &Id,
+    type_params: &[Id],
     parameters: &[Parameter],
     context_params: &[Parameter],
     body_index: InstrIndex,
@@ -796,6 +840,7 @@ fn func_data_from_ast(
 ) -> FuncData {
     FuncData {
         name: id.name.clone(),
+        type_params: type_params.iter().map(|t| t.name.clone()).collect(),
         parameters: parameters.to_vec(),
         context_params: context_params.to_vec(),
         body_index,
@@ -856,6 +901,7 @@ fn build_struct_constructor_expression(
     };
     Expression::FunctionDefinition {
         id: id.clone(),
+        type_params: type_params.to_vec(),
         parameters,
         context_params: vec![],
         body,
@@ -1082,6 +1128,7 @@ mod tests {
                 id: Id {
                     name: "add".to_string(),
                 },
+                type_params: vec![],
                 parameters: vec![
                     Parameter {
                         id: Id {
@@ -1181,6 +1228,7 @@ mod tests {
             }),
             instructions: vec![Instr::FuncDecl(FuncData {
                 name: "f".to_string(),
+                type_params: vec![],
                 parameters: vec![],
                 context_params: vec![],
                 body_index: 9999,

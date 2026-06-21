@@ -330,8 +330,8 @@ impl SIRLoweringPass {
     /// Resolve a function call to a `FuncId` using SIR argument types for
     /// overload discrimination.
     fn resolve_func_id(&self, name: &str, arg_type_keys: &[String]) -> Option<FuncId> {
-        // 1. Exact overload match.
         if let Some(overloads) = self.func_overloads.get(name) {
+            // 1. Exact overload match on the argument type keys.
             for (param_types, key) in overloads {
                 if param_types == arg_type_keys {
                     if let Some(&id) = self.func_ids.get(key) {
@@ -339,15 +339,41 @@ impl SIRLoweringPass {
                     }
                 }
             }
-            // 2. Fall back to first registered overload.
-            for (_, key) in overloads {
-                if let Some(&id) = self.func_ids.get(key) {
-                    return Some(id);
-                }
+
+            // 2. The exact match can fail when argument types are imprecise —
+            //    e.g. a generic template copy of a function where unresolved
+            //    types degrade to `Any`. Fall back to overloads whose arity
+            //    matches the call so we never lower a call against a signature
+            //    of the wrong length (which makes cranelift abort). Choosing the
+            //    candidate by sorted key keeps resolution deterministic
+            //    regardless of `HashMap` iteration order.
+            if let Some(id) = self.first_overload_id(overloads, |pt| pt.len() == arg_type_keys.len())
+            {
+                return Some(id);
+            }
+
+            // 3. Last resort: any registered overload, chosen deterministically.
+            if let Some(id) = self.first_overload_id(overloads, |_| true) {
+                return Some(id);
             }
         }
-        // 3. Plain-name lookup (non-overloaded builtins).
+        // 4. Plain-name lookup (non-overloaded builtins).
         self.func_ids.get(name).copied()
+    }
+
+    /// Pick a `FuncId` among `overloads` satisfying `accept`, choosing the
+    /// lexicographically-smallest mangled key so the result does not depend on
+    /// the (nondeterministic) registration order.
+    fn first_overload_id(
+        &self,
+        overloads: &[(Vec<String>, String)],
+        accept: impl Fn(&[String]) -> bool,
+    ) -> Option<FuncId> {
+        overloads
+            .iter()
+            .filter(|(param_types, key)| accept(param_types) && self.func_ids.contains_key(key))
+            .min_by(|a, b| a.1.cmp(&b.1))
+            .and_then(|(_, key)| self.func_ids.get(key).copied())
     }
 
     // ─── Phase 6: compile a named function body from SIR ─────────────────────

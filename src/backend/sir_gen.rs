@@ -7,9 +7,9 @@ use crate::backend::errand_builtins::{
 };
 use crate::backend::fir::FIR;
 use crate::backend::fir::{
-    InstrIndex, BinOpPl, EnumData, EnumVariantConstructData, EnumVariantData, FnCallPl, ForLoopData, FuncData,
-    IfStatementData, Instr, LiteralPl, MatchArmData, MatchData, RegionData, ReturnData, StructData,
-    UnOpPl, VarDeclData, WhileLoopData,
+    BinOpPl, EnumData, EnumVariantConstructData, EnumVariantData, FnCallPl, ForLoopData, FuncData,
+    IfStatementData, Instr, InstrIndex, LiteralPl, MatchArmData, MatchData, RegionData, ReturnData,
+    StructData, UnOpPl, VarDeclData, WhileLoopData,
 };
 use crate::backend::sir::{
     SIREnumLayout, SIREnumVariantLayout, SIRFunctionInfo, SIRInstr, SIRModule, SIRStructField,
@@ -392,11 +392,7 @@ impl SirGen {
         target = "sir_gen",
         level = "trace"
     )]
-    fn collect_arm_owned_fir(
-        &self,
-        start: InstrIndex,
-        end: InstrIndex,
-    ) -> HashSet<InstrIndex> {
+    fn collect_arm_owned_fir(&self, start: InstrIndex, end: InstrIndex) -> HashSet<InstrIndex> {
         let mut owned = HashSet::new();
         for i in start..end {
             if let Some(Instr::Match(data)) = self.analyzer.fir.get_instruction(i) {
@@ -927,6 +923,7 @@ impl SirGen {
         let body_index = self.analyze_and_emit(data.body_index, sir)?;
         Ok(Instr::FuncDecl(FuncData {
             name: data.name,
+            type_params: data.type_params,
             parameters: data.parameters,
             context_params: data.context_params,
             body_index,
@@ -945,18 +942,35 @@ impl SirGen {
         level = "debug"
     )]
     fn finalize_generics(&mut self, module: &mut SIRModule) -> Result<(), String> {
-        // Resolve constraints collected during the interleaved emit pass so
-        // collapsed types (e.g. inferred `make_pair` results) are concrete.
-        let _ = self.analyzer.solve_pending();
-        Self::apply_collapse_patch(module, &self.analyzer);
+        // Each monomorph pass emits/clones bodies with fresh `App` types and
+        // un-mangled symbols, and may add new constraints, so it is bracketed by
+        // a `normalize` (collapse → solve → collapse). Struct constructors are
+        // monomorphized before functions because function bodies construct and
+        // consume those generic structs.
+        self.normalize(module);
         self.monomorph_generic_struct_constructors(module)?;
-        // Monomorph clones template bodies with substituted types; run collapse+patch again
-        // so `App` normalizes and `new`/enum symbols pick up mangled names.
-        Self::apply_collapse_patch(module, &self.analyzer);
-        let _ = self.analyzer.solve_pending();
-        Self::apply_collapse_patch(module, &self.analyzer);
+        self.normalize(module);
+        let monomorphized = self.monomorph_generic_functions(module)?;
+        self.normalize(module);
+        // Repair callers whose baked-in types are now stale (e.g. a call that
+        // used to return `Int` now returns a struct), so `getfield` type-name
+        // symbols match the corrected receiver types. Runs after both monomorph
+        // passes since it reads their final return types.
+        self.repair_caller_types(module, &monomorphized);
+        // Last: build layouts for every mangled symbol any prior pass injected.
         Self::ensure_mangled_layouts(module, &self.analyzer.fir)?;
         Ok(())
+    }
+
+    /// Settle a module's types after emitting/cloning bodies: collapse `App`
+    /// types and patch mangled symbol names, resolve any pending constraints,
+    /// then collapse/patch again so the freshly resolved types propagate. Both
+    /// collapse passes are pure and idempotent, so the leading one is harmless
+    /// even when there is nothing yet to collapse.
+    fn normalize(&mut self, module: &mut SIRModule) {
+        Self::apply_collapse_patch(module, &self.analyzer);
+        let _ = self.analyzer.solve_pending();
+        Self::apply_collapse_patch(module, &self.analyzer);
     }
 
     #[instrument(
@@ -968,8 +982,6 @@ impl SirGen {
     fn apply_collapse_patch(module: &mut SIRModule, analyzer: &Analyzer) {
         for_each_sir_body_mut(module, |sir| {
             Self::collapse_sir_types(sir, analyzer);
-        });
-        for_each_sir_body_mut(module, |sir| {
             Self::patch_mangled_names(sir);
         });
     }
@@ -1009,8 +1021,7 @@ impl SirGen {
                         *enum_name = m.clone();
                     }
                     Instr::EnumVariantAccess(EnumVariantData {
-                        ref mut enum_name,
-                        ..
+                        ref mut enum_name, ..
                     }) => {
                         *enum_name = m.clone();
                     }
@@ -1055,7 +1066,10 @@ impl SirGen {
             match_enum_patches.push((i, mangled));
         }
         for (i, mangled) in match_enum_patches {
-            if let Instr::Match(MatchData { ref mut enum_name, .. }) = sir.instructions[i].instr {
+            if let Instr::Match(MatchData {
+                ref mut enum_name, ..
+            }) = sir.instructions[i].instr
+            {
                 *enum_name = mangled;
             }
         }
@@ -1072,6 +1086,14 @@ impl SirGen {
     }
 
     /// Nominal type name after generic monomorphization, e.g. `Option__Int`.
+    /// The type of a body's return location, defaulting to `Void` when absent.
+    fn sir_return_type(body: &SIR) -> ErrandType {
+        body.instructions
+            .get(body.return_loc as usize)
+            .and_then(|i| i.ty.clone())
+            .unwrap_or_else(|| ErrandType::Con("Void".into()))
+    }
+
     fn mangled_nominal_type_name(ty: &ErrandType) -> Option<String> {
         match ty {
             ErrandType::Con(n) if n.contains("__") => Some(n.clone()),
@@ -1361,9 +1383,10 @@ impl SirGen {
             if !ok || tys.is_empty() {
                 continue;
             }
-            if keys.iter().any(|k| {
-                k == "Any" || k.starts_with("param_") || k.starts_with("^α")
-            }) {
+            if keys
+                .iter()
+                .any(|k| k == "Any" || k.starts_with("param_") || k.starts_with("^α"))
+            {
                 continue;
             }
             out.entry(keys).or_insert(tys);
@@ -1474,11 +1497,7 @@ impl SirGen {
                     .zip(arg_tys.iter())
                     .map(|((n, _), ty)| (n.clone(), ty.clone()))
                     .collect();
-                let return_ty = body
-                    .instructions
-                    .get(body.return_loc as usize)
-                    .and_then(|i| i.ty.clone())
-                    .unwrap_or_else(|| ErrandType::Con("Void".into()));
+                let return_ty = Self::sir_return_type(&body);
 
                 let info = SIRFunctionInfo {
                     params,
@@ -1498,6 +1517,349 @@ impl SirGen {
             }
         }
         Ok(())
+    }
+
+    /// Monomorphize generic *functions* (those with declared type parameters,
+    /// e.g. `fn unwrap<T>(...)`, or at least one untyped parameter) per concrete
+    /// call shape. The single template body that the
+    /// initial pass produced has its argument types baked in from whichever call
+    /// the worklist happened to unify first, so:
+    ///   - `getfield` inside the body defaulted its result to `Int` when the
+    ///     receiver was still an existential (gap A), and
+    ///   - a call inside the body resolved one overload for every instantiation
+    ///     (gap B).
+    /// Re-analyzing the body with each call site's concrete argument types fixes
+    /// both: `getfield` resolves the real field type, and inner dispatch keys on
+    /// the real argument types. Each instantiation becomes its own overload keyed
+    /// by the concrete argument type keys (matching call-site dispatch in
+    /// `sir_lowering`), and the generic template overload is dropped.
+    #[instrument(
+        skip(self, module),
+        name = "sir_gen.monomorph_generic_functions",
+        target = "sir_gen",
+        level = "debug"
+    )]
+    fn monomorph_generic_functions(
+        &mut self,
+        module: &mut SIRModule,
+    ) -> Result<HashSet<String>, String> {
+        let struct_names: HashSet<String> = self
+            .analyzer
+            .fir
+            .instructions
+            .iter()
+            .filter_map(|i| match i {
+                Instr::StructDecl(sd) => Some(sd.name.clone()),
+                _ => None,
+            })
+            .collect();
+        // Generic user functions: non-foreign, not struct constructors, and
+        // generic in one of two ways:
+        //   - declared type parameters (e.g. `fn unwrap<T>(b::Box<T>):: T`), or
+        //   - an untyped parameter (e.g. `make_pair(a, b)`), which is treated as
+        //     an implicit per-call type variable.
+        // Note: dispatch is never on the return type — only on argument types.
+        let generic_funcs: Vec<(String, InstrIndex, Vec<Parameter>)> = self
+            .analyzer
+            .fir
+            .instructions
+            .iter()
+            .filter_map(|instr| {
+                let Instr::FuncDecl(fd) = instr else {
+                    return None;
+                };
+                let is_generic = !fd.type_params.is_empty()
+                    || fd.parameters.iter().any(|p| p.type_expr.is_none());
+                if fd.is_foreign || struct_names.contains(&fd.name) || !is_generic {
+                    return None;
+                }
+                Some((fd.name.clone(), fd.body_index, fd.parameters.clone()))
+            })
+            .collect();
+
+        // Read phase: gather concrete call shapes for each generic function from
+        // every SIR body (main + all overloads) before mutating the module.
+        let mut plans: Vec<(
+            String,
+            InstrIndex,
+            Vec<Parameter>,
+            HashMap<Vec<String>, Vec<ErrandType>>,
+        )> = Vec::new();
+        for (name, body_index, params) in &generic_funcs {
+            let mut shapes: HashMap<Vec<String>, Vec<ErrandType>> = HashMap::new();
+            Self::collect_generic_ctor_call_shapes(
+                &module.main,
+                name,
+                |t| self.analyzer.expand_type(t),
+                &mut shapes,
+            );
+            for overloads in module.functions.values() {
+                for info in overloads.values() {
+                    if let Some(body) = &info.body {
+                        Self::collect_generic_ctor_call_shapes(
+                            body,
+                            name,
+                            |t| self.analyzer.expand_type(t),
+                            &mut shapes,
+                        );
+                    }
+                }
+            }
+            if !shapes.is_empty() {
+                plans.push((name.clone(), *body_index, params.clone(), shapes));
+            }
+        }
+
+        // Write phase: re-emit each instantiation and register it as an overload.
+        let mut monomorphized: HashSet<String> = HashSet::new();
+        for (name, body_index, params, shapes) in plans {
+            let mut new_overloads: Vec<(Vec<String>, SIRFunctionInfo)> = Vec::new();
+            for (arg_keys, arg_tys) in shapes {
+                if params.len() != arg_tys.len() {
+                    continue;
+                }
+                let typed_params: Vec<(String, ErrandType)> = params
+                    .iter()
+                    .zip(arg_tys.iter())
+                    .map(|(p, ty)| (p.id.name.clone(), ty.clone()))
+                    .collect();
+
+                // Re-type the body against this concrete call shape. The cache is
+                // keyed by FIR index (shared across instantiations) so it must be
+                // cleared first.
+                self.analyzer.clear_analysis_cache();
+                self.analyzer
+                    .setup_function_context_with_types(&typed_params);
+                let body = self.emit_body_sir(body_index)?;
+
+                let return_type = Self::sir_return_type(&body);
+
+                tracing::debug!(
+                    target: "sir_gen",
+                    function = %name,
+                    shape = ?arg_keys,
+                    return_type = %errand_type_name(&return_type),
+                    "monomorphized generic function instance"
+                );
+
+                new_overloads.push((
+                    arg_keys,
+                    SIRFunctionInfo {
+                        params: typed_params,
+                        return_type,
+                        is_foreign: false,
+                        body: Some(body),
+                    },
+                ));
+            }
+
+            if !new_overloads.is_empty() {
+                monomorphized.insert(name.clone());
+                let template_key = Self::template_overload_key(&params);
+                let overloads = module.functions.entry(name.clone()).or_default();
+                // Drop the generic template: the overload keyed by the original
+                // (uninstantiated) parameter signature — either `param_*`
+                // placeholders for untyped params or a free-type-var key like
+                // `Box__T`. Only the concrete instantiations remain.
+                overloads.retain(|k, _| !k.iter().any(|s| s.starts_with("param_")));
+                overloads.remove(&template_key);
+                for (k, info) in new_overloads {
+                    overloads.insert(k, info);
+                }
+            }
+        }
+        Ok(monomorphized)
+    }
+
+    /// The overload key for a function's *uninstantiated* signature, matching how
+    /// the initial emit pass keys overloads: typed params use the mangled type
+    /// name (`Box<T>` → `Box__T`), untyped params use the `param_<name>`
+    /// placeholder. Used to evict the template once concrete instances exist.
+    fn template_overload_key(params: &[Parameter]) -> Vec<String> {
+        params
+            .iter()
+            .map(|p| match &p.type_expr {
+                Some(te) => errand_type_name(&type_expr_to_errand_type(te)),
+                None => format!("param_{}", p.id.name),
+            })
+            .collect()
+    }
+
+    /// After generic functions are monomorphized, callers still carry the stale
+    /// types the template baked in (e.g. a call that now returns a struct was
+    /// typed `Int`). Codegen reads the *embedded* type-name symbol of a
+    /// `getfield`, so a stale caller crashes ("struct type 'Int' not found").
+    /// This forward pass re-derives, per body, the result type of calls to
+    /// monomorphized functions, propagates it through `var`/`varref`, and then
+    /// rewrites each `getfield`'s type-name symbol (and result type) from the
+    /// corrected receiver type. SIR is emitted in dependency order, so a single
+    /// forward sweep observes already-corrected operands.
+    #[instrument(
+        skip(self, module, monomorphized),
+        name = "sir_gen.repair_caller_types",
+        target = "sir_gen",
+        level = "debug"
+    )]
+    fn repair_caller_types(&self, module: &mut SIRModule, monomorphized: &HashSet<String>) {
+        if monomorphized.is_empty() {
+            return;
+        }
+        let fn_returns: HashMap<String, Vec<(Vec<String>, ErrandType)>> = module
+            .functions
+            .iter()
+            .filter(|(name, _)| monomorphized.contains(*name))
+            .map(|(name, overloads)| {
+                let rets = overloads
+                    .iter()
+                    .map(|(key, info)| (key.clone(), info.return_type.clone()))
+                    .collect();
+                (name.clone(), rets)
+            })
+            .collect();
+
+        let struct_defs: Vec<StructData> = self
+            .analyzer
+            .fir
+            .instructions
+            .iter()
+            .filter_map(|i| match i {
+                Instr::StructDecl(sd) => Some(sd.clone()),
+                _ => None,
+            })
+            .collect();
+
+        for_each_sir_body_mut(module, |sir| {
+            Self::repair_body_types(sir, &fn_returns, &struct_defs);
+        });
+    }
+
+    fn repair_body_types(
+        sir: &mut SIR,
+        fn_returns: &HashMap<String, Vec<(Vec<String>, ErrandType)>>,
+        struct_defs: &[StructData],
+    ) {
+        let mut var_types: HashMap<String, ErrandType> = HashMap::new();
+        for i in 0..sir.instructions.len() {
+            let instr = sir.instructions[i].instr.clone();
+            match instr {
+                Instr::FnCall(fc) => {
+                    if let Some(overloads) = fn_returns.get(&fc.name) {
+                        let arg_keys: Vec<String> = fc
+                            .arguments
+                            .iter()
+                            .map(|&a| {
+                                Self::sir_type_key_for_dispatch(
+                                    sir.instructions.get(a as usize).and_then(|x| x.ty.as_ref()),
+                                )
+                            })
+                            .collect();
+                        if let Some((_, ret)) = overloads.iter().find(|(key, _)| *key == arg_keys) {
+                            sir.instructions[i].ty = Some(ret.clone());
+                        }
+                    }
+                }
+                Instr::VarDecl(vd) => {
+                    if let Some(t) = sir
+                        .instructions
+                        .get(vd.value as usize)
+                        .and_then(|x| x.ty.clone())
+                    {
+                        var_types.insert(vd.name.clone(), t);
+                    }
+                }
+                Instr::VarRef(vr) => {
+                    if let Some(t) = var_types.get(&vr.name) {
+                        sir.instructions[i].ty = Some(t.clone());
+                    }
+                }
+                Instr::GetField(args) if args.len() == 3 => {
+                    let Some(recv_ty) = sir
+                        .instructions
+                        .get(args[0] as usize)
+                        .and_then(|x| x.ty.clone())
+                    else {
+                        continue;
+                    };
+                    let field_name = match sir.instructions.get(args[1] as usize) {
+                        Some(SIRInstr {
+                            instr: Instr::Literal(LiteralPl::Symbol(s)),
+                            ..
+                        }) => s.clone(),
+                        _ => continue,
+                    };
+                    let Some(field_ty) =
+                        Self::sir_struct_field_type(&recv_ty, &field_name, struct_defs)
+                    else {
+                        continue;
+                    };
+                    let recv_name = errand_type_name(&recv_ty);
+                    if let Some(sym) = sir.instructions.get_mut(args[2] as usize) {
+                        if let Instr::Literal(LiteralPl::Symbol(s)) = &mut sym.instr {
+                            *s = recv_name;
+                        }
+                    }
+                    sir.instructions[i].ty = Some(field_ty);
+                }
+                _ => {}
+            }
+        }
+    }
+
+    /// Resolve `recv_ty.field` to a (collapsed) field type using FIR struct
+    /// definitions. Returns `None` when the receiver is not a known struct (e.g.
+    /// a primitive), which is the signal to leave a `getfield` untouched.
+    fn sir_struct_field_type(
+        recv_ty: &ErrandType,
+        field_name: &str,
+        struct_defs: &[StructData],
+    ) -> Option<ErrandType> {
+        let (name, type_args) = Self::sir_nominal_parts(recv_ty)?;
+        let sd = struct_defs.iter().find(|s| s.name == name)?;
+        let type_param_names: Vec<String> = sd.type_params.iter().map(|p| p.name.clone()).collect();
+        // Only act on a *fully applied* nominal type. An incompletely applied
+        // generic (e.g. a bare `Con("Box")` with no arguments) is imprecise and
+        // must not clobber an already-correct mangled symbol like `Box__Int`.
+        if type_args.len() != type_param_names.len() {
+            return None;
+        }
+        let subst: HashMap<String, ErrandType> = type_param_names
+            .iter()
+            .cloned()
+            .zip(type_args.into_iter())
+            .collect();
+        for field in &sd.fields {
+            if field.id.name == field_name {
+                let ft = type_expr_to_errand_type_with_params(&field.field_type, &type_param_names);
+                let ft = Self::subst_errand_type(&ft, &subst);
+                return Some(match &ft {
+                    ErrandType::App(..) => ErrandType::Con(errand_type_name(&ft)),
+                    other => other.clone(),
+                });
+            }
+        }
+        None
+    }
+
+    /// Split a nominal struct type into base name + type arguments, accepting
+    /// both `App(Con(Foo), [..])` and the collapsed mangled `Con("Foo__Bar")`.
+    fn sir_nominal_parts(ty: &ErrandType) -> Option<(String, Vec<ErrandType>)> {
+        match ty {
+            ErrandType::App(h, args) => match h.as_ref() {
+                ErrandType::Con(name) => Some((name.clone(), args.clone())),
+                _ => None,
+            },
+            ErrandType::Con(name) if name.contains("__") => {
+                let base = name.split("__").next()?.to_string();
+                let rest = &name[base.len() + 2..];
+                let mut args = Vec::new();
+                for part in rest.split("__") {
+                    args.push(ErrandType::Con(part.to_string()));
+                }
+                Some((base, args))
+            }
+            ErrandType::Con(name) => Some((name.clone(), Vec::new())),
+            _ => None,
+        }
     }
 
     #[instrument(
@@ -1536,16 +1898,18 @@ impl SirGen {
             Self::collect_mangled_symbols_from_sir(sir, &mut mangled);
         });
 
+        // Collect *all* struct/enum declarations, not just generic templates: a
+        // mangled name like `Box__Apple` only matches a generic template by its
+        // prefix, but resolving its type *arguments* (e.g. the non-generic struct
+        // `Apple`) requires the concrete definitions too. Restricting these lists
+        // to generic defs is what made `Box__Int` (primitive arg) work while
+        // `Box__Apple` (struct arg) failed to register a layout.
         let struct_defs: Vec<StructData> = fir
             .instructions
             .iter()
             .filter_map(|i| {
                 if let Instr::StructDecl(sd) = i {
-                    if sd.type_params.is_empty() {
-                        None
-                    } else {
-                        Some(sd.clone())
-                    }
+                    Some(sd.clone())
                 } else {
                     None
                 }
@@ -1556,11 +1920,7 @@ impl SirGen {
             .iter()
             .filter_map(|i| {
                 if let Instr::EnumDecl(ed) = i {
-                    if ed.type_params.is_empty() {
-                        None
-                    } else {
-                        Some(ed.clone())
-                    }
+                    Some(ed.clone())
                 } else {
                     None
                 }
@@ -1670,11 +2030,14 @@ fn parse_mangled_type_component(
                 let prefix = format!("{}__", sd.name);
                 if s.starts_with(&prefix) {
                     let rest = &s[sd.name.len() + 2..];
-                    let args = parse_mangled_type_args(rest, sd.type_params.len(), struct_defs, enum_defs)?;
-                    let generic_args: Vec<GenericArg> = args
-                        .into_iter()
-                        .map(GenericArg::Type)
-                        .collect();
+                    let args = parse_mangled_type_args(
+                        rest,
+                        sd.type_params.len(),
+                        struct_defs,
+                        enum_defs,
+                    )?;
+                    let generic_args: Vec<GenericArg> =
+                        args.into_iter().map(GenericArg::Type).collect();
                     return Some(TypeExpression::Struct(
                         Id {
                             name: sd.name.clone(),
@@ -1697,11 +2060,14 @@ fn parse_mangled_type_component(
                 let prefix = format!("{}__", ed.name);
                 if s.starts_with(&prefix) {
                     let rest = &s[ed.name.len() + 2..];
-                    let args = parse_mangled_type_args(rest, ed.type_params.len(), struct_defs, enum_defs)?;
-                    let generic_args: Vec<GenericArg> = args
-                        .into_iter()
-                        .map(GenericArg::Type)
-                        .collect();
+                    let args = parse_mangled_type_args(
+                        rest,
+                        ed.type_params.len(),
+                        struct_defs,
+                        enum_defs,
+                    )?;
+                    let generic_args: Vec<GenericArg> =
+                        args.into_iter().map(GenericArg::Type).collect();
                     return Some(TypeExpression::Struct(
                         Id {
                             name: ed.name.clone(),
@@ -1732,7 +2098,11 @@ fn parse_mangled_type_args(
         };
     }
     if count == 1 {
-        return Some(vec![parse_mangled_type_component(rest, struct_defs, enum_defs)?]);
+        return Some(vec![parse_mangled_type_component(
+            rest,
+            struct_defs,
+            enum_defs,
+        )?]);
     }
     let mut search_from = 0;
     while let Some(rel) = rest[search_from..].find("__") {

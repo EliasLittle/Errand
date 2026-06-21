@@ -995,6 +995,8 @@ impl Parser {
         let span = tracing::Span::current();
         span.record("foreign", foreign);
         span.record("name", tracing::field::display(&id.name));
+        // Optional type parameters: `fn name<T, U>(...)`.
+        let type_params = self.parse_optional_type_params()?;
         self.expect(&TokenType::LParen)?;
         let arguments = self.parameters()?;
         self.expect(&TokenType::RParen)?;
@@ -1009,6 +1011,7 @@ impl Parser {
             // Foreign function: no body, no 'end', just a dummy body (e.g. Block([]))
             Ok(Expression::FunctionDefinition {
                 id,
+                type_params,
                 parameters: arguments,
                 context_params,
                 body: Box::new(Expression::Block(vec![])),
@@ -1023,6 +1026,7 @@ impl Parser {
             let _ = self.expect(&TokenType::Newline); // Should these be eats or expects?
             Ok(Expression::FunctionDefinition {
                 id,
+                type_params,
                 parameters: arguments,
                 context_params,
                 body: Box::new(body),

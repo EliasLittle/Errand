@@ -1,0 +1,30 @@
++-- GOLDEN FIXTURE (generics gap A, fixed): a generic struct instantiated with a
++-- *struct* type argument (`Box<Apple>`) and threaded through a function
++-- parameter. The monomorphized layout `Box__Apple` is registered and the field
++-- access inside the callee resolves to the substituted field type. A single
++-- explicitly-parametric `unwrap<T>(b::Box<T>):: T` is instantiated once per
++-- concrete call shape, exercising both `Box<Apple>` (struct arg) and `Box<Int>`
++-- (primitive arg). Dispatch is on the argument type, never the return type.
+
+foreign fn printf(a::Int):: Int
+
+struct Apple
+    x::Int
+end
+
+struct Box<T>
+    value::T
+end
+
++-- A parametric function: `T` is bound per call to the concrete element type of
++-- the `Box` argument, and the result type follows from `b.value`.
+fn unwrap<T>(b::Box<T>):: T
+    return b.value
+end
+
+boxed_apple = Box(Apple(7))
+apple::Apple = unwrap(boxed_apple)
+printf("apple %d\n", apple.x)
+
+boxed_int = Box(42)
+printf("int %d\n", unwrap(boxed_int))

@@ -1,10 +1,6 @@
-+-- DEVELOPMENT TARGET: the implicit context system does not yet compile +
-+-- run end-to-end. This fixture documents the goal program for that work and
-+-- is wired into the golden harness as an `#[ignore]`d test. Run it on demand:
-+--   cargo test --test compile_run_golden -- --ignored
-+-- Once it passes, promote it into `CASES` (drop the dedicated ignored test).
-+--
-+-- It exercises implicit-context propagation end-to-end:
++-- Golden test for the implicit context system (v1: a single `allocator`
++-- context field, threaded as a hidden parameter and dispatched via
++-- monomorphization). It exercises implicit-context propagation end-to-end:
 +--   - `main` (the top-level body) builds a concrete allocator and installs it
 +--     in the context when calling `do_work`, via the per-call override
 +--     `do_work(8)[allocator = heap]`.

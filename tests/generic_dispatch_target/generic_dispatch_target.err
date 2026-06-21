@@ -1,0 +1,33 @@
++-- GOLDEN FIXTURE (generics gap B, fixed): a generic function is monomorphized
++-- per concrete argument type, so the dispatch of a call *inside* the generic
++-- body resolves the correct overload for each instantiation. `identify(Apple)`
++-- calls `tag(Apple)` and `identify(Banana)` calls `tag(Banana)`, printing:
++--   apple 1
++--   banana 2
+
+foreign fn printf(a::Int):: Int
+
+struct Apple
+    x::Int
+end
+
+struct Banana
+    x::Int
+end
+
+fn tag(a::Apple):: Int
+    return 1
+end
+
+fn tag(b::Banana):: Int
+    return 2
+end
+
++-- `identify` is generic over its argument; each monomorphization must dispatch
++-- `tag` on its own concrete type.
+fn identify(v):: Int
+    return tag(v)
+end
+
+printf("apple %d\n", identify(Apple(0)))
+printf("banana %d\n", identify(Banana(0)))

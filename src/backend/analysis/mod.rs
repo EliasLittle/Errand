@@ -264,6 +264,27 @@ impl Analyzer {
         }
     }
 
+    /// Like [`setup_function_context`], but binds each parameter to a concrete,
+    /// already-resolved [`ErrandType`]. Used by generic-function monomorphization
+    /// to re-type a template body against a specific call shape (so `getfield`
+    /// and multiple-dispatch inside the body resolve against the real argument
+    /// types instead of existential placeholders).
+    pub fn setup_function_context_with_types(&mut self, params: &[(String, ErrandType)]) {
+        self.var_context.clear();
+        for (name, ty) in params {
+            let idx = self.pool.intern(ty.clone());
+            self.var_context.insert(name.clone(), idx);
+        }
+    }
+
+    /// Clear the per-instruction type cache so a body can be re-analyzed (e.g.
+    /// for a different generic instantiation). Cached results are keyed by FIR
+    /// instruction index, which is shared across monomorphizations of the same
+    /// template, so the cache must be reset between re-analyses.
+    pub fn clear_analysis_cache(&mut self) {
+        self.analysis_cache.clear();
+    }
+
     /// Move all entries from `var_context` into `module_context`.
     /// Call after analyzing the main region so top-level bindings are visible
     /// inside function bodies.

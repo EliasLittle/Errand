@@ -371,6 +371,10 @@ pub struct VarDeclData {
 #[derive(Debug, Clone, PartialEq)]
 pub struct FuncData {
     pub name: String,
+    /// Type parameter names declared on the function, e.g. `fn f<T>(...)`.
+    /// Treated as type variables within the signature and body; used to detect
+    /// generic functions for monomorphization.
+    pub type_params: Vec<String>,
     pub parameters: Vec<Parameter>,
     /// Implicit-context bindings declared in `[...]` after the parameter list.
     /// Carried through the pipeline for later context-system lowering; not yet

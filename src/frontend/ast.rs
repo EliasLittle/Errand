@@ -30,6 +30,10 @@ pub enum Expression {
     },
     FunctionDefinition {
         id: Id,
+        /// Type parameter names declared on the function, e.g. `fn f<T>(...)` →
+        /// `["T"]`. Names listed here are treated as type variables (implicit
+        /// universally-quantified type parameters) within the signature and body.
+        type_params: Vec<Id>,
         parameters: Vec<Parameter>,
         /// Implicit-context bindings declared in square brackets after the
         /// parameter list, e.g. `fn f(a::Int)[allocator, logger]`. These bring
@@ -314,6 +318,7 @@ fn display_expression(e: &Expression, f: &mut fmt::Formatter) -> fmt::Result {
         }
         Expression::FunctionDefinition {
             id,
+            type_params: _,
             parameters,
             context_params,
             body,

@@ -52,16 +52,26 @@ const CASES: &[GoldenCase] = &[
         source_rel: "tests/generics_target/generics_target.err",
         expected: include_str!("compile_run_expected/generics_target.expected"),
     },
+    GoldenCase {
+        name: "context_target",
+        source_rel: "tests/context_target/context_target.err",
+        expected: include_str!("compile_run_expected/context_target.expected"),
+    },
+    // Generic struct with a *struct* type argument threaded through a function
+    // parameter: exercises monomorphized layout registration (`Box__Apple`).
+    GoldenCase {
+        name: "generic_struct_field_target",
+        source_rel: "tests/generic_struct_field_target/generic_struct_field_target.err",
+        expected: include_str!("compile_run_expected/generic_struct_field_target.expected"),
+    },
+    // Generic function monomorphized per concrete type so a call inside its body
+    // dispatches the right overload for each instantiation.
+    GoldenCase {
+        name: "generic_dispatch_target",
+        source_rel: "tests/generic_dispatch_target/generic_dispatch_target.err",
+        expected: include_str!("compile_run_expected/generic_dispatch_target.expected"),
+    },
 ];
-
-/// Development target for the implicit context system. Kept out of `CASES`
-/// (and run only via the dedicated `#[ignore]`d test below) because the feature
-/// is not implemented end-to-end yet.
-const CONTEXT_TARGET: GoldenCase = GoldenCase {
-    name: "context_target",
-    source_rel: "tests/context_target/context_target.err",
-    expected: include_str!("compile_run_expected/context_target.expected"),
-};
 
 fn parse_expected(content: &str) -> (i32, String) {
     let content = content.strip_prefix('\u{feff}').unwrap_or(content);
@@ -167,21 +177,4 @@ fn compile_run_golden_fixtures() {
     for case in CASES {
         run_golden_case(case, errand, manifest, &work, &trace);
     }
-}
-
-/// Goal program for the implicit context system (see
-/// `tests/context_target/context_target.err`). Ignored by default because the
-/// feature is still being built; drive development with:
-///   cargo test --test compile_run_golden -- --ignored
-/// Once it passes, promote `CONTEXT_TARGET` into `CASES`.
-#[test]
-#[ignore = "implicit context system not yet implemented end-to-end"]
-fn compile_run_context_target() {
-    let errand = errand_binary();
-    let manifest = Path::new(env!("CARGO_MANIFEST_DIR"));
-    let work = manifest.join("target").join("compile_run_golden");
-    fs::create_dir_all(&work).expect("create work dir");
-    let trace = work.join("trace.jsonl");
-
-    run_golden_case(&CONTEXT_TARGET, errand, manifest, &work, &trace);
 }

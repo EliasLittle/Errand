@@ -1,4 +1,5 @@
 pub mod analysis;
+pub mod context_desugar;
 pub mod errand_builtins;
 pub mod ir_lowering;
 pub mod fir;
